@@ -83,6 +83,20 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   config.obstacle.near_wait = param("obstacle_near_wait", config.obstacle.near_wait);
   config.obstacle.near_ahead = param("obstacle_near_ahead", config.obstacle.near_ahead);
   config.obstacle.stale = param("obstacle_stale", config.obstacle.stale);
+  // Driving around objects (obstacle_mode avoid), the logic's: the clearance stays at least 0.1 m.
+  config.obstacle.avoid_wait = param("obstacle_avoid_wait", config.obstacle.avoid_wait);
+  config.obstacle.avoid_still = param("obstacle_avoid_still", config.obstacle.avoid_still);
+  config.obstacle.avoid_sigma = param("obstacle_avoid_sigma", config.obstacle.avoid_sigma);
+  config.obstacle.avoid_clearance = param("obstacle_avoid_clearance", config.obstacle.avoid_clearance);
+  config.obstacle.avoid_keep = param("obstacle_avoid_keep", config.obstacle.avoid_keep);
+  config.obstacle.avoid_speed = param("obstacle_avoid_speed", config.obstacle.avoid_speed);
+  if (!(config.obstacle.avoid_clearance >= 0.1) || !(config.obstacle.avoid_sigma >= 0) ||
+      !(config.obstacle.avoid_speed > 0) || !(config.obstacle.avoid_wait >= 0) ||
+      !std::isfinite(config.obstacle.avoid_clearance + config.obstacle.avoid_sigma + config.obstacle.avoid_speed)) {
+    throw std::invalid_argument(
+        "obstacle_avoid_clearance needs to be at least 0.1, obstacle_avoid_sigma and obstacle_avoid_wait at least 0, "
+        "obstacle_avoid_speed above 0");
+  }
   // Docking by the dock marker: marker_range and marker_blind_distance are the platform's (/**), the rest the logic's.
   config.marker.range = param("marker_range", config.marker.range);
   config.marker.blind_distance = param("marker_blind_distance", config.marker.blind_distance);

@@ -408,6 +408,17 @@ TEST(MowingPlanTransit, DrivesOnTheActiveMowAndNavAreasAroundTheActiveObstacles)
   EXPECT_EQ(drivable[0].size(), 4u);
 }
 
+TEST(MowingPlanTransit, OneMowAreaAloneWithTheObstacles) {
+  MowingPlanner planner = PlannerWithMap();
+  std::vector<Ring> drivable;
+  std::vector<Ring> obstacles;
+  ASSERT_TRUE(planner.TransitAreas(&drivable, &obstacles, "lawn").empty());
+  ASSERT_EQ(drivable.size(), 1u);
+  EXPECT_EQ(drivable[0].front().x, 0.0);
+  EXPECT_EQ(obstacles.size(), 1u);
+  EXPECT_EQ(planner.TransitAreas(&drivable, &obstacles, "no_such_area").code, "NO_MOWING_AREA");
+}
+
 TEST(MowingPlanTransit, NeedsAMapThatFitsAndAnArea) {
   MowingPlanner planner;
   std::vector<Ring> drivable;

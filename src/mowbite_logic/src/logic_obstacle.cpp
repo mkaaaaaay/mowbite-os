@@ -1,4 +1,6 @@
 #include <algorithm>
+#include <cmath>
+#include <cstddef>
 #include <iterator>
 #include <utility>
 
@@ -11,6 +13,7 @@ namespace {
 
 constexpr int kZoneSlow = 1;
 constexpr int kZoneStop = 2;
+constexpr int kModeAvoid = 3;
 
 // PERSON before ANIMAL before OBJECT before UNKNOWN.
 int Weight(const std::string& kind) {
@@ -20,7 +23,20 @@ int Weight(const std::string& kind) {
   return 0;
 }
 
+// Corners of KeepOutRing.
+constexpr int kKeepOutCorners = 24;
+
 }  // namespace
+
+Ring KeepOutRing(const AvoidCircle& circle) {
+  Ring ring;
+  const double step = 2.0 * M_PI / kKeepOutCorners;
+  const double reach = circle.r / std::cos(step / 2.0);
+  for (int i = 0; i < kKeepOutCorners; ++i) {
+    ring.push_back({circle.x + reach * std::cos(i * step), circle.y + reach * std::sin(i * step)});
+  }
+  return ring;
+}
 
 void ObstaclePart::SetMode(int setting, int mode_max) {
   setting_ = setting;
@@ -29,7 +45,9 @@ void ObstaclePart::SetMode(int setting, int mode_max) {
     hold_ = false;
     free_since_.reset();
     waived_.clear();
+    standing_.clear();
   }
+  if (mode() < kModeAvoid) ClearCircles();
 }
 
 int ObstaclePart::mode() const {
@@ -41,16 +59,63 @@ std::vector<const ObstacleTrackSample*> ObstaclePart::Holders(const ObstacleSamp
   for (const auto& track : sample.tracks) {
     if (!track.confirmed || track.zone != kZoneStop) continue;
     if (waived_.count(track.id) && !track.in_view) continue;
+    if (CircleOf(track)) continue;
     holders.push_back(&track);
   }
   return holders;
 }
 
 void ObstaclePart::Note(uint32_t id, const std::string& action) {
-  if (noted_.insert({id, action}).second) notes_.push_back({id, action});
+  if (noted_.insert({id, action}).second) notes_.push_back(ObstacleNote{id, action, 0.0, 0.0, "", ""});
+}
+
+bool ObstaclePart::Inside(const ObstacleTrackSample& track, const AvoidCircle& circle) const {
+  const double reach = circle.r - config_.avoid_clearance + config_.avoid_still;
+  return track.kind == "OBJECT" && track.confirmed &&
+         std::hypot(track.x - circle.x, track.y - circle.y) + track.radius <= reach;
+}
+
+const AvoidCircle* ObstaclePart::CircleOf(const ObstacleTrackSample& track) const {
+  for (const auto& circle : circles_) {
+    if (Inside(track, circle)) return &circle;
+  }
+  return nullptr;
+}
+
+void ObstaclePart::DropCircle(size_t index) {
+  // Its entry in the list loses the circle.
+  notes_.push_back(ObstacleNote{circles_[index].track_id, "avoided", 0.0, 0.0, "", ""});
+  circles_.erase(circles_.begin() + static_cast<std::ptrdiff_t>(index));
+  circles_gone_ = true;
+}
+
+void ObstaclePart::ClearCircles() {
+  while (!circles_.empty()) DropCircle(circles_.size() - 1);
 }
 
 void ObstaclePart::OnStatus(const ObstacleSample& sample, double now_s, bool driving) {
+  // A circle goes once the track in it ended in view (its place seen free); out of view it stays without one. A
+  // confirmed object inside a circle without a track is its track from then on.
+  const auto find = [](const ObstacleSample& s, uint32_t id) {
+    const auto it = std::find_if(s.tracks.begin(), s.tracks.end(), [id](const auto& t) { return t.id == id; });
+    return it == s.tracks.end() ? nullptr : &*it;
+  };
+  for (size_t i = circles_.size(); i-- > 0;) {
+    AvoidCircle& circle = circles_[i];
+    if (circle.follows != 0 && !find(sample, circle.follows)) {
+      const ObstacleTrackSample* before = find(last_, circle.follows);
+      if (before && before->in_view) {
+        DropCircle(i);
+        continue;
+      }
+      circle.follows = 0;
+    }
+  }
+  for (const auto& track : sample.tracks) {
+    for (auto& circle : circles_) {
+      if (circle.follows == 0 && Inside(track, circle)) circle.follows = track.id;
+    }
+  }
   last_ = sample;
   last_at_ = now_s;
   fresh_ = true;
@@ -84,10 +149,17 @@ void ObstaclePart::OnStatus(const ObstacleSample& sample, double now_s, bool dri
       near_ = false;
     }
     free_since_.reset();
+    std::map<uint32_t, Standing> standing;
     for (const auto* track : holders) {
       if (track->ahead < config_.near_ahead) near_ = true;
       if (kind_.empty() || Weight(track->kind) > Weight(kind_)) kind_ = track->kind;
+      // A thing that moved more than avoid_still stands anew from where it is now.
+      const auto was = standing_.find(track->id);
+      const bool still = was != standing_.end() &&
+                         std::hypot(track->x - was->second.x, track->y - was->second.y) <= config_.avoid_still;
+      standing[track->id] = still ? was->second : Standing{track->x, track->y, now_s};
     }
+    standing_ = std::move(standing);
     return;
   }
   if (!hold_) return;
@@ -96,13 +168,20 @@ void ObstaclePart::OnStatus(const ObstacleSample& sample, double now_s, bool dri
     return;
   }
   if (!free_since_) free_since_ = now_s;
-  if (now_s - *free_since_ >= (near_ ? config_.near_wait : config_.free_wait)) {
-    hold_ = false;
-    free_since_.reset();
-  }
+  if (now_s - *free_since_ >= (near_ ? config_.near_wait : config_.free_wait)) EndHold();
+}
+
+void ObstaclePart::EndHold() {
+  hold_ = false;
+  free_since_.reset();
+  standing_.clear();
+  avoid_refused_ = false;
 }
 
 void ObstaclePart::Tick(double now_s) {
+  for (size_t i = circles_.size(); i-- > 0;) {
+    if (now_s - circles_[i].since >= config_.avoid_keep) DropCircle(i);
+  }
   if (!last_at_ || now_s - *last_at_ <= config_.stale) return;
   fresh_ = false;
   free_since_.reset();
@@ -117,9 +196,28 @@ bool ObstaclePart::Waive() {
   const auto holders = Holders(last_);
   if (fresh_ && std::any_of(holders.begin(), holders.end(), [](const auto* t) { return t->in_view; })) return false;
   for (const auto* track : holders) waived_.insert(track->id);
-  hold_ = false;
-  free_since_.reset();
+  EndHold();
   return true;
+}
+
+std::vector<AvoidCircle> ObstaclePart::AvoidDue(double now_s) const {
+  if (mode() < kModeAvoid || !hold_ || !fresh_ || avoid_refused_) return {};
+  const auto holders = Holders(last_);
+  std::vector<AvoidCircle> circles;
+  for (const auto* track : holders) {
+    // Only objects; a person, an animal or a thing of no kind is waited for.
+    if (track->kind != "OBJECT") return {};
+    const auto standing = standing_.find(track->id);
+    if (standing == standing_.end() || now_s - standing->second.since < config_.avoid_wait) return {};
+    const double r = track->radius + config_.avoid_sigma * track->sigma + config_.avoid_clearance;
+    circles.push_back({track->id, track->id, track->x, track->y, r, now_s});
+  }
+  return circles;
+}
+
+void ObstaclePart::Avoid(const std::vector<AvoidCircle>& circles) {
+  circles_.insert(circles_.end(), circles.begin(), circles.end());
+  EndHold();
 }
 
 std::vector<ObstacleNote> ObstaclePart::TakeNotes() {

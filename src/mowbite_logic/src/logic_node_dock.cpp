@@ -97,7 +97,7 @@ bool LogicNode::Offered(const std::string& command) const {
 // docking.test needs the follower, not the planner. Called with the mutex held.
 Reason LogicNode::DockTestProblemLocked() const {
   if (!follow_client_->action_server_is_ready()) return Reason("FOLLOWER_MISSING", "The follower is not running");
-  if (drive_.active || job_plan_.active) {
+  if (drive_.active || job_plan_.active || job_cut_.active) {
     return Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
   }
   return {};
@@ -105,7 +105,7 @@ Reason LogicNode::DockTestProblemLocked() const {
 
 // The next leg of docking, once nothing else is on its way. Called with the mutex held.
 void LogicNode::PumpDocking() {
-  if (drive_.active || job_plan_.active) return;
+  if (drive_.active || job_plan_.active || job_cut_.active) return;
   if (auto leg = core_.Call<&LogicCore::TakeDockingLeg>()) SendDockingLeg(*leg);
 }
 

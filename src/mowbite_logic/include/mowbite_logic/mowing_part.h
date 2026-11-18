@@ -30,6 +30,8 @@ class MowingPart {
   void OnJobPlanFailed(CoreAccess core, const Reason& why);
   void OnJobProgress(CoreFacts core, size_t index);
   void OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Reason& reason);
+  // The planner's cut of the plan by the circles (JobStep kCut); the pieces carry the numbers of the plan's paths.
+  void OnCutAnswer(CoreAccess core, const CutAnswer& answer);
   // The follower drives a leg of the job.
   bool LegDrives() const;
   // SetState into MOWING: the job id once, a new session.
@@ -91,6 +93,17 @@ class MowingPart {
   // Its next piece as the step of the job: the poses within kSkippedPathPiece m of the one the mower stands at, at
   // least the next one.
   JobStep SkippedPiece(CoreAccess core, const JobPath& path);
+  // The blade got up to speed for a leg that mows; false while it spins up (a pause after mower_spinup_timeout).
+  bool BladeReady(CoreAccess core, double now_s);
+  // Asks the planner to cut the rest of the plan by the circles kept now and the ones added (from a hold).
+  JobStep CutStep(CoreAccess core, std::vector<AvoidCircle> added);
+  // The job onto the first piece of the cut not behind it; poses left out on the way make the next leg a detour. No
+  // piece left: the rest of the area is left out.
+  void FollowCut();
+  // The pieces of an answer lie in the plan where the cut began, in order: else the answer counts as failed.
+  bool PiecesFit(const std::vector<JobPiece>& pieces) const;
+  // m of the plan from where the job stands that the pieces leave out.
+  double LeftOut(const std::vector<JobPiece>& pieces) const;
 
   MowingJob job_;
   // The start accepted last, until mowing begins.
@@ -112,6 +125,16 @@ class MowingPart {
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
+  // obstacle_mode avoid: the pieces of the plan left to mow while the mower keeps out of the circles, in order (none:
+  // the plan as it is); the circles the cut on its way adds and the area and plan it is for; the circles changed or a
+  // plan came while there are some (the plan is cut anew before the next leg); poses were left out (the next leg drives
+  // to the piece within the area, the blade on); answers of SEARCH_LIMIT in a row.
+  std::optional<std::vector<JobPiece>> cut_;
+  std::vector<AvoidCircle> cutting_added_;
+  JobProgress cutting_at_;
+  bool recut_ = false;
+  bool detour_ = false;
+  int cut_retries_ = 0;
   // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
   Reason skip_why_;
   double last_checkpoint_s_ = 0;

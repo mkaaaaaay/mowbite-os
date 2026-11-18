@@ -57,6 +57,7 @@ class CoreFacts {
   Reason StartProblem(const std::vector<std::string>& tasks) const;
   const std::string& JobId() const;
   bool HomeReachable() const;
+  const ObstaclePart& obstacle_part() const;
 
  private:
   const LogicCore* read_;
@@ -88,6 +89,7 @@ class CoreAccess : public CoreFacts {
   void BeginDockCheck(DockCheck purpose);
   void AreasPassedOver(const std::vector<JobArea>& areas);
   void EndJob(bool finished, bool home, const Reason& why = Reason());
+  ObstaclePart& obstacle_part();
 
  private:
   LogicCore* core_;

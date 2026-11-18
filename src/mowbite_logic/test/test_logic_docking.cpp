@@ -1563,7 +1563,7 @@ TEST(Docking, AnObstacleOnTheWayToTheStationHoldsTheTryUntilItIsSeenFree) {
   TestCore core = Approaching();
   core.SetObstacleMode(2, 2);
   EXPECT_TRUE(core.GateWanted());
-  const ObstacleSample person{true, {{3, "PERSON", true, true, 0.8, 2}}};
+  const ObstacleSample person{true, {{3, "PERSON", true, true, 0.8, 2, 0.0, 0.0, 0.0, 0.0}}};
   core.OnObstacleStatus(person, 0);
   EXPECT_TRUE(core.Docking());
   EXPECT_TRUE(core.TakeDriveCancel());
@@ -1584,7 +1584,7 @@ TEST(Docking, AnObstacleDoesNotStopTheLineOntoTheStation) {
   TestCore core = AtTheGate();
   core.SetObstacleMode(2, 2);
   EXPECT_FALSE(core.GateWanted());
-  core.OnObstacleStatus({true, {{3, "OBJECT", true, true, 0.2, 2}}}, 0);
+  core.OnObstacleStatus({true, {{3, "OBJECT", true, true, 0.2, 2, 0.0, 0.0, 0.0, 0.0}}}, 0);
   EXPECT_FALSE(core.TakeDriveCancel());
   EXPECT_TRUE(core.Docking());
 }

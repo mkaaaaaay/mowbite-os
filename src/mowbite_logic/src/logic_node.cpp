@@ -38,15 +38,15 @@ rcl_interfaces::msg::Parameter Override(const std::string& name, T value) {
   return rclcpp::Parameter(name, value).to_parameter_msg();
 }
 
-Reason PlannerMissing() {
-  return Reason("PLANNER_MISSING", "The planner is not running");
-}
-
 Reason FollowerMissing() {
   return Reason("FOLLOWER_MISSING", "The follower is not running");
 }
 
 }  // namespace
+
+Reason PlannerMissing() {
+  return Reason("PLANNER_MISSING", "The planner is not running");
+}
 
 LogicNode::LogicNode(const rclcpp::NodeOptions& options)
     : rclcpp::Node("mowbite_logic", mowbite_component::StartupOnly(options)),
@@ -296,6 +296,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   // Driving to a pose: the planner plans the way, the follower drives it. A ROS service only, not for the app yet.
   transit_max_outside_ = declare_parameter("transit_max_outside", 0.3);
   transit_client_ = create_client<PlanTransit>("mowbite_planner/plan_transit");
+  cut_client_ = create_client<CutPlan>("mowbite_planner/cut_plan");
   follow_client_ = rclcpp_action::create_client<FollowPath>(this, "follow_path");
   drive_srv_ = create_service<mowbite_msgs::srv::DriveTo>(
       "logic/drive_to", [this](const std::shared_ptr<rmw_request_id_t>& header,
@@ -398,7 +399,7 @@ Reason LogicNode::NodeProblemLocked(const std::string& command) const {
     if (!plan_client_->service_is_ready() || !transit_client_->service_is_ready()) why = PlannerMissing();
     if (!follow_client_->action_server_is_ready()) why = FollowerMissing();
     // The node still ends a leg of the last job.
-    if (drive_.active || job_plan_.active) {
+    if (drive_.active || job_plan_.active || job_cut_.active) {
       why = Reason("STILL_STOPPING", "The last job is still stopping, try again in a moment");
     }
   }
@@ -406,7 +407,7 @@ Reason LogicNode::NodeProblemLocked(const std::string& command) const {
   if (command == "docking.start") {
     if (!transit_client_->service_is_ready()) why = PlannerMissing();
     if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
-    if (why.empty() && (drive_.active || job_plan_.active)) {
+    if (why.empty() && (drive_.active || job_plan_.active || job_cut_.active)) {
       why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
     }
   }
@@ -631,7 +632,7 @@ void LogicNode::OnDriveTo(const std::shared_ptr<rmw_request_id_t>& header,
     if (why.empty() && !transit_client_->service_is_ready()) why = PlannerMissing();
     if (why.empty() && !follow_client_->action_server_is_ready()) why = FollowerMissing();
     // The follower may still be letting go of the last path (right after docking): a new one would be refused.
-    if (why.empty() && (drive_.active || job_plan_.active)) {
+    if (why.empty() && (drive_.active || job_plan_.active || job_cut_.active)) {
       why = Reason("STILL_STOPPING", "The last drive is still stopping, try again in a moment");
     }
     const bool from_dock = why.empty() && core_.View().DockContact();
@@ -728,6 +729,7 @@ void LogicNode::OnTransit(uint64_t seq, const PlanTransit::Response& response) {
       for (const auto& pose : response.path.poses) goal.poses.push_back(pose.pose);
       goal.allowed_areas = drive_.allowed;
       goal.obstacles = drive_.obstacles;
+      goal.max_speed = drive_.max_speed;
       char text[64];
       std::snprintf(text, sizeof(text), "driving %.1f m", response.path_length);
       SendFollow(goal, text);
@@ -891,7 +893,11 @@ void LogicNode::PumpJob() {
     plan_client_->remove_pending_request(job_plan_.request_id);
     job_plan_ = JobPlan();
   }
-  if (drive_.active || job_plan_.active || !core_.View().Mowing()) return;
+  if (job_cut_.active && !core_.View().Mowing()) {
+    cut_client_->remove_pending_request(job_cut_.request_id);
+    job_cut_ = JobCut();
+  }
+  if (drive_.active || job_plan_.active || job_cut_.active || !core_.View().Mowing()) return;
   JobStep step = core_.Call<&LogicCore::NextJobStep>(MonotonicSeconds());
   switch (step.kind) {
     case JobStep::Kind::kNone: return;
@@ -899,6 +905,8 @@ void LogicNode::PumpJob() {
     case JobStep::Kind::kApproach: Approach(step.goal); return;
     case JobStep::Kind::kSkippedPath:
     case JobStep::Kind::kFollow: FollowJobPath(step.path, step.start_index); return;
+    case JobStep::Kind::kCut: CutJobPlan(step); return;
+    case JobStep::Kind::kDetour: Detour(step); return;
   }
 }
 
@@ -958,10 +966,11 @@ void LogicNode::Approach(const JobPose& goal) {
 
 // Plans the way to (x, y) facing heading over the drivable areas, which the follower then drives (OnTransit): the
 // approach to a path of the job or to the docking station. Empty, or why not. Called with the mutex held.
-Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading) {
+Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading, const std::string& only_area,
+                          double max_speed) {
   std::vector<Ring> drivable;
   std::vector<Ring> obstacles;
-  Reason why = planner_.TransitAreas(&drivable, &obstacles);
+  Reason why = planner_.TransitAreas(&drivable, &obstacles, only_area);
   if (!why.empty()) return why;
   if (!transit_client_->service_is_ready()) return PlannerMissing();
   const RobotStateData state = core_.View().RobotState();
@@ -971,15 +980,18 @@ Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading) {
   plan->use_goal_heading = true;
   for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
   for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
+  plan->temporary_obstacles = CirclePolygons();
   plan->max_outside = transit_max_outside_;
   drive_ = Drive();
   drive_.purpose = purpose;
+  drive_.max_speed = static_cast<float>(max_speed);
   drive_.seq = ++drive_seq_;
   drive_.active = true;
   drive_.planning = true;
   drive_.sent = MonotonicSeconds();
   drive_.allowed = plan->drivable_areas;
   drive_.obstacles = plan->obstacles;
+  drive_.obstacles.insert(drive_.obstacles.end(), plan->temporary_obstacles.begin(), plan->temporary_obstacles.end());
   const uint64_t seq = drive_.seq;
   drive_.request_id =
       transit_client_
@@ -1023,6 +1035,8 @@ void LogicNode::FollowJobPath(const JobPath& path, size_t start_index) {
   }
   for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
   for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
+  const auto circles = CirclePolygons();
+  goal.obstacles.insert(goal.obstacles.end(), circles.begin(), circles.end());
   drive_.seq = ++drive_seq_;
   drive_.active = true;
   drive_.sent = MonotonicSeconds();
@@ -2074,6 +2088,14 @@ void LogicNode::ExpirePlans() {
     if (drive_.planning && t - drive_.sent > plan_timeout_s_) {
       CancelDrive(Reason("PLANNER_TIMEOUT",
                          "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
+    }
+    if (job_cut_.active && t - job_cut_.sent > plan_timeout_s_) {
+      cut_client_->remove_pending_request(job_cut_.request_id);
+      job_cut_ = JobCut();
+      CutAnswer late;
+      late.code = "PLANNER_TIMEOUT";
+      late.message = "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s";
+      core_.Call<&LogicCore::OnCutAnswer>(late);
     }
     if (job_plan_.active && t - job_plan_.sent > plan_timeout_s_) {
       plan_client_->remove_pending_request(job_plan_.request_id);

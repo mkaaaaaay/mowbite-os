@@ -60,6 +60,7 @@
 #include <map>
 #include <memory>
 #include <mowbite_planner_interfaces/srv/plan_coverage.hpp>
+#include <mowbite_planner_os_interfaces/srv/cut_plan.hpp>
 #include <mowbite_planner_os_interfaces/srv/plan_transit.hpp>
 #include <mutex>
 #include <nlohmann/json.hpp>
@@ -84,8 +85,12 @@
 
 namespace mowbite_logic {
 
+// The planner does not offer its services.
+Reason PlannerMissing();
+
 class LogicNode : public rclcpp::Node {
   using PlanTransit = mowbite_planner_os_interfaces::srv::PlanTransit;
+  using CutPlan = mowbite_planner_os_interfaces::srv::CutPlan;
   using FollowPath = mowbite_msgs::action::FollowPath;
   using FollowHandle = rclcpp_action::ClientGoalHandle<FollowPath>;
   using Calibrate = mowbite_msgs::action::Calibrate;
@@ -141,7 +146,16 @@ class LogicNode : public rclcpp::Node {
   void PlanJobArea(const std::string& area_id);
   void OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response);
   void Approach(const JobPose& goal);
-  Reason PlanWay(Purpose purpose, double x, double y, double heading);
+  // Drives to the next piece of a cut plan within its area, around the circles, slowly (kDetour).
+  void Detour(const JobStep& step);
+  // Asks the planner to cut the plan by the circles (kCut).
+  void CutJobPlan(const JobStep& step);
+  void OnCutPlan(uint64_t seq, const CutPlan::Response& response);
+  // only_area: that mow area alone; max_speed: m/s at most, 0 for the follower's.
+  Reason PlanWay(Purpose purpose, double x, double y, double heading, const std::string& only_area = "",
+                 double max_speed = 0.0);
+  // The circles kept out of while mowing, as polygons.
+  std::vector<geometry_msgs::msg::Polygon> CirclePolygons() const;
   void PumpDocking();
   void SendDockingLeg(const DockingLeg& leg);
   // Docking by the dock marker (logic_node_dock.cpp).
@@ -264,6 +278,7 @@ class LogicNode : public rclcpp::Node {
     double sent = 0;
     std::vector<geometry_msgs::msg::Polygon> allowed;
     std::vector<geometry_msgs::msg::Polygon> obstacles;
+    float max_speed = 0.0F;
     FollowHandle::SharedPtr handle;
     bool cancel_pending = false;
     std::optional<Reason> cancel_reason;
@@ -289,6 +304,15 @@ class LogicNode : public rclcpp::Node {
     uint64_t seq = 0;
     double sent = 0;
     int64_t request_id = 0;
+  };
+
+  // A cut of the job's plan on its way to the planner: where each path of it starts in its poses.
+  struct JobCut {
+    bool active = false;
+    uint64_t seq = 0;
+    double sent = 0;
+    int64_t request_id = 0;
+    std::vector<size_t> offsets;
   };
 
   // A mowing.plan request on its way to the planner.
@@ -331,6 +355,7 @@ class LogicNode : public rclcpp::Node {
   Geometry geometry_;
   Drive drive_;
   JobPlan job_plan_;
+  JobCut job_cut_;
   std::string data_dir_;
   LogicParams logic_params_;
   double blade_lease_s_ = 1.0;
@@ -443,6 +468,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::Client<PlanTransit>::SharedPtr transit_client_;
+  rclcpp::Client<CutPlan>::SharedPtr cut_client_;
   rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;
   rclcpp::Subscription<mowbite_msgs::msg::CalibrationStatus>::SharedPtr calibration_status_sub_;

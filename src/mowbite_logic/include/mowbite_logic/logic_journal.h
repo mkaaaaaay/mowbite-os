@@ -81,10 +81,17 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot, telemetry_ok, emergency, em
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PoseSnapshot, x, y, heading, position_accuracy, orientation_accuracy,
                                    orientation_valid)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationConfig, max_position_accuracy, min_battery, status_timeout, timeout)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleConfig, free_wait, near_wait, near_ahead, stale)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleTrackSample, id, kind, confirmed, in_view, ahead, zone)
+// With defaults: driving around objects came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleConfig, free_wait, near_wait, near_ahead, stale, avoid_wait,
+                                                avoid_still, avoid_sigma, avoid_clearance, avoid_keep, avoid_speed)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleTrackSample, id, kind, confirmed, in_view, ahead, zone, x, y,
+                                                radius, sigma)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleSample, sight, tracks)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleNote, track_id, action)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleNote, track_id, action, keep_out_r, left_out, area_id,
+                                                area_name)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AvoidCircle, track_id, follows, x, y, r, since)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPiece, path, first, last)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CutAnswer, ok, code, message, pieces)
 // With defaults: marker and obstacle came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_voltage, battery_full_voltage,
                                                 battery_low_window, dock_charge_voltage, max_position_accuracy,
@@ -103,7 +110,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationOutcome, reason, message, status, 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockOutcome, undocked, for_drive, why)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CommandOutcome, invalid, invalid_field, accepted, release, result, why, data)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ReasonChange, from, to)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobStep, kind, area_id, goal, path, start_index)
+// With defaults: paths and circles came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(JobStep, kind, area_id, goal, paths, circles, path, start_index)
 // With defaults: stalled came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RestartReport, cause, detail, crashed_at, state_before, job_id_before,
                                                 hold, stalled)
@@ -146,7 +154,7 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 544);
+static_assert(sizeof(LogicConfig) == 592);
 static_assert(sizeof(MarkerConfig) == 64);
 static_assert(sizeof(DockMarkerSample) == 48);
 static_assert(sizeof(DockPoseSample) == 56);
@@ -155,18 +163,21 @@ static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);
 static_assert(sizeof(UndockOutcome) == 88);
 static_assert(sizeof(CommandOutcome) == 184);
-static_assert(sizeof(JobStep) == 112);
+static_assert(sizeof(JobStep) == 160);
 static_assert(sizeof(RestartReport) == 160);
 static_assert(sizeof(DriveCancel) == 80);
 static_assert(sizeof(ReferenceCheck) == 8);
 static_assert(sizeof(Notice) == 32);
 static_assert(sizeof(Checkpoint) == 32);
 static_assert(sizeof(RunChanged) == 104);
-static_assert(sizeof(ObstacleConfig) == 32);
-static_assert(sizeof(ObstacleTrackSample) == 64);
+static_assert(sizeof(ObstacleConfig) == 80);
+static_assert(sizeof(ObstacleTrackSample) == 96);
 static_assert(sizeof(ObstacleSample) == 32);
-static_assert(sizeof(ObstacleNote) == 40);
+static_assert(sizeof(ObstacleNote) == 120);
 static_assert(sizeof(ScheduleRun) == 112);
+static_assert(sizeof(AvoidCircle) == 40);
+static_assert(sizeof(JobPiece) == 24);
+static_assert(sizeof(CutAnswer) == 96);
 
 // What the logic decides: state, sub_state, the reason bits of an emergency, blade wanted, follower driving.
 struct LogicView {
@@ -200,7 +211,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
       &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
-      &L::SetObstacleMode);
+      &L::SetObstacleMode, &L::OnCutAnswer);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};

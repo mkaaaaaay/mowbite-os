@@ -243,4 +243,12 @@ void CoreAccess::EndJob(bool finished, bool home, const Reason& why) {
   core_->EndJob(finished, home, why);
 }
 
+const ObstaclePart& CoreFacts::obstacle_part() const {
+  return read_->obstacle_part_;
+}
+
+ObstaclePart& CoreAccess::obstacle_part() {
+  return core_->obstacle_part_;
+}
+
 }  // namespace mowbite_logic

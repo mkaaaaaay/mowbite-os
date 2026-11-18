@@ -109,8 +109,10 @@ class MowingPlanner {
   // simplified to 1 cm and rounded to mm, pose_index the index of each point in its path.
   json Result(const PlanQuestion& question, const CoverageAnswer& answer) const;
   // Where a drive between areas may go: the active mow and nav areas (also those not to be mowed) and the active
-  // obstacles. Empty if the map allows it, else why not (MAP_*, NO_MOWING_AREA).
-  Reason TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const;
+  // obstacles. Empty if the map allows it, else why not (MAP_*, NO_MOWING_AREA). With only_area: that mow area alone
+  // is drivable.
+  Reason TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles,
+                      const std::string& only_area = "") const;
   // The mow areas of the map in map order, inactive ones included; nothing while the map is not readable.
   std::vector<JobArea> MowAreas() const;
   // Whether mowing may plan from the map: readable and fitting the datum in use; else why not (MAP_*).

@@ -1304,7 +1304,7 @@ TEST(LogicMowing, AManualPauseWithAGoodPositionChangesNoActions) {
 namespace {
 
 ObstacleSample InTheWay(const char* kind = "OBJECT", bool in_view = true, double ahead = 0.7) {
-  return {true, {{7, kind, true, in_view, ahead, 2}}};
+  return {true, {{7, kind, true, in_view, ahead, 2, 0.0, 0.0, 0.0, 0.0}}};
 }
 
 const ObstacleSample kFree{true, {}};
@@ -1404,4 +1404,217 @@ TEST(LogicObstacles, ManualPauseAndObstacleTakeTurns) {
   EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
   EXPECT_EQ(core.RobotState().state, "MOWING");
   EXPECT_EQ(core.RobotState().pause_reason, "");
+}
+
+namespace {
+
+// An object 0.1 m round at (x, y) in the stop zone, and a core avoiding objects with the blade on.
+ObstacleSample ObjectAt(double x, double y, uint32_t id = 7, const char* kind = "OBJECT") {
+  return {true, {{id, kind, true, true, 0.7, 2, x, y, 0.1, 0.05}}};
+}
+
+TestCore Avoiding() {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  TestCore core = Following(config);
+  core.SetObstacleMode(3, 3);
+  core.OnJobProgress(1);
+  return core;
+}
+
+// Holds the mower at the object from t on until it stood for the avoid wait; the leg ends canceled at pose 1.
+void StandBefore(TestCore& core, double t, const ObstacleSample& sample) {
+  core.OnObstacleStatus(sample, t);
+  core.OnLegEnded(LegEnd::kCanceled, 1, Reason("CANCELED", ""));
+  for (double s = t + 0.1; s < t + 3.0 - 1e-6; s += 0.1) {
+    core.OnObstacleStatus(sample, s);
+    EXPECT_EQ(core.NextJobStep(s).kind, JobStep::Kind::kNone);
+  }
+  core.OnObstacleStatus(sample, t + 3.0);
+}
+
+CutAnswer Pieces(std::vector<JobPiece> pieces) {
+  CutAnswer answer;
+  answer.ok = true;
+  answer.pieces = std::move(pieces);
+  return answer;
+}
+
+}  // namespace
+
+TEST(LogicAvoid, AnObjectThatStandsIsDrivenAroundWithTheBladeOn) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  core.TakeEvents();
+  core.TakeObstacleNotes();
+  const JobStep cut = core.NextJobStep(103.0);
+  ASSERT_EQ(cut.kind, JobStep::Kind::kCut);
+  ASSERT_EQ(cut.circles.size(), 1u);
+  EXPECT_NEAR(cut.circles[0].r, 0.5, 1e-9);
+  EXPECT_EQ(cut.paths.size(), 2u);
+  EXPECT_EQ(cut.start_index, 1u);
+  EXPECT_FALSE(cut.area_id.empty());
+  // Nothing else while the planner cuts.
+  EXPECT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kNone);
+  // Pose 1 of the first path is left out (0.5 m).
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 0, 4}}));
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_EQ(core.Circles().size(), 1u);
+  const auto notes = core.TakeObstacleNotes();
+  ASSERT_EQ(notes.size(), 1u);
+  EXPECT_EQ(notes[0].action, "avoided");
+  EXPECT_EQ(notes[0].track_id, 7u);
+  EXPECT_NEAR(notes[0].keep_out_r, 0.5, 1e-9);
+  EXPECT_NEAR(notes[0].left_out, 0.5, 1e-9);
+  EXPECT_FALSE(notes[0].area_id.empty());
+  // The object in its circle holds no more.
+  core.OnObstacleStatus(ObjectAt(2.0, 2.0), 103.1);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  const JobStep detour = core.NextJobStep(103.1);
+  ASSERT_EQ(detour.kind, JobStep::Kind::kDetour);
+  EXPECT_DOUBLE_EQ(detour.goal.x, 2.0);
+  EXPECT_EQ(detour.area_id, cut.area_id);
+  EXPECT_TRUE(core.BladeWanted());
+  EXPECT_TRUE(core.FollowerActive());
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  const JobStep piece = core.NextJobStep(110);
+  ASSERT_EQ(piece.kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(piece.start_index, 2u);
+  EXPECT_EQ(piece.path.poses.size(), 5u);
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  EXPECT_EQ(core.RobotState().current_path, 1);
+  // The next piece follows on without poses left out: no detour.
+  EXPECT_EQ(core.NextJobStep(120).kind, JobStep::Kind::kFollow);
+}
+
+TEST(LogicAvoid, APieceEndsBeforeItsPathAndTheNextOneComesAfterADetour) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 1, 3}, {1, 2, 4}}));
+  ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  const JobStep first = core.NextJobStep(104);
+  ASSERT_EQ(first.kind, JobStep::Kind::kFollow);
+  // The piece ends at pose 3.
+  EXPECT_EQ(first.path.poses.size(), 4u);
+  core.OnLegEnded(LegEnd::kDone, 3, Reason("DONE", ""));
+  EXPECT_EQ(core.RobotState().current_path, 0);
+  const JobStep detour = core.NextJobStep(110);
+  ASSERT_EQ(detour.kind, JobStep::Kind::kDetour);
+  EXPECT_EQ(core.RobotState().current_path, 1);
+  EXPECT_DOUBLE_EQ(detour.goal.x, 2.0);
+}
+
+TEST(LogicAvoid, APersonOrAnimalIsWaitedFor) {
+  for (const char* kind : {"PERSON", "ANIMAL"}) {
+    TestCore core = Avoiding();
+    StandBefore(core, 100, ObjectAt(2.0, 2.0, 7, kind));
+    for (double t = 103; t < 400; t += 10) {
+      core.OnObstacleStatus(ObjectAt(2.0, 2.0, 7, kind), t);
+      EXPECT_EQ(core.NextJobStep(t).kind, JobStep::Kind::kNone) << kind;
+    }
+    EXPECT_EQ(core.RobotState().state, "PAUSED");
+  }
+}
+
+TEST(LogicAvoid, WithoutAWayOrACutOfThePlannerItWaitsLikeStop) {
+  CutAnswer missing;
+  missing.code = "PLANNER_MISSING";
+  for (const CutAnswer& answer : {missing, Pieces({})}) {
+    TestCore core = Avoiding();
+    StandBefore(core, 100, ObjectAt(2.0, 2.0));
+    ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+    core.OnCutAnswer(answer);
+    EXPECT_EQ(core.RobotState().state, "PAUSED");
+    EXPECT_TRUE(core.Circles().empty());
+    // Not asked again in this hold.
+    core.OnObstacleStatus(ObjectAt(2.0, 2.0), 110);
+    EXPECT_EQ(core.NextJobStep(110).kind, JobStep::Kind::kNone);
+    EXPECT_FALSE(core.BladeWanted());
+  }
+}
+
+TEST(LogicAvoid, ASearchLimitIsAskedOnceMore) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  CutAnswer limit;
+  limit.code = "SEARCH_LIMIT";
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(limit);
+  ASSERT_EQ(core.NextJobStep(103.5).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(limit);
+  EXPECT_EQ(core.NextJobStep(104).kind, JobStep::Kind::kNone);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
+TEST(LogicAvoid, ACircleSeenFreeCutsThePlanAnewAndWithoutCirclesItIsMowedAsItIs) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 2, 4}}));
+  ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  // Its place seen free while the piece is mowed.
+  ASSERT_EQ(core.NextJobStep(104).kind, JobStep::Kind::kFollow);
+  core.OnObstacleStatus(ObjectAt(2.0, 2.0), 104.1);
+  core.OnObstacleStatus(kFree, 105);
+  EXPECT_TRUE(core.Circles().empty());
+  core.TakeObstacleNotes();
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  // No circle left: the second path whole, from its start.
+  const JobStep next = core.NextJobStep(106);
+  ASSERT_EQ(next.kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(next.start_index, 0u);
+  EXPECT_EQ(next.path.poses.size(), 5u);
+}
+
+TEST(LogicAvoid, NothingOfThePlanLeftEndsTheArea) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 2, 4}}));
+  ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  ASSERT_EQ(core.NextJobStep(104).kind, JobStep::Kind::kFollow);
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  // The second path lies behind the circle: left out, the job goes on with the next area or ends.
+  const JobStep next = core.NextJobStep(110);
+  EXPECT_NE(next.kind, JobStep::Kind::kFollow);
+}
+
+TEST(LogicAvoid, ADetourWithoutAWayLeavesThatPieceOut) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 2, 4}}));
+  ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
+  core.OnLegEnded(LegEnd::kNoWay, 0, Reason("TRANSIT_FAILED", "no way"));
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  const JobStep detour = core.NextJobStep(104);
+  ASSERT_EQ(detour.kind, JobStep::Kind::kDetour);
+  EXPECT_EQ(core.RobotState().current_path, 1);
+}
+
+TEST(LogicAvoid, CirclesCountWithinMowingOnly) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 0, 4}}));
+  ASSERT_EQ(core.Circles().size(), 1u);
+  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  EXPECT_TRUE(core.Circles().empty());
+}
+
+TEST(LogicAvoid, PiecesThatDoNotFitThePlanCountAsNoCut) {
+  for (const auto& pieces : std::vector<std::vector<JobPiece>>{
+           {{0, 3, 5}}, {{0, 0, 4}}, {{0, 3, 4}, {0, 4, 4}}, {{1, 0, 4}, {0, 2, 4}}, {{2, 0, 4}}, {{0, 2, 3}}}) {
+    TestCore core = Avoiding();
+    StandBefore(core, 100, ObjectAt(2.0, 2.0));
+    ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+    core.OnCutAnswer(Pieces(pieces));
+    EXPECT_EQ(core.RobotState().state, "PAUSED");
+    EXPECT_TRUE(core.Circles().empty());
+  }
 }

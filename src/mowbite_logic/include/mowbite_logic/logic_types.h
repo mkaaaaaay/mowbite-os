@@ -368,12 +368,16 @@ enum class LegEnd { kDone, kCanceled, kGps, kEmergency, kFailed, kNoWay };
 
 // What the node does next for the job.
 struct JobStep {
-  enum class Kind { kNone, kPlan, kApproach, kFollow, kSkippedPath };
+  enum class Kind { kNone, kPlan, kApproach, kFollow, kSkippedPath, kCut, kDetour };
   Kind kind = Kind::kNone;
-  // kPlan: the area to plan.
+  // kPlan: the area to plan. kCut, kDetour: the area of the job, the only one they drive in.
   std::string area_id;
-  // kApproach: where to drive to, over the drivable areas.
+  // kApproach: where to drive to, over the drivable areas. kDetour: the same within the area, around the circles,
+  // the blade on.
   JobPose goal;
+  // kCut: the paths of the plan from the current one on, cut from start_index of the first, by the circles.
+  std::vector<JobPath> paths;
+  std::vector<AvoidCircle> circles;
   // kFollow: the path and the pose to start at. kSkippedPath: the same for a piece of the path a skip left; the path
   // ends with the piece and is a transit all along.
   JobPath path;
@@ -385,6 +389,9 @@ constexpr double kReleaseSourceS = 2.0;
 
 // A job asks the planner again this often in a row when it gave no answer; then mowing ends and the mower goes home.
 constexpr int kPlannerRetries = 3;
+
+// A cut of the plan (cut_plan) that found no way in the planner's time is asked for once more.
+constexpr int kCutRetries = 1;
 
 // m of the path a skip left that the mower drives on at a time, the blade off, while the planner finds no way from
 // there to the next path; after each piece the job asks for that way again.
@@ -443,7 +450,22 @@ constexpr int kPauseObstacle = 1 << 4;
 constexpr int kPauseWaitsForUser = kPauseManual | kPauseEmergency | kPauseFault;
 // Pauses that never go home: the user or a person or animal may stand at the mower (G11, G45).
 constexpr int kPauseKeepsPlace = kPauseWaitsForUser | kPauseObstacle;
-enum class Leg { kNone, kPlanning, kApproach, kFollow, kSkippedPath };
+enum class Leg { kNone, kPlanning, kApproach, kFollow, kSkippedPath, kCutting, kDetour };
+
+// A stretch of a path of the plan the mower mows while it keeps out of the circles: poses first to last of path.
+struct JobPiece {
+  int path = 0;
+  size_t first = 0;
+  size_t last = 0;
+};
+
+// The answer of the planner's cut_plan: the pieces to mow, in order; ok false with code where it gave none.
+struct CutAnswer {
+  bool ok = false;
+  std::string code;
+  std::string message;
+  std::vector<JobPiece> pieces;
+};
 // What the reference check on the station is for.
 enum class DockCheck { kNone, kMowing, kDrive };
 

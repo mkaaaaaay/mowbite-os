@@ -1013,6 +1013,8 @@ bool LogicCore::BladeWanted() const {
     return false;
   }
   if (mowing_.spinup_since()) return true;
+  // Around an object the blade runs (G46).
+  if (mowing_.leg() == Leg::kDetour) return true;
   const JobPose* pose = mowing_.job().CurrentPose();
   return mowing_.leg() == Leg::kFollow && pose && IsMowKind(pose->kind);
 }

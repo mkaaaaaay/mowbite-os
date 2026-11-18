@@ -201,14 +201,17 @@ std::optional<DockPose> MowingPlanner::Dock() const {
   return map_readable_ ? dock_ : std::nullopt;
 }
 
-Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles) const {
+Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring>* obstacles,
+                                   const std::string& only_area) const {
   drivable->clear();
   obstacles->clear();
   if (!map_fits_) return Reason(map_reason_).WithMessage("Cannot drive on the map: " + map_reason_.message);
   if (!map_readable_) return Reason("MAP_UNREADABLE", "Cannot drive on the map: map/json is not readable");
   for (const auto& area : map_) {
     if (!area.active) continue;
-    if (area.type == "mow" || area.type == "nav") drivable->push_back(area.outline);
+    const bool drivable_type = only_area.empty() ? area.type == "mow" || area.type == "nav"
+                                                 : area.type == "mow" && area.id == only_area;
+    if (drivable_type) drivable->push_back(area.outline);
     if (area.type == "obstacle") obstacles->push_back(area.outline);
   }
   if (drivable->empty()) return Reason("NO_MOWING_AREA", "The map has no active mowing or navigation area");

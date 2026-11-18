@@ -320,6 +320,11 @@ void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
   mowing_.OnLegEnded(CoreAccess(*this), end, index, reason);
 }
 
+void LogicCore::OnCutAnswer(const CutAnswer& answer) {
+  mowing_.OnCutAnswer(CoreAccess(*this), answer);
+  ApplyObstacleHold();
+}
+
 void LogicCore::ApplySkips() {
   mowing_.ApplySkips(CoreAccess(*this));
 }

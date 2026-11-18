@@ -338,6 +338,12 @@ class LogicCore {
   // poses of it are left: the next step is kSkippedPath, a piece of that path with the blade off, and after it the
   // approach is asked for again. For kSkippedPath index is the pose of that path the mower got to.
   void OnLegEnded(LegEnd end, size_t index, const Reason& reason);
+  // The cut of the plan asked for by kCut (obstacle_mode avoid). From a hold of objects alone: with pieces the circles
+  // count, the hold ends and the next leg is a detour within the area with the blade on (kDetour), then the pieces
+  // are mowed and poses in or behind the circles left out; without, or with an error but one SEARCH_LIMIT asked
+  // again, the mower waits like with obstacle_mode stop. After the circles changed it cuts the plan anew; with an
+  // error the circles go.
+  void OnCutAnswer(const CutAnswer& answer);
   // Timers of the job: GPS back, going home (HomeWatch), checkpoint period. While mowing and not waiting for the user
   // the first reason that holds sends the mower home with the event DOCKING; without a way home only the battery
   // ends mowing (BATTERY_LOW, IDLE). A pause that waits for the user (manual, emergency, fault) never goes home: there
@@ -362,6 +368,14 @@ class LogicCore {
   // A path given to the follower now has to follow logic/drive_gate: the hold is armed, and it is a leg of MOWING or
   // of DOCKING towards the station.
   bool GateWanted() const;
+  // The circles the mower keeps out of while mowing (obstacle_mode avoid): temporary obstacles of the planner and
+  // obstacles of the follower's geofence. m/s at most on a detour around them.
+  const std::vector<AvoidCircle>& Circles() const {
+    return obstacle_part_.circles();
+  }
+  double AvoidSpeed() const {
+    return config_.obstacle.avoid_speed;
+  }
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;

@@ -1,4 +1,6 @@
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <set>
 #include <string>
 #include <utility>
@@ -73,6 +75,10 @@ void MowingPart::PrepareStart(CoreAccess core) {
   approached_ = false;
   planner_silent_ = 0;
   announced_area_.clear();
+  cut_.reset();
+  cutting_added_.clear();
+  recut_ = detour_ = false;
+  cut_retries_ = 0;
 }
 
 void MowingPart::ApplySkips(CoreAccess core) {
@@ -88,8 +94,10 @@ void MowingPart::ApplySkips(CoreAccess core) {
       core.AddEvent("AREA_SKIPPED", std::move(details));
     }
     job_.SkipArea();
-    // A plan on its way is for the skipped area.
-    if (leg_ == Leg::kPlanning) leg_ = Leg::kNone;
+    // A plan or cut on its way is for the skipped area.
+    if (leg_ == Leg::kPlanning || leg_ == Leg::kCutting) leg_ = Leg::kNone;
+    cut_.reset();
+    detour_ = false;
   } else if (skip_path_ && job_.HasPlan()) {
     const JobProgress left = job_.progress();
     job_.SkipPath();
@@ -151,7 +159,14 @@ void MowingPart::Unpause(CoreAccess core, int why) {
 JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
   const auto& pose_now = core.pose();
   JobStep step;
-  if (core.state() != State::kMowing || pause_ != 0 || core.emergency() || leg_ != Leg::kNone) return step;
+  if (core.state() != State::kMowing || core.emergency() || leg_ != Leg::kNone) return step;
+  if (core.obstacle_part().TakeCirclesGone()) recut_ = true;
+  // Objects alone that stood avoid_wait s in a hold: the mower drives around them where the planner cuts the plan.
+  if (pause_ == kPauseObstacle && pose_now && job_.CurrentPath()) {
+    std::vector<AvoidCircle> due = core.obstacle_part().AvoidDue(now_s);
+    if (!due.empty()) return CutStep(core, std::move(due));
+  }
+  if (pause_ != 0) return step;
   if (!job_.HasPlan()) {
     std::string notice;
     std::vector<JobArea> passed;
@@ -173,16 +188,39 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
     step.area_id = area->id;
     return step;
   }
-  const JobPose* goal = job_.CurrentPose();
-  if (!goal) return step;
+  if (!job_.CurrentPose()) return step;
   if (!pose_now) {
     Pause(core, kPauseGps, Reason("NO_POSITION", "No position from the localization"));
     return step;
   }
+  if (recut_) {
+    recut_ = false;
+    if (!core.obstacle_part().circles().empty()) return CutStep(core, {});
+    // No circle left: the plan as it is from where the job stands.
+    if (cut_) {
+      cut_.reset();
+      detour_ = false;
+      approached_ = false;
+    }
+  }
+  if (cut_) {
+    FollowCut();
+    // The rest of the area was left out: on with the next one.
+    if (!job_.HasPlan()) return NextJobStep(core, now_s);
+  }
+  const JobPose* goal = job_.CurrentPose();
   if (drive_on_) {
     drive_on_ = false;
     // Moved meanwhile: the way is asked for again from where the mower stands now.
     if (const JobPath* path = SkippedPathHere(core)) return SkippedPiece(core, *path);
+  }
+  if (detour_) {
+    if (!BladeReady(core, now_s)) return step;
+    leg_ = Leg::kDetour;
+    step.kind = JobStep::Kind::kDetour;
+    step.goal = *goal;
+    step.area_id = job_.CurrentArea()->id;
+    return step;
   }
   if (!approached_ &&
       std::hypot(goal->x - pose_now->x, goal->y - pose_now->y) > core.config().approach_distance) {
@@ -192,21 +230,164 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
     return step;
   }
   // The blade gets up to speed before a path that starts mowing, like in OpenMower.
-  if (core.config().mow_with_blade && IsMowKind(goal->kind) && core.config().mower_spinup_rpm > 0 &&
-      std::abs(core.hw().blade.rpm) < core.config().mower_spinup_rpm) {
-    if (!spinup_since_) spinup_since_ = now_s;
-    if (now_s - *spinup_since_ > core.config().mower_spinup_timeout) {
-      core.AddEvent("MOW_MOTOR_SPINUP_FAILED", json::object());
-      Pause(core, kPauseFault, Reason("BLADE_SPINUP_FAILED", "The blade did not reach its speed"));
-    }
-    return step;
-  }
-  spinup_since_.reset();
+  if (IsMowKind(goal->kind) && !BladeReady(core, now_s)) return step;
   leg_ = Leg::kFollow;
   step.kind = JobStep::Kind::kFollow;
   step.path = *job_.CurrentPath();
+  // A piece of a cut ends where it does.
+  if (cut_ && !cut_->empty() && cut_->front().path == job_.progress().path &&
+      cut_->front().last + 1 < step.path.poses.size()) {
+    step.path.poses.resize(cut_->front().last + 1);
+  }
   step.start_index = static_cast<size_t>(job_.progress().index);
   return step;
+}
+
+bool MowingPart::BladeReady(CoreAccess core, double now_s) {
+  if (!core.config().mow_with_blade || core.config().mower_spinup_rpm <= 0 ||
+      std::abs(core.hw().blade.rpm) >= core.config().mower_spinup_rpm) {
+    spinup_since_.reset();
+    return true;
+  }
+  if (!spinup_since_) spinup_since_ = now_s;
+  if (now_s - *spinup_since_ > core.config().mower_spinup_timeout) {
+    core.AddEvent("MOW_MOTOR_SPINUP_FAILED", json::object());
+    Pause(core, kPauseFault, Reason("BLADE_SPINUP_FAILED", "The blade did not reach its speed"));
+  }
+  return false;
+}
+
+JobStep MowingPart::CutStep(CoreAccess core, std::vector<AvoidCircle> added) {
+  JobStep step;
+  step.kind = JobStep::Kind::kCut;
+  step.area_id = job_.CurrentArea()->id;
+  for (int p = job_.progress().path; const JobPath* path = job_.Path(p); ++p) step.paths.push_back(*path);
+  step.start_index = static_cast<size_t>(job_.progress().index);
+  step.circles = core.obstacle_part().circles();
+  step.circles.insert(step.circles.end(), added.begin(), added.end());
+  cutting_added_ = std::move(added);
+  cutting_at_ = job_.progress();
+  leg_ = Leg::kCutting;
+  return step;
+}
+
+void MowingPart::OnCutAnswer(CoreAccess core, const CutAnswer& given) {
+  if (core.state() != State::kMowing || leg_ != Leg::kCutting) return;
+  leg_ = Leg::kNone;
+  CutAnswer answer = given;
+  for (JobPiece& piece : answer.pieces) piece.path += cutting_at_.path;
+  if (answer.ok && !PiecesFit(answer.pieces)) {
+    answer.ok = false;
+    answer.code = "INTERNAL";
+  }
+  const std::vector<AvoidCircle> added = std::exchange(cutting_added_, {});
+  const bool around = !added.empty();
+  const JobProgress& at = job_.progress();
+  // Another plan, area or pause meanwhile: a cut is asked for again where it is still wanted.
+  if (!job_.HasPlan() || at.area != cutting_at_.area || at.fingerprint != cutting_at_.fingerprint) {
+    if (!around) recut_ = true;
+    return;
+  }
+  if (around && pause_ != kPauseObstacle) return;
+  if (!answer.ok && answer.code == "SEARCH_LIMIT" && cut_retries_ < kCutRetries) {
+    // The planner kept the room after the first try: the second one gets further.
+    ++cut_retries_;
+    if (!around) recut_ = true;
+    return;
+  }
+  cut_retries_ = 0;
+  if (around && (!answer.ok || answer.pieces.empty())) {
+    // No way around them: the mower waits like with obstacle_mode stop.
+    core.obstacle_part().AvoidRefused();
+    core.Notify("Mowing: no way around the obstacle (" + (answer.ok ? std::string("nothing left to mow") : answer.code) +
+                "), waiting for it to go");
+    return;
+  }
+  if (!answer.ok) {
+    // The circles left cannot be kept out of: they go, and objects in the way hold the mower again.
+    cut_.reset();
+    detour_ = false;
+    core.obstacle_part().ClearCircles();
+    core.obstacle_part().TakeCirclesGone();
+    core.Notify("Mowing: the plan cannot be cut by the obstacles any more (" + answer.code +
+                "), stopping at them again");
+    return;
+  }
+  cut_ = answer.pieces;
+  detour_ = true;
+  approached_ = false;
+  if (!around) return;
+  const double left_out = LeftOut(*cut_);
+  const JobArea* area = job_.CurrentArea();
+  core.obstacle_part().Avoid(added);
+  for (size_t i = 0; i < added.size(); ++i) {
+    // The m left out go with the first circle of them.
+    core.effects().push_back(ObstacleNote{added[i].track_id, "avoided", added[i].r, i == 0 ? left_out : 0.0,
+                                          area ? area->id : "", area ? area->name : ""});
+  }
+  char text[96];
+  std::snprintf(text, sizeof(text), "Mowing: driving around the obstacle, %.1f m of the area left out", left_out);
+  core.Notify(text);
+}
+
+bool MowingPart::PiecesFit(const std::vector<JobPiece>& pieces) const {
+  const JobProgress& at = cutting_at_;
+  for (size_t i = 0; i < pieces.size(); ++i) {
+    const JobPiece& piece = pieces[i];
+    const JobPath* path = job_.Path(piece.path);
+    // At least 3 poses within a path of the plan, none before where the cut began, in order without overlap.
+    if (!path || piece.first + 2 > piece.last || piece.last >= path->poses.size()) return false;
+    if (piece.path < at.path || (piece.path == at.path && static_cast<int>(piece.first) < at.index)) return false;
+    if (i > 0 && (piece.path < pieces[i - 1].path ||
+                  (piece.path == pieces[i - 1].path && piece.first <= pieces[i - 1].last))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+void MowingPart::FollowCut() {
+  // NOLINTNEXTLINE(bugprone-unchecked-optional-access): called with a cut
+  std::vector<JobPiece>& pieces = *cut_;
+  const auto behind = [this](const JobPiece& piece) {
+    const JobProgress& at = job_.progress();
+    return piece.path < at.path || (piece.path == at.path && static_cast<int>(piece.last) <= at.index);
+  };
+  while (!pieces.empty() && behind(pieces.front())) pieces.erase(pieces.begin());
+  if (pieces.empty()) {
+    while (job_.HasPlan()) job_.PathDone();
+    cut_.reset();
+    detour_ = false;
+    return;
+  }
+  const JobPiece& next = pieces.front();
+  const JobProgress& at = job_.progress();
+  if (next.path == at.path && static_cast<int>(next.first) <= at.index) return;
+  while (job_.HasPlan() && job_.progress().path < next.path) job_.PathDone();
+  job_.OnIndex(next.first);
+  detour_ = true;
+  approached_ = false;
+}
+
+double MowingPart::LeftOut(const std::vector<JobPiece>& pieces) const {
+  const auto length = [this](int path, size_t first, size_t last) {
+    double m = 0.0;
+    const JobPath* p = job_.Path(path);
+    for (size_t i = first + 1; p && i <= last && i < p->poses.size(); ++i) {
+      m += std::hypot(p->poses[i].x - p->poses[i - 1].x, p->poses[i].y - p->poses[i - 1].y);
+    }
+    return m;
+  };
+  const JobProgress& at = job_.progress();
+  double rest = 0.0;
+  for (int p = at.path; const JobPath* path = job_.Path(p); ++p) {
+    rest += length(p, p == at.path ? static_cast<size_t>(at.index) : 0, path->poses.size() - 1);
+  }
+  for (const JobPiece& piece : pieces) {
+    const size_t from = piece.path == at.path ? std::max(piece.first, static_cast<size_t>(at.index)) : piece.first;
+    rest -= length(piece.path, from, piece.last);
+  }
+  return std::max(0.0, rest);
 }
 
 void MowingPart::OnJobPlanned(CoreAccess core, std::vector<JobPath> paths, const std::string& fingerprint) {
@@ -215,6 +396,10 @@ void MowingPart::OnJobPlanned(CoreAccess core, std::vector<JobPath> paths, const
   planner_silent_ = 0;
   job_.SetPlan(std::move(paths), fingerprint);
   approached_ = false;
+  // A new plan is cut by the circles kept before the first leg.
+  cut_.reset();
+  detour_ = false;
+  recut_ = !core.obstacle_part().circles().empty();
   core.CheckpointNow();
 }
 
@@ -256,7 +441,9 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
   const auto& mower = core.pose();
   if (core.state() != State::kMowing || !LegDrives()) return;
   const bool follow = leg_ == Leg::kFollow;
-  const bool approach = leg_ == Leg::kApproach;
+  const bool detour = leg_ == Leg::kDetour;
+  // A detour is an approach within the area with the blade on.
+  const bool approach = leg_ == Leg::kApproach || detour;
   leg_ = Leg::kNone;
   if (follow) job_.OnIndex(index);
   // A piece of the path a skip left: the job stays at the start of the next path.
@@ -275,10 +462,18 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
   switch (end) {
     case LegEnd::kDone:
       if (follow) {
-        job_.PathDone();
+        const JobPath* path = job_.CurrentPath();
+        if (cut_ && !cut_->empty() && path && cut_->front().path == job_.progress().path &&
+            cut_->front().last + 1 < path->poses.size()) {
+          // The piece ends before its path: poses left out come next.
+          cut_->erase(cut_->begin());
+        } else {
+          job_.PathDone();
+        }
         approached_ = false;
         core.CheckpointNow();
       } else if (approach) {
+        if (detour) detour_ = false;
         approached_ = true;
       }
       break;
@@ -295,8 +490,13 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
       break;
     case LegEnd::kEmergency: Pause(core, kPauseEmergency, reason); break;
     case LegEnd::kNoWay:
+      // No way to the next piece from here after all: it is left out too, the detour goes to the one after it.
+      if (detour && cut_ && !cut_->empty()) {
+        cut_->erase(cut_->begin());
+        break;
+      }
       // After a skip the path left is a checked way on: a piece of it, then the approach is asked for again.
-      if (approach && SkippedPathHere(core)) {
+      if (!detour && approach && SkippedPathHere(core)) {
         approached_ = false;
         drive_on_ = true;
         break;
@@ -311,7 +511,7 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
 }
 
 bool MowingPart::LegDrives() const {
-  return leg_ == Leg::kApproach || leg_ == Leg::kFollow || leg_ == Leg::kSkippedPath;
+  return leg_ == Leg::kApproach || leg_ == Leg::kFollow || leg_ == Leg::kSkippedPath || leg_ == Leg::kDetour;
 }
 
 const JobPath* MowingPart::SkippedPathHere(CoreFacts core) const {
@@ -365,6 +565,12 @@ void MowingPart::Leave(CoreAccess core) {
   pause_ = 0;
   skip_path_ = skip_area_ = drive_on_ = false;
   skipped_.reset();
+  // Circles count within a session of mowing only: out of it objects hold the mower again.
+  cut_.reset();
+  cutting_added_.clear();
+  recut_ = detour_ = false;
+  cut_retries_ = 0;
+  core.obstacle_part().ClearCircles();
   spinup_since_.reset();
   gps_good_since_.reset();
 }

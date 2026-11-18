@@ -3,11 +3,13 @@
 
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "mowbite_logic/area_recorder.h"
 #include "mowbite_logic/reasons.h"
 
 namespace mowbite_logic {
@@ -24,6 +26,11 @@ struct ObstacleTrackSample {
   double ahead = 0.0;
   // ZONE_* of ObstacleTrack.msg: 0 none, 1 slow, 2 stop.
   int zone = 0;
+  // Its middle in the map frame, its radius and 1 sigma of its place (m).
+  double x = 0.0;
+  double y = 0.0;
+  double radius = 0.0;
+  double sigma = 0.0;
 };
 
 // obstacles/status: whether every sensor sees, and the tracks.
@@ -40,25 +47,58 @@ struct ObstacleConfig {
   double near_ahead = 0.5;
   // An obstacles/status older than this (s) counts as one without sight: it starts no hold and frees none.
   double stale = 1.0;
+  // obstacle_mode avoid: objects alone that held the mower avoid_wait s and moved no more than avoid_still (m) since
+  // become circles kept out of: their radius, avoid_sigma times their spread and avoid_clearance between them and the
+  // body. A circle goes once its track ends in view (seen free), after avoid_keep s or with the job.
+  double avoid_wait = 3.0;
+  double avoid_still = 0.2;
+  double avoid_sigma = 2.0;
+  double avoid_clearance = 0.30;
+  double avoid_keep = 1800.0;
+  // m/s at most on the way around them, with the blade on.
+  double avoid_speed = 0.3;
 };
+
+// A circle the mower keeps out of (obstacle_mode avoid), in the map frame.
+struct AvoidCircle {
+  // The track it was made for (its entry in the list), and the one that lies in it now: 0 once that ended out of view.
+  uint32_t track_id = 0;
+  uint32_t follows = 0;
+  double x = 0.0;
+  double y = 0.0;
+  // m, the thing with its spread and the clearance.
+  double r = 0.0;
+  // s, when it was made.
+  double since = 0.0;
+};
+
+// The polygon around a circle for the planner and the follower: corners outside it, its edges touching it.
+Ring KeepOutRing(const AvoidCircle& circle);
 
 // What the mower did about a track, for its entry in vision.obstacles.list.
 struct ObstacleNote {
   uint32_t track_id = 0;
-  // slowed, would_stop, stopped.
+  // slowed, would_stop, stopped, avoided.
   std::string action;
+  // avoided: the circle (0 once it is gone), the m of the job left unmowed for it, the area.
+  double keep_out_r = 0.0;
+  double left_out = 0.0;
+  std::string area_id;
+  std::string area_name;
 };
 
 // The hold for obstacles (FP30 stop): with obstacle_mode stop on a platform proven for it, the mower stands while a
 // confirmed track lies in the stop zone, and goes on once that zone is seen free for free_wait (near_wait after a thing
 // right at the nose). A place out of view or without sight is never free; a status that stops coming starts nothing.
 // obstacle_mode show only notes where the mower would have stopped. The core applies the hold to MOWING and to the map
-// legs of DOCKING (logic_obstacle.cpp).
+// legs of DOCKING (logic_obstacle.cpp). With obstacle_mode avoid, objects alone that hold the mower and stand become
+// circles to drive around (AvoidDue, Avoid); a confirmed object inside a circle holds the mower no more, a person or
+// animal there still does.
 class ObstaclePart {
  public:
   explicit ObstaclePart(const ObstacleConfig& config = {}) : config_(config) {}
 
-  // obstacle_mode and the highest mode of the platform; avoid acts as stop until the mower drives around obstacles.
+  // obstacle_mode and the highest mode of the platform; below avoid the circles go.
   void SetMode(int setting, int mode_max);
   int mode() const;
   bool Armed() const {
@@ -84,10 +124,34 @@ class ObstaclePart {
   bool Waive();
   std::vector<ObstacleNote> TakeNotes();
 
+  // In a hold of objects alone that stood avoid_wait s and was not refused: the circles to keep out of around them;
+  // else none.
+  std::vector<AvoidCircle> AvoidDue(double now_s) const;
+  // The circles are driven around: the hold ends, they count until they go.
+  void Avoid(const std::vector<AvoidCircle>& circles);
+  // No way around them: this hold waits like one of obstacle_mode stop.
+  void AvoidRefused() {
+    avoid_refused_ = true;
+  }
+  const std::vector<AvoidCircle>& circles() const {
+    return circles_;
+  }
+  // Whether circles went since the last call.
+  bool TakeCirclesGone() {
+    return std::exchange(circles_gone_, false);
+  }
+  // The job ended: the circles go.
+  void ClearCircles();
+
  private:
   // The tracks that hold the mower: confirmed in the stop zone, unless waived and out of view.
   std::vector<const ObstacleTrackSample*> Holders(const ObstacleSample& sample) const;
   void Note(uint32_t id, const std::string& action);
+  // A confirmed object inside a circle, with avoid_still to spare.
+  bool Inside(const ObstacleTrackSample& track, const AvoidCircle& circle) const;
+  const AvoidCircle* CircleOf(const ObstacleTrackSample& track) const;
+  void DropCircle(size_t index);
+  void EndHold();
 
   ObstacleConfig config_;
   int setting_ = 0;
@@ -103,6 +167,16 @@ class ObstaclePart {
   // Since when the zone is seen free in this hold.
   std::optional<double> free_since_;
   std::set<uint32_t> waived_;
+  // Where the things of this hold stand and since when, whether driving around them was refused.
+  struct Standing {
+    double x = 0.0;
+    double y = 0.0;
+    double since = 0.0;
+  };
+  std::map<uint32_t, Standing> standing_;
+  bool avoid_refused_ = false;
+  std::vector<AvoidCircle> circles_;
+  bool circles_gone_ = false;
   // Tracks already noted, by action.
   std::set<std::pair<uint32_t, std::string>> noted_;
   std::vector<ObstacleNote> notes_;
