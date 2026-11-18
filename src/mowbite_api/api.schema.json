@@ -4611,7 +4611,7 @@
           "type": "string"
         },
         "kind": {
-          "description": "What held it: a person or animal before an object; not in a refusal",
+          "description": "What held it: a person or animal before an object",
           "enum": [
             "PERSON",
             "ANIMAL",
@@ -5857,7 +5857,7 @@
           "type": "string"
         },
         "kind": {
-          "description": "What held it: a person or animal before an object; not in a refusal",
+          "description": "What held it: a person or animal before an object",
           "enum": [
             "PERSON",
             "ANIMAL",
