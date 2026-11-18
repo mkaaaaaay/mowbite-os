@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 
 namespace tron {
@@ -206,13 +207,17 @@ HostTestRefusal McuControl::SilenceWithBlade(double seconds, double now) {
 }
 
 HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade) {
-  if (silent_until_s_ || ended_) return HostTestRefusal::kBusy;
+  if (silent_until_s_ || armed_silence_ || ended_) return HostTestRefusal::kBusy;
   if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > config_.silence_max_s) {
     return HostTestRefusal::kOutOfRange;
   }
   const HostTestRefusal refusal = HostTestRefused(blade);
   if (refusal != HostTestRefusal::kNone) return refusal;
-  silent_until_s_ = now + seconds;
+  if (config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
+    armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS};
+  } else {
+    silent_until_s_ = now + seconds;
+  }
   return HostTestRefusal::kNone;
 }
 
@@ -231,11 +236,49 @@ void McuControl::EndSilence(double now) {
   // The MCU might still run the last setpoint; its blade state is unknown.
   moving_ = false;
   StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+  stop_repeat_.next_s = now + config_.silence_stop_delay_s;
   blade_on_.reset();
   StartRepeat(blade_off_repeat_, BladeOff(), now);
   blade_off_since_s_ = now;
   next_heartbeat_s_.reset();
+  late_heartbeat_s_.reset();
   stop_release_.Interrupt();
+}
+
+void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<SubPacket>& out) {
+  using Mode = McuControlConfig::SpeedHeartbeat;
+  bool motion = false;
+  bool blade_on = false;
+  bool late = false;
+  for (size_t i = 0; i < out.size(); ++i) {
+    const SubPacket& packet = out[i];
+    if (packet.type != static_cast<uint8_t>(PacketType::kHostToMcu)) continue;
+    if (packet.module == static_cast<uint8_t>(Module::kCutter) && !packet.payload.empty() && packet.payload[0]) {
+      blade_on = true;
+    }
+    if (packet.module != static_cast<uint8_t>(Module::kSpeed)) continue;
+    if (packet.payload != ZeroSpeedPacket().payload) motion = true;
+    if (config_.speed_heartbeat == Mode::kLater) late_heartbeat_s_ = now + config_.heartbeat_after_speed_s;
+    if (config_.speed_heartbeat == Mode::kAfter) {
+      // Last in the loop: the insert moves what packet refers to.
+      out.insert(out.begin() + static_cast<std::ptrdiff_t>(++i), HeartbeatPacket(wall));
+    }
+  }
+  if (late_heartbeat_s_ && now + kDeadlineSlackS >= *late_heartbeat_s_) {
+    out.push_back(HeartbeatPacket(wall));
+    late_heartbeat_s_.reset();
+    late = true;
+  }
+
+  if (!armed_silence_) return;
+  using After = McuControlConfig::SilenceAfter;
+  const bool speed_tick = config_.speed_heartbeat == Mode::kLater ? late : motion;
+  if ((config_.silence_after == After::kSpeed && speed_tick) || (config_.silence_after == After::kCutter && blade_on)) {
+    silent_until_s_ = now + armed_silence_->seconds;
+    armed_silence_.reset();
+  } else if (now > armed_silence_->until_s) {
+    armed_silence_.reset();
+  }
 }
 
 bool McuControl::StopClearReady(double now) const {
@@ -504,6 +547,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   EmitRepeat(stop_repeat_, now, out);
   if (out.size() > before_stop) next_speed_s_ = now + config_.speed_period_s;
   EmitRepeat(blade_off_repeat_, now, out);
+  TieHeartbeats(now, wall, out);
   return out;
 }
 

@@ -43,6 +43,10 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["stop_clear_delay_s"] = c.stop_clear_delay_s;
   j["start_latched"] = c.start_latched;
   j["silence_max_s"] = c.silence_max_s;
+  j["speed_heartbeat"] = static_cast<int>(c.speed_heartbeat);
+  j["heartbeat_after_speed_s"] = c.heartbeat_after_speed_s;
+  j["silence_after"] = static_cast<int>(c.silence_after);
+  j["silence_stop_delay_s"] = c.silence_stop_delay_s;
 }
 // Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
@@ -76,6 +80,10 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   c.stop_clear_delay_s = j.value("stop_clear_delay_s", McuControlConfig{}.stop_clear_delay_s);
   c.start_latched = j.value("start_latched", false);
   c.silence_max_s = j.value("silence_max_s", 0.0);
+  c.speed_heartbeat = static_cast<McuControlConfig::SpeedHeartbeat>(j.value("speed_heartbeat", 0));
+  c.heartbeat_after_speed_s = j.value("heartbeat_after_speed_s", McuControlConfig{}.heartbeat_after_speed_s);
+  c.silence_after = static_cast<McuControlConfig::SilenceAfter>(j.value("silence_after", 0));
+  c.silence_stop_delay_s = j.value("silence_stop_delay_s", 0.0);
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SensorInfo, bumper, rain, lift, stop, power_off, battery_gate, cutter_size,
                                    press_module, bumper_right, bumper_left)
@@ -86,7 +94,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 256);
+static_assert(sizeof(McuControlConfig) == 288);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);

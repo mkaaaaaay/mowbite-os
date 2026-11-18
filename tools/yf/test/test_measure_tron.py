@@ -247,6 +247,51 @@ class TestBladeArguments(unittest.TestCase):
         self.assertEqual(self.lift_sides_of(), ("front",))
         self.assertEqual(self.lift_sides_of("--lift-sides", "right,rear,front"), ("right", "rear", "front"))
 
+    def test_hold_cases_values(self):
+        self.assertEqual(m.hold_cases("v0"), ("V0",))
+        self.assertEqual(m.hold_cases(" V2, G ,V0"), ("V2", "G", "V0"))
+        for text in ("", "V4", "V0,", "V0;V1"):
+            with self.assertRaisesRegex(ValueError, "each case one of", msg=text):
+                m.hold_cases(text)
+        with self.assertRaisesRegex(ValueError, "each case once"):
+            m.hold_cases("V1,v1")
+
+    def test_hold_only_with_t9_and_its_blade_case_only_with_blade(self):
+        for argv in (["--hold", "V0"], ["--platform", "tron", "--steps", "T2", "--hold", "V0"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(argv)
+            self.assertIn("--hold is for T9 on the Tron", str(refused.exception.code), argv)
+        t9 = ["--platform", "tron", "--steps", "T9", "--record-dir", "/nonexistent/record"]
+        with self.assertRaises(SystemExit) as refused:
+            m.main([*t9, "--hold", "V9"])
+        self.assertTrue(str(refused.exception.code).startswith("--hold: "), refused.exception.code)
+        for argv in ([*t9, "--hold", "V0,B"], [*t9, "--blade"]):
+            with self.assertRaises(SystemExit) as refused:
+                m.main(argv)
+            self.assertIn("go together", str(refused.exception.code), argv)
+
+    def hold_of(self, *argv):
+        seen = []
+
+        def start(args, rec):
+            seen.append(args.hold)
+            raise RuntimeError("past the options")
+        with mock.patch.object(m, "Recorder"), mock.patch.object(m, "TronStart", side_effect=start):
+            with self.assertRaisesRegex(RuntimeError, "past the options"):
+                m.main(["--platform", "tron", "--steps", "T9", *argv])
+        return seen[0]
+
+    def test_hold_defaults_and_the_blade_case(self):
+        self.assertEqual(self.hold_of(), m.HOLD_DEFAULT)
+        self.assertEqual(self.hold_of("--hold", "B,V0", "--blade"), ("B", "V0"))
+
+    def test_every_hold_case_silences_after_its_frame_within_the_driver_limits(self):
+        for case, (text, overrides, silence, runs) in m.HOLD_CASES.items():
+            self.assertIn(overrides["silence_after"], ("speed", "cutter"), case)
+            self.assertIn(overrides.get("speed_heartbeat", ""), ("", "after", "frame", "later"), case)
+            self.assertGreater(silence, m.HOLD_HELD_S, case)
+            self.assertEqual(overrides.get("allow_blade", False), case == "B", case)
+
     def test_t6_and_t7_are_not_in_the_default_steps(self):
         self.assertIn("T6", m.TronMeasurement.STEPS)
         self.assertIn("T7", m.TronMeasurement.STEPS)

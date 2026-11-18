@@ -29,6 +29,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/imu.hpp>
+#include <stdexcept>
+#include <string>
 #include <thread>
 
 #include "tron_mcu/mcu_codec.h"
@@ -144,6 +146,9 @@ class McuNode : public rclcpp::Node {
     }
     port_name_ = declare_parameter("port", "/dev/ttyS9");
     read_only_ = get_parameter("read_only").as_bool();
+    const std::string speed_heartbeat = get_parameter("speed_heartbeat").as_string();
+    one_write_ = !speed_heartbeat.empty();
+    speed_frame_heartbeat_ = speed_heartbeat == "frame";
     if (read_only_) {
       RCLCPP_WARN(get_logger(), "read_only: %s is only read, no byte goes to the MCU: no motion, blade or charging",
                   port_name_.c_str());
@@ -259,6 +264,34 @@ class McuNode : public rclcpp::Node {
     }
     if (!config.stop_release) config.stop_clear_period_s = 0;
     config.silence_max_s = read_only ? 0.0 : std::max(0.0, declare_parameter("silence_max", 0.0));
+    // Measurement only (H3, phase 6): heartbeat after each SpeedData ("after" in the same write, "frame" in its
+    // frame, "later" after heartbeat_after_speed s), hw/silence after the next "speed" or "cutter" tick, stop frames
+    // after a silence delayed by silence_stop_delay s.
+    const std::string speed_heartbeat = declare_parameter("speed_heartbeat", "");
+    const std::string silence_after = declare_parameter("silence_after", "");
+    using SH = tron::McuControlConfig::SpeedHeartbeat;
+    using SA = tron::McuControlConfig::SilenceAfter;
+    if (speed_heartbeat == "after" || speed_heartbeat == "frame") {
+      config.speed_heartbeat = SH::kAfter;
+    } else if (speed_heartbeat == "later") {
+      config.speed_heartbeat = SH::kLater;
+    } else if (!speed_heartbeat.empty()) {
+      throw std::invalid_argument("speed_heartbeat must be empty, after, frame or later");
+    }
+    if (silence_after == "speed") {
+      config.silence_after = SA::kSpeed;
+    } else if (silence_after == "cutter") {
+      config.silence_after = SA::kCutter;
+    } else if (!silence_after.empty()) {
+      throw std::invalid_argument("silence_after must be empty, speed or cutter");
+    }
+    config.heartbeat_after_speed_s = declare_parameter("heartbeat_after_speed", config.heartbeat_after_speed_s);
+    config.silence_stop_delay_s = std::max(0.0, declare_parameter("silence_stop_delay", 0.0));
+    if (!speed_heartbeat.empty() || !silence_after.empty() || config.silence_stop_delay_s > 0) {
+      RCLCPP_WARN(get_logger(), "Measurement settings: speed_heartbeat '%s' (%.3f s), silence_after '%s', "
+                  "silence_stop_delay %.2f s", speed_heartbeat.c_str(), config.heartbeat_after_speed_s,
+                  silence_after.c_str(), config.silence_stop_delay_s);
+    }
     // Set by the launch when it starts the driver again after the last one ended.
     config.start_latched = declare_parameter("start_latched", false) && !read_only;
     if (config.start_latched) {
@@ -454,15 +487,30 @@ class McuNode : public rclcpp::Node {
   }
 
   void Send(const std::vector<tron::SubPacket>& packets) {
-    for (const auto& packet : packets) {
-      const std::vector<uint8_t> frame = tron::EncodeFrame({packet});
+    std::vector<uint8_t> bytes;
+    for (size_t i = 0; i < packets.size(); ++i) {
+      std::vector<tron::SubPacket> parts{packets[i]};
+      // A heartbeat right after a SpeedData goes in its frame (speed_heartbeat "frame").
+      if (speed_frame_heartbeat_ && packets[i].module == static_cast<uint8_t>(tron::Module::kSpeed) &&
+          i + 1 < packets.size() && packets[i + 1].type == static_cast<uint8_t>(tron::PacketType::kHeartbeat)) {
+        parts.push_back(packets[++i]);
+      }
+      const std::vector<uint8_t> frame = tron::EncodeFrame(parts);
       if (journal_) journal_->Append(tx_stream_, mowbite_journal::kRawBytes, frame.data(), frame.size());
-      if (!port_.Write(frame)) {
-        RCLCPP_ERROR(get_logger(), "Write error on %s, closing", port_name_.c_str());
-        port_.Close();
+      if (one_write_) {
+        bytes.insert(bytes.end(), frame.begin(), frame.end());
+      } else if (!Write(frame)) {
         return;
       }
     }
+    if (one_write_ && !bytes.empty()) Write(bytes);
+  }
+
+  bool Write(const std::vector<uint8_t>& bytes) {
+    if (port_.Write(bytes)) return true;
+    RCLCPP_ERROR(get_logger(), "Write error on %s, closing", port_name_.c_str());
+    port_.Close();
+    return false;
   }
 
   void SendShutdownFrames() {
@@ -957,6 +1005,9 @@ class McuNode : public rclcpp::Node {
   std::unique_ptr<mowbite_watch::Attached> watch_;
 
   bool read_only_;
+  // Measurement only (speed_heartbeat): all frames of a tick in one write, a heartbeat in the frame of its SpeedData.
+  bool one_write_ = false;
+  bool speed_frame_heartbeat_ = false;
   bool stop_release_;
   // seq of the last StopEvent published, only for the I/O thread.
   uint32_t published_stop_seq_ = 0;

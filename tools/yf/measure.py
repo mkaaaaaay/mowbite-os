@@ -37,6 +37,10 @@ T8 asks how the MCU keeps STOP, bumper and lift and what a clear frame drops (G3
 wheel command: tron_mcu sends the clear frame with each release while stop or lift shows, at most one a second. A short
 press of STOP, STOP held through releases, a bumper, the front lifted with a release while it is up and once it is
 down, then tron_mcu killed with the port read until the MCU shows stop or lift on its own: mowbite-measure --steps T8.
+T9 asks how long the MCU keeps a setpoint once the host's frames end, by what came last (H3): for each case of --hold
+tron_mcu starts again with measurement settings, the wheels turn in the air and hw/silence begins right after the
+chosen frame; the driver stops them when the silence ends. G adds a long silence with heartbeats alone afterwards, B
+(with --blade, the disc off) the blade on frame last: mowbite-measure --steps T9 [--hold V0,V1,V2,V3,G].
 """
 import argparse
 import collections
@@ -60,7 +64,7 @@ import yaml
 import rclpy
 from geometry_msgs.msg import Twist, TwistStamped, Vector3
 from mowbite_msgs.msg import HardwareCapabilities, HardwareStatus
-from mowbite_msgs.srv import SetBlade, SetEmergency
+from mowbite_msgs.srv import SetBlade, SetEmergency, SilenceDriver
 from rclpy.qos import QoSProfile, DurabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Imu
 
@@ -116,6 +120,26 @@ HOST_GONE_SPREAD_S = 0.3
 # without hw/cmd_vel.
 HEARTBEAT_ONLY_TIMEOUT_S = 10.0
 HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_window": 0.0}
+# Hold after the last frame (T9): each case starts tron_mcu again with its measurement settings and silence_max; the
+# wheels turn HOLD_DRIVE_S, then hw/silence starts right after the chosen frame. A stand later than HOLD_HELD_S after
+# it counts as held. G: a long silence, then heartbeats alone for HOLD_QUIET_S before the stops. B: the blade on frame
+# last (a new speed for the turning motor), with --blade. Case: (text, overrides, silence s, runs or None = --repeats).
+HOLD_DRIVE_S = 1.0
+HOLD_HELD_S = 1.0
+HOLD_QUIET_S = 3.0
+HOLD_ARM_S = 0.5
+HOLD_CASES = {
+    "V0": ("the heartbeat ahead of the setpoint, as now", {"silence_after": "speed"}, 3.0, None),
+    "V1": ("a heartbeat right after each setpoint, in one write", {"speed_heartbeat": "after",
+                                                                    "silence_after": "speed"}, 3.0, None),
+    "V2": ("a heartbeat in the frame of each setpoint", {"speed_heartbeat": "frame", "silence_after": "speed"}, 3.0,
+           None),
+    "V3": ("a heartbeat 25 ms after each setpoint", {"speed_heartbeat": "later", "silence_after": "speed"}, 3.0, None),
+    "G": (f"as V0 with a long silence, then heartbeats alone for {HOLD_QUIET_S:.0f} s before the stops",
+          {"silence_after": "speed", "silence_stop_delay": HOLD_QUIET_S}, 10.0, 2),
+    "B": ("the blade on frame last, the disc off", {"silence_after": "cutter", "allow_blade": True}, 3.0, 3),
+}
+HOLD_DEFAULT = ("V0", "V1", "V2")
 # The wheels stand this soon after an emergency (T2, T4), after the driver's watchdog (T5). The driver reports
 # moving false once its watchdog fired: T5 looks at it WATCHDOG_MARGIN_S after that.
 EMERGENCY_STAND_S = 1.0
@@ -305,6 +329,18 @@ def lift_sides(text):
     if len(set(sides)) < len(sides):
         raise ValueError(f"each side once, got {text!r}")
     return tuple(sides)
+
+
+def hold_cases(text):
+    """The value of --hold: cases of HOLD_CASES, comma separated, each once, in the order given. ValueError with the
+    reason otherwise."""
+    cases = [item.strip().upper() for item in text.split(",")]
+    unknown = [case for case in cases if case not in HOLD_CASES]
+    if unknown:
+        raise ValueError(f"each case one of {', '.join(HOLD_CASES)}, got {text!r}")
+    if len(set(cases)) < len(cases):
+        raise ValueError(f"each case once, got {text!r}")
+    return tuple(cases)
 
 
 def lift_blade_items(tilts, unlifted, runs):
@@ -519,6 +555,7 @@ class Mower:
         self.cmd_vel = self.node.create_publisher(Twist, "hw/cmd_vel", 10)
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.blade = self.node.create_client(SetBlade, "hw/blade")
+        self.silence_client = self.node.create_client(SilenceDriver, "hw/silence")
         self.running = True
         self.spinner = threading.Thread(target=self._spin, daemon=True)
         self.spinner.start()
@@ -663,6 +700,12 @@ class Mower:
                                                         lease_s=lease_s if on else 0.0))
         self.rec.write("blade", on=on, lease_s=lease_s, percent=percent, height_mm=height_mm,
                        success=bool(answer and answer.success), message=answer.message if answer else "")
+        return answer
+
+    def silence(self, seconds, blade=False):
+        answer = self.call(self.silence_client, SilenceDriver.Request(seconds=seconds, blade=blade))
+        self.rec.write("silence", seconds=seconds, blade=blade, success=bool(answer and answer.success),
+                       code=answer.code if answer else "")
         return answer
 
     def close(self):
@@ -2564,7 +2607,101 @@ class TronMeasurement(Measurement):
                 "restart_reason": reason_text(after.emergency_reason) if after else None,
                 "released": self.release(step)}
 
-    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8}
+    def t9(self):
+        step = "T9"
+        if not self.ask(f"{step} hold after the last frame (jacked up, wheels free, disc off, you at STOP and "
+                        f"battery): cases {','.join(self.args.hold)}; each starts tron_mcu again with its settings; wheels at "
+                        f"{TRON_FIRST_SPEED} m/s for {HOLD_DRIVE_S:.0f} s, then nothing to the MCU right after the "
+                        "chosen frame: they may turn until the silence ends"):
+            return
+        for case in self.args.hold:
+            text, overrides, silence, runs = HOLD_CASES[case]
+            runs = runs or self.args.repeats
+            if not self.ask(f"{step}.{case} {text}: {runs} runs, silence {silence:.0f} s"):
+                continue
+            old = self.start.driver_pid
+            self.start.restart_driver(silence_max=silence, **overrides)
+            try:
+                self.wait_driver_back(step, old)
+                if case == "B":
+                    self.blade_used = True
+                    self.blade_setup()
+                times = []
+                for n in range(runs):
+                    if n and not self.ask(f"{step}.{case} run {n + 1}/{runs}"):
+                        break
+                    self.release(step)
+                    run = self.hold_blade_run if case == "B" else self.hold_run
+                    times.append(run(step, case, silence, n + 1))
+            finally:
+                old = self.start.driver_pid
+                self.start.restart_driver()
+            self.wait_driver_back(step, old)
+            held = sum(1 for t in times if t > HOLD_HELD_S)
+            if times:
+                print(f"     {case}: stood {min(times):.2f}-{max(times):.2f} s after the silence began, held in "
+                      f"{held} of {len(times)} runs")
+            self.rec.write("hold_case", step=step, case=case, stand_s=times, held=held)
+
+    def hold_start(self, step, case, n, ask_silence, frame):
+        """hw/silence asked, then `frame` (called every 0.1 s) until the driver is silent: the time it began."""
+        answer = ask_silence()
+        if answer is None or not answer.success:
+            self.finding(step, f"{case} run {n}: hw/silence refused: {answer.code if answer else 'no answer'}")
+            raise Abort()
+        end = time.monotonic() + HOLD_ARM_S
+        while time.monotonic() < end:
+            if self.in_emergency():
+                return self.mower.emergency_since
+            frame()
+            time.sleep(0.1)
+        self.finding(step, f"{case} run {n}: the silence did not begin within {HOLD_ARM_S} s")
+        raise Abort()
+
+    def hold_run(self, step, case, silence, n):
+        """Wheels at TRON_FIRST_SPEED, then silent right after a setpoint: s from then until they stood."""
+        self.mark(step, f"{case} run {n}")
+        if self.drive(TRON_FIRST_SPEED, 0.0, HOLD_DRIVE_S, until=self.in_emergency) or not self.wheels_turn():
+            self.mower.stop_wheels()
+            self.finding(step, f"{case} run {n}: the wheels did not turn, or an emergency came first")
+            raise Abort()
+        since = self.hold_start(step, case, n, lambda: self.mower.silence(silence),
+                                lambda: self.mower.drive(TRON_FIRST_SPEED, 0.0))
+        quiet = HOLD_CASES[case][1].get("silence_stop_delay", 0.0)
+        stand = self.stand_after(since, silence + quiet + 1.0)
+        restarted = None
+        if stand is not None and stand < silence and quiet:
+            # Heartbeats alone after the silence: does the MCU take up the old setpoint again?
+            self.wait(max(0.0, since + silence - time.monotonic()))
+            restarted = self.wait(quiet, self.wheels_turn)
+        self.rec.write("hold", step=step, case=case, run=n, since=since, stand_s=stand, restarted=restarted)
+        if stand is None:
+            self.finding(step, f"{case} run {n}: the wheels still turned after the silence and its stops")
+            if not self.person.fake:
+                self.person.act("the wheels may still turn: press STOP now")
+            raise Abort()
+        print(f"     the wheels stood {stand:.2f} s after the silence began"
+              + ("" if restarted is None else
+                 ", turned again with heartbeats alone" if restarted else ", stayed with heartbeats alone"))
+        self.wait(max(0.0, since + silence + quiet + 0.5 - time.monotonic()))
+        self.no_motion(step, 1.0, "after the silence and its stops")
+        return stand
+
+    def hold_blade_run(self, step, case, silence, n):
+        """The blade motor turning, then a new speed for it and silent right after that frame: s from then until the
+        MCU reported it standing (about once a second)."""
+        self.mark(step, f"{case} run {n}")
+        first = self.args.blade_percent[0]
+        second = first - 10 if first > 20 else first + 10
+        self.blade_turning(step, first)
+        since = self.hold_start(step, case, n, lambda: self.mower.silence(silence, blade=True),
+                                lambda: self.mower.set_blade(True, self.blade_lease_s, second, TRON_BLADE_HEIGHT_MM))
+        still = self.blade_stands(step, since, "the silence began", silence + self.blade_stop_s)
+        self.rec.write("hold", step=step, case=case, run=n, since=since, stand_s=still)
+        self.wait(max(0.0, since + silence + 0.5 - time.monotonic()))
+        return still
+
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8, "T9": t9}
 
     def run(self, steps):
         """The firmware and the first IMU sample first: another firmware than TRON_FIRMWARE ends the run before any
@@ -2621,6 +2758,8 @@ def main(argv=None):
     parser.add_argument("--lift-sides", help=f"tron T7: sides T7.1 lifts, in this order, each once, comma separated "
                                              f"of {','.join(LIFT_SIDES)}, default {LIFT_SHOWN_SIDE}; the MCU shows "
                                              f"lift only at {LIFT_SHOWN_SIDE}, T7.3 lifts {LIFT_SHOWN_SIDE}")
+    parser.add_argument("--hold", help=f"tron T9: cases of {','.join(HOLD_CASES)}, comma separated, each once, default "
+                                       f"{','.join(HOLD_DEFAULT)}; B needs --blade")
     parser.add_argument("--ground", action="store_true", help="allow M8 on the ground, 0.3 m/s per wheel")
     parser.add_argument("--fast", action="store_true",
                         help="with --ground: the fast runs of M8 up to 0.5 m/s in stages, in the raised start of the "
@@ -2645,9 +2784,15 @@ def main(argv=None):
         sys.exit(f"unknown steps for {args.platform}: {unknown}")
     if tron and (args.ground or args.fast):
         sys.exit("--ground and --fast are not for the Tron")
-    blade_steps = tron and bool({"T6", "T7"} & set(steps))
+    if args.hold is not None and not (tron and "T9" in steps):
+        sys.exit("--hold is for T9 on the Tron")
+    try:
+        args.hold = HOLD_DEFAULT if args.hold is None else hold_cases(args.hold)
+    except ValueError as error:
+        sys.exit(f"--hold: {error}")
+    blade_steps = tron and bool({"T6", "T7"} & set(steps) or ("T9" in steps and "B" in args.hold))
     if tron and args.blade != blade_steps:
-        sys.exit("on the Tron --blade and T6 or T7 go together")
+        sys.exit("on the Tron --blade and T6, T7 or T9 with B go together")
     if (args.blade_percent is not None or args.blade_window is not None) and not (tron and "T6" in steps):
         sys.exit("--blade-percent and --blade-window are for T6 on the Tron")
     try:

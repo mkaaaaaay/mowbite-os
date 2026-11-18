@@ -72,6 +72,18 @@ struct McuControlConfig {
   double stop_clear_delay_s = 1.5;
   // Longest hw/silence; 0 offers none.
   double silence_max_s = 0;
+  // Measurement of how the MCU ends a setpoint without its host (H3, phase 6); only set by an override.
+  // speed_heartbeat: kAfter adds a heartbeat right after each SpeedData of a tick, kLater one heartbeat_after_speed_s
+  // after the last SpeedData; the heartbeats of their own schedule go on.
+  enum class SpeedHeartbeat { kNone, kAfter, kLater };
+  SpeedHeartbeat speed_heartbeat = SpeedHeartbeat::kNone;
+  double heartbeat_after_speed_s = 0.025;
+  // silence_after: hw/silence starts right after the next tick that sends a motion setpoint (with kLater: the
+  // heartbeat after it), or a blade on frame; without such a tick within kSilenceArmS it is dropped.
+  enum class SilenceAfter { kNone, kSpeed, kCutter };
+  SilenceAfter silence_after = SilenceAfter::kNone;
+  // After a silence the stop frames wait this long while heartbeats go on.
+  double silence_stop_delay_s = 0;
 };
 
 // Bits of the emergency reason, numbered like EmergencyReason of OpenMower.
@@ -131,6 +143,8 @@ struct McuInput {
 
 // Shortest hw/silence, as in the contract.
 constexpr double kMinSilenceS = 0.2;
+// How long an hw/silence with silence_after waits for its tick.
+constexpr double kSilenceArmS = 1.0;
 
 // Why hw/silence or hw/end was refused; kNone when it was taken.
 enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade };
@@ -255,6 +269,8 @@ class McuControl {
   HostTestRefusal HostTestRefused(bool blade) const;
   HostTestRefusal StartSilence(double seconds, double now, bool blade);
   void EndSilence(double now);
+  // The measurement settings of the config: heartbeats after SpeedData, the start of an armed silence.
+  void TieHeartbeats(double now, const WallClock& wall, std::vector<SubPacket>& out);
   bool Reported(double now) const;
   uint32_t EmergencyReason(double now) const;
   bool DockContact() const;
@@ -335,6 +351,14 @@ class McuControl {
 
   // End of the running hw/silence; empty while none runs.
   std::optional<double> silent_until_s_;
+  // hw/silence waiting for its tick (silence_after): its length and until when it waits.
+  struct ArmedSilence {
+    double seconds;
+    double until_s;
+  };
+  std::optional<ArmedSilence> armed_silence_;
+  // With kLater: when the heartbeat after the last SpeedData is due.
+  std::optional<double> late_heartbeat_s_;
   bool ended_ = false;
 
   std::optional<ImuCounts> pending_imu_;

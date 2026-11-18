@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <iterator>
 
@@ -2272,4 +2273,173 @@ TEST_F(SilenceTest, WithTheBladeTheOtherRefusalsStay) {
   EXPECT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kBusy);
   // hw/end keeps refusing a blade that was on.
   EXPECT_EQ(control_.End(), HostTestRefusal::kBlade);
+}
+
+// Measurement settings (H3): heartbeats tied to SpeedData, hw/silence after a chosen tick, delayed stops after it.
+class HoldMeasureTest : public ControlTest {
+ protected:
+  static McuControlConfig Config(McuControlConfig::SpeedHeartbeat heartbeat, McuControlConfig::SilenceAfter after,
+                                 double stop_delay = 0) {
+    McuControlConfig config;
+    config.allow_blade = true;
+    config.silence_max_s = 10.0;
+    config.speed_heartbeat = heartbeat;
+    config.silence_after = after;
+    config.silence_stop_delay_s = stop_delay;
+    return config;
+  }
+  explicit HoldMeasureTest(McuControlConfig config) : ControlTest(config) {
+  }
+  // Keeps commanding motion every 0.1 s up to `until`, as the logic does.
+  void Drive(double until) {
+    while (now_ < until - 1e-9) {
+      control_.OnCmdVel(0.05f, 0.0f, now_);
+      Run(std::min(until, now_ + 0.1));
+    }
+  }
+  // The packets of the tick at t.
+  std::vector<SubPacket> TickAt(double t) const {
+    std::vector<SubPacket> packets;
+    for (const auto& s : sent_) {
+      if (std::fabs(s.t - t) < 1e-6) packets.push_back(s.packet);
+    }
+    return packets;
+  }
+  // The first time from `from` on after which nothing went out for `quiet` s.
+  double SilentFrom(double from, double quiet) const {
+    double last = from;
+    for (const auto& s : sent_) {
+      if (s.t < from - 1e-9) continue;
+      if (s.t - last > quiet) return last;
+      last = s.t;
+    }
+    return last;
+  }
+};
+
+class HoldDefaultTest : public HoldMeasureTest {
+ protected:
+  HoldDefaultTest()
+      : HoldMeasureTest(Config(McuControlConfig::SpeedHeartbeat::kNone, McuControlConfig::SilenceAfter::kSpeed)) {
+  }
+};
+
+class HoldAfterTest : public HoldMeasureTest {
+ protected:
+  HoldAfterTest()
+      : HoldMeasureTest(Config(McuControlConfig::SpeedHeartbeat::kAfter, McuControlConfig::SilenceAfter::kSpeed, 1.0)) {
+  }
+};
+
+class HoldLaterTest : public HoldMeasureTest {
+ protected:
+  HoldLaterTest()
+      : HoldMeasureTest(Config(McuControlConfig::SpeedHeartbeat::kLater, McuControlConfig::SilenceAfter::kSpeed)) {
+  }
+};
+
+class HoldCutterTest : public HoldMeasureTest {
+ protected:
+  HoldCutterTest()
+      : HoldMeasureTest(Config(McuControlConfig::SpeedHeartbeat::kNone, McuControlConfig::SilenceAfter::kCutter)) {
+  }
+};
+
+TEST_F(HoldDefaultTest, WithoutTheSettingNoExtraHeartbeatAndTheSetpointEndsItsTick) {
+  Run(0.3);
+  Drive(1.3);
+  const auto beats = Times(IsHeartbeat, 0.31, 1.3);
+  EXPECT_EQ(beats.size(), 10u);
+  for (double t : Times(IsMovingSpeed, 0.31, 1.3)) EXPECT_TRUE(IsMovingSpeed(TickAt(t).back()));
+}
+
+TEST_F(HoldDefaultTest, TheSilenceWaitsForTheNextSetpointAndStartsRightAfterIt) {
+  Run(0.3);
+  Drive(0.85);
+  ASSERT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kNone);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  Drive(1.2);
+  const double start = SilentFrom(0.85, 0.5);
+  EXPECT_TRUE(IsMovingSpeed(TickAt(start).back()));
+  EXPECT_TRUE(control_.Status(now_).silent);
+  Run(start + 2.9);
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, start + 0.001, start + 2.9).empty());
+}
+
+TEST_F(HoldDefaultTest, WithoutSuchATickTheArmedSilenceIsDropped) {
+  Run(0.3);
+  ASSERT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kNone);
+  EXPECT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kBusy);
+  Run(0.3 + kSilenceArmS + 0.05);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  Drive(now_ + 0.5);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_FALSE(Times(IsMovingSpeed, now_ - 0.5).empty());
+  EXPECT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kNone);
+}
+
+TEST_F(HoldAfterTest, EverySpeedDataIsFollowedByAHeartbeatInItsTick) {
+  Run(0.3);
+  Drive(1.3);
+  Run(2.5);
+  const auto speeds = Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }, 0.31);
+  ASSERT_GE(speeds.size(), 13u);
+  for (double t : speeds) {
+    const auto tick = TickAt(t);
+    for (size_t i = 0; i < tick.size(); ++i) {
+      if (IsModule(tick[i], Module::kSpeed)) {
+        ASSERT_LT(i + 1, tick.size());
+        EXPECT_TRUE(IsHeartbeat(tick[i + 1]));
+      }
+    }
+    EXPECT_TRUE(IsHeartbeat(tick.back()));
+  }
+}
+
+TEST_F(HoldAfterTest, TheSilenceStartsAfterThePairAndItsStopsWaitWhileHeartbeatsGo) {
+  Run(0.3);
+  Drive(0.85);
+  ASSERT_EQ(control_.Silence(2.0, now_), HostTestRefusal::kNone);
+  Drive(1.2);
+  const double start = SilentFrom(0.85, 0.5);
+  const auto tick = TickAt(start);
+  ASSERT_GE(tick.size(), 2u);
+  EXPECT_TRUE(IsMovingSpeed(tick[tick.size() - 2]));
+  EXPECT_TRUE(IsHeartbeat(tick.back()));
+  Run(start + 4.0);
+  const double end = start + 2.0;
+  const auto zeros = Times(IsZeroSpeed, end - 0.01);
+  ASSERT_EQ(zeros.size(), 3u);
+  EXPECT_NEAR(zeros[0], end + 1.0, 0.011);
+  EXPECT_GE(Times(IsHeartbeat, end - 0.01, end + 0.99).size(), 9u);
+  EXPECT_TRUE(Times(IsMovingSpeed, start + 0.001).empty());
+}
+
+TEST_F(HoldLaterTest, AHeartbeatFollowsTheLastSetpointLaterAndTheSilenceStartsAfterIt) {
+  Run(0.3);
+  Drive(0.85);
+  for (double t : Times(IsMovingSpeed, 0.31, 0.85)) EXPECT_TRUE(IsMovingSpeed(TickAt(t).back()));
+  const auto speeds = Times(IsMovingSpeed, 0.31, 0.75);
+  ASSERT_FALSE(speeds.empty());
+  EXPECT_EQ(Times(IsHeartbeat, speeds.back() + 0.025, speeds.back() + 0.035).size(), 1u);
+  ASSERT_EQ(control_.Silence(2.0, now_), HostTestRefusal::kNone);
+  control_.OnCmdVel(0.05f, 0.0f, now_);
+  Run(1.2);
+  const double start = SilentFrom(0.85, 0.5);
+  EXPECT_TRUE(IsHeartbeat(TickAt(start).back()));
+  const auto last = Times(IsMovingSpeed, 0.85, start);
+  ASSERT_FALSE(last.empty());
+  EXPECT_NEAR(start - last.back(), 0.03, 0.006);
+}
+
+TEST_F(HoldCutterTest, TheSilenceStartsRightAfterTheBladeOnFrame) {
+  Run(0.3);
+  ASSERT_EQ(control_.SilenceWithBlade(3.0, now_), HostTestRefusal::kNone);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(0.6);
+  const auto on = Times(IsBladeOn);
+  ASSERT_EQ(on.size(), 1u);
+  EXPECT_TRUE(IsBladeOn(TickAt(on[0]).back()));
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, on[0] + 0.001).empty());
+  EXPECT_TRUE(control_.Status(now_).silent);
 }
