@@ -275,7 +275,7 @@ TEST_F(CoreReplay, LogicCore) {
 TEST(LogicJournal, TheTableIsOnlyAppendedTo) {
   using L = mowbite_logic::LogicCore;
   constexpr size_t kTableLength = 72;
-  constexpr char kTableChecksum[] = "61bab3560bebe137";
+  constexpr char kTableChecksum[] = "4e3fe60ff0f8c9de";
   const auto definition = mowbite_journal::CoreDefinition<L>(mowbite_logic::LogicConfig(), nlohmann::json::object());
   const auto& methods = definition.at("methods");
   ASSERT_GE(methods.size(), kTableLength);

@@ -21,8 +21,8 @@ CORES = {
 # SetStopClearMark.
 NOT_CORE = {"tron_mcu/src/stop_clear_mark.cpp", "tron_mcu/include/tron_mcu/stop_clear_mark.h"}
 # The parts of the logic core (FP25), in the order of their names.
-LOGIC_PARTS = ["calibration", "docking", "going_home", "mowing", "recording", "release", "schedule", "setup",
-               "undocking"]
+LOGIC_PARTS = ["calibration", "docking", "going_home", "mowing", "obstacle", "recording", "release", "schedule",
+               "setup", "undocking"]
 RULES = [
     ("clock", r"\b(steady_clock|system_clock|high_resolution_clock|clock_gettime|gettimeofday)\b|\btime\s*\("),
     ("randomness", r"\b(random_device|rand|srand|drand48)\b\s*[({]"),
