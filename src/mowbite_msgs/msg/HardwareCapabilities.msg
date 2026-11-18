@@ -22,6 +22,8 @@ bool host_charge_control
 # charges by itself and offers no way to stop it: undocking then leaves without that step.
 bool charge_stop
 bool rain_sensor
+# Sources of hw/obstacles, e.g. the camera id "stereo"; empty where the platform has no obstacle sensor.
+string[] obstacle_sources
 bool separate_bumpers
 bool wheel_ticks
 # Nodes that provide imu/data and gps/absolute_pose.
