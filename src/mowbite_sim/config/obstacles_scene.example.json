@@ -1,0 +1,13 @@
+{
+  "obstacles": [
+    {"kind": "PERSON", "class_name": "person", "score": 0.9, "x": 3.0, "y": 0.4, "radius": 0.25, "height": 1.7,
+     "from_s": 5, "until_s": 40},
+    {"kind": "ANIMAL", "class_name": "dog", "score": 0.7, "radius": 0.2, "height": 0.5,
+     "path": [[10, 4.0, 2.0], [20, 4.0, -2.0]], "score_drop": [3]},
+    {"kind": "OBJECT", "class_name": "ball", "score": 0.6, "x": 2.0, "y": -0.6, "radius": 0.1, "height": 0.2},
+    {"kind": "UNKNOWN", "x": 6.0, "y": 0.0, "radius": 0.3, "height": 0.4, "from_s": 25}
+  ],
+  "sight": [
+    {"from_s": 30, "until_s": 35, "reason": "DARK"}
+  ]
+}

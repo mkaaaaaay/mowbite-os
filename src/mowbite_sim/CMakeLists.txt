@@ -3,7 +3,8 @@ project(mowbite_sim)
 
 find_package(ament_cmake REQUIRED)
 
-install(PROGRAMS scripts/fake_tron scripts/fake_xcore scripts/fake_dock_marker scripts/sim_control scripts/mqtt311_gate
+install(PROGRAMS scripts/fake_tron scripts/fake_xcore scripts/fake_dock_marker scripts/fake_obstacles scripts/sim_control
+  scripts/mqtt311_gate
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 

@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+"""Simulated obstacle sensor: hw/obstacles from a scene file and the true pose of fake_tron.
+
+One message per image at rate, taken delay s before it is sent (header.stamp and the pose are those of the moment the
+image was taken), source as given, in base_link. The view is the sector around view_x, view_y from -half_fov_deg to
+half_fov_deg and from range_min to range_max. The true pose comes from the state file of fake_tron, carried to the
+moment of the image with its speeds; without one the sensor has no sight (NO_FRAMES).
+
+The scene (JSON, parameter scene; without one nothing is there):
+  {"obstacles": [{"kind": "PERSON", "class_name": "person", "score": 0.9, "x": 3.0, "y": 0.5, "radius": 0.25,
+                  "height": 1.7, "from_s": 5, "until_s": 60, "path": [[0, 3, 0.5], [10, 3, -0.5]],
+                  "score_drop": [4]}],
+   "sight": [{"from_s": 20, "until_s": 25, "reason": "DARK"}]}
+x, y are map coordinates (m); path [[t, x, y], ...] moves the thing linearly between its points and holds it at the
+ends (x, y are then not needed); from_s and until_s (s since the start of the node) bound when it is there; with
+score_drop [n] every n-th image with sight misses it. kind UNKNOWN reports no class_name and score 1. In a span of
+sight the sensor sees nothing, with that reason.
+
+A thing is reported when its disc lies wholly inside the view. Error model: per image a spread of position_sigma[0]
++ position_sigma[1] * d (m, d from the view point) along the line of sight and a quarter of it across, from seed.
+
+Flags file (read at every image): obstacles_off (no messages at all, as a sensor without frames), obstacles_dark
+(no sight, DARK).
+
+While obstacles/photos_wanted is true, an image with finds also goes to hw/obstacle_images, at most once a second.
+"""
+import array
+import json
+import math
+import random
+import time
+from collections import namedtuple
+
+# The view of one image: point in base_link, angles (rad) and distances from that point (m).
+View = namedtuple("View", "x y left right range_min range_max")
+
+IMAGE_WIDTH = 640
+IMAGE_HEIGHT = 480
+# Focal length of the simulated image (px) and how high the camera stands over the ground (m), for the boxes only.
+FOCAL_PX = 450.0
+CAMERA_HEIGHT = 0.2
+PHOTO_PERIOD_S = 1.0
+
+
+def plain_jpeg(width=IMAGE_WIDTH, height=IMAGE_HEIGHT):
+    """A valid baseline JPEG of one grey, one component; every 8x8 block is DC 0 and an end of block, 2 bits."""
+    def segment(marker, body):
+        return bytes([0xFF, marker]) + (len(body) + 2).to_bytes(2, "big") + body
+    one_code = bytes([1] + [0] * 15) + b"\x00"
+    blocks = ((width + 7) // 8) * ((height + 7) // 8)
+    scan = bytes((blocks * 2 + 7) // 8)
+    if blocks * 2 % 8:
+        scan = scan[:-1] + bytes([(1 << (8 - blocks * 2 % 8)) - 1])
+    return (b"\xFF\xD8"
+            + segment(0xDB, b"\x00" + bytes([1] * 64))
+            + segment(0xC0, b"\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x01\x01\x11\x00")
+            + segment(0xC4, b"\x00" + one_code)
+            + segment(0xC4, b"\x10" + one_code)
+            + segment(0xDA, b"\x01\x01\x00\x00\x3F\x00")
+            + scan + b"\xFF\xD9")
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError, TypeError):
+        return {}
+
+
+def load_scene(path, kinds, reasons):
+    """The scene file as {"obstacles": [...], "sight": [...]}, checked; empty without a path. ValueError if wrong."""
+    if not path:
+        return {"obstacles": [], "sight": []}
+    try:
+        with open(path) as f:
+            raw = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ValueError(f"scene {path}: {e}") from e
+    things = []
+    for i, item in enumerate(raw.get("obstacles", [])):
+        kind = item.get("kind")
+        if kind not in kinds:
+            raise ValueError(f"scene obstacle {i}: kind {kind!r} not one of {sorted(kinds)}")
+        if "path" in item:
+            path_points = [(float(t), float(x), float(y)) for t, x, y in item["path"]]
+            if not path_points or any(b[0] <= a[0] for a, b in zip(path_points, path_points[1:])):
+                raise ValueError(f"scene obstacle {i}: path needs points with rising times")
+        elif "x" in item and "y" in item:
+            path_points = [(0.0, float(item["x"]), float(item["y"]))]
+        else:
+            raise ValueError(f"scene obstacle {i}: needs x and y or path")
+        radius = float(item.get("radius", -1.0))
+        if radius <= 0.0:
+            raise ValueError(f"scene obstacle {i}: radius must be > 0")
+        drop = item.get("score_drop", [0])
+        unknown = kind == "UNKNOWN"
+        things.append({
+            "kind": kind,
+            "class_name": "" if unknown else str(item.get("class_name", "")),
+            "score": 1.0 if unknown else float(item.get("score", 1.0)),
+            "radius": radius,
+            "height": float(item.get("height", math.nan)),
+            "from_s": float(item.get("from_s", -math.inf)),
+            "until_s": float(item.get("until_s", math.inf)),
+            "path": path_points,
+            "drop": int(drop[0] if isinstance(drop, list) else drop),
+        })
+    sight = []
+    for i, span in enumerate(raw.get("sight", [])):
+        if span.get("reason") not in reasons:
+            raise ValueError(f"scene sight {i}: reason {span.get('reason')!r} not one of {sorted(reasons)}")
+        sight.append((float(span.get("from_s", -math.inf)), float(span.get("until_s", math.inf)), span["reason"]))
+    return {"obstacles": things, "sight": sight}
+
+
+def sight_reason(sight, t):
+    """The reason of the span of the sight plan holding t, "" with sight."""
+    for start, end, reason in sight:
+        if start <= t < end:
+            return reason
+    return ""
+
+
+def thing_at(thing, t):
+    """Where the thing is at t (s since the start) in map coordinates, None while it is not there."""
+    if not thing["from_s"] <= t < thing["until_s"]:
+        return None
+    points = thing["path"]
+    if t <= points[0][0]:
+        return points[0][1], points[0][2]
+    for (t0, x0, y0), (t1, x1, y1) in zip(points, points[1:]):
+        if t <= t1:
+            f = (t - t0) / (t1 - t0)
+            return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+    return points[-1][1], points[-1][2]
+
+
+def carry(state, at):
+    """The true pose (x, y, yaw) from a state of fake_tron carried to at (monotonic), None without one."""
+    if not all(k in state for k in ("x", "y", "yaw")):
+        return None
+    dt = min(max(at - state.get("clock", at), -0.5), 0.5)
+    linear, angular = state.get("linear", 0.0), state.get("angular", 0.0)
+    mid = state["yaw"] + 0.5 * angular * dt
+    return (state["x"] + linear * dt * math.cos(mid), state["y"] + linear * dt * math.sin(mid),
+            state["yaw"] + angular * dt)
+
+
+def to_base(pose, x, y):
+    """Map point x, y in base_link of pose (x, y, yaw)."""
+    c, s = math.cos(pose[2]), math.sin(pose[2])
+    dx, dy = x - pose[0], y - pose[1]
+    return c * dx + s * dy, -s * dx + c * dy
+
+
+def seen_from(view, bx, by):
+    """Distance and bearing of a point in base_link from the view point."""
+    dx, dy = bx - view.x, by - view.y
+    return math.hypot(dx, dy), math.atan2(dy, dx)
+
+
+def in_view(view, bx, by, radius):
+    """Whether the disc at bx, by in base_link lies wholly inside the view."""
+    d, bearing = seen_from(view, bx, by)
+    if d <= radius or d - radius < view.range_min or d + radius > view.range_max:
+        return False
+    half = math.asin(radius / d)
+    return bearing - half >= view.right and bearing + half <= view.left
+
+
+def noisy(view, bx, by, sigma, rng):
+    """Measured x, y and covariance (xx, xy, yy): sigma[0] + sigma[1] * d along the line of sight, a quarter across."""
+    d, bearing = seen_from(view, bx, by)
+    along = sigma[0] + sigma[1] * d
+    across = along / 4.0
+    ea, ec = rng.gauss(0.0, along), rng.gauss(0.0, across)
+    c, s = math.cos(bearing), math.sin(bearing)
+    x, y = bx + c * ea - s * ec, by + s * ea + c * ec
+    va, vc = along * along, across * across
+    return x, y, c * c * va + s * s * vc, c * s * (va - vc), s * s * va + c * c * vc
+
+
+def box(view, bx, by, radius, height):
+    """Box (x, y, w, h) in pixels of the image for a thing at bx, by in base_link; the bottom on the ground point."""
+    d, bearing = seen_from(view, bx, by)
+    w = 2.0 * radius / d * FOCAL_PX
+    h = (height if math.isfinite(height) else 2.0 * radius) / d * FOCAL_PX
+    half_fov = max(view.left, -view.right)
+    cx = IMAGE_WIDTH / 2.0 * (1.0 - bearing / half_fov)
+    bottom = min(IMAGE_HEIGHT / 2.0 + FOCAL_PX * CAMERA_HEIGHT / d, IMAGE_HEIGHT - 1.0)
+    return (min(max(cx - w / 2.0, 1.0), IMAGE_WIDTH - 1.0), max(bottom - h, 1.0), w, h)
+
+
+def observe(things, t, pose, view, image, sigma, rng):
+    """The obstacles of image number image (from 1) at t: Obstacle fields (but position_from) per thing in view."""
+    found = []
+    for thing in things:
+        where = thing_at(thing, t)
+        if where is None or (thing["drop"] > 0 and image % thing["drop"] == 0):
+            continue
+        bx, by = to_base(pose, *where)
+        if not in_view(view, bx, by, thing["radius"]):
+            continue
+        x, y, cxx, cxy, cyy = noisy(view, bx, by, sigma, rng)
+        box_x, box_y, box_w, box_h = box(view, bx, by, thing["radius"], thing["height"])
+        found.append({
+            "kind": thing["kind"], "class_name": thing["class_name"], "score": thing["score"],
+            "x": x, "y": y, "radius": thing["radius"], "height": thing["height"],
+            "cov_xx": cxx, "cov_xy": cxy, "cov_yy": cyy, "cut_bottom": False,
+            "agrees": True,
+            "box_x": box_x, "box_y": box_y, "box_w": box_w, "box_h": box_h,
+        })
+    return found
+
+
+def message_constants(msg_type, prefix):
+    """The values of the constants of msg_type starting with prefix (rosidl keeps them on the metaclass)."""
+    return {getattr(msg_type, name) for name in dir(type(msg_type)) if name.startswith(prefix)}
+
+
+def main():
+    import rclpy
+    from rclpy.duration import Duration
+    from rclpy.executors import ExternalShutdownException
+    from rclpy.node import Node
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import Bool
+
+    from mowbite_msgs.msg import Obstacle, ObstacleImage, Obstacles
+
+    class FakeObstacles(Node):
+        def __init__(self):
+            super().__init__("fake_obstacles")
+            self.state_path = self.declare_parameter("state", "").value
+            self.flags_path = self.declare_parameter("flags", "").value
+            self.source = self.declare_parameter("source", "stereo").value
+            self.rate = self.declare_parameter("rate", 5.0).value
+            self.delay = self.declare_parameter("delay", 0.1).value
+            half_fov = math.radians(self.declare_parameter("half_fov_deg", 43.0).value)
+            self.view = View(self.declare_parameter("view_x", 0.466).value,
+                             self.declare_parameter("view_y", 0.0).value, half_fov, -half_fov,
+                             self.declare_parameter("range_min", 0.47).value,
+                             self.declare_parameter("range_max", 4.0).value)
+            self.sigma = list(self.declare_parameter("position_sigma", [0.03, 0.02]).value)
+            self.rng = random.Random(self.declare_parameter("seed", 5).value)
+            self.scene = load_scene(self.declare_parameter("scene", "").value,
+                                    message_constants(Obstacle, "KIND_"), message_constants(Obstacles, "REASON_"))
+            self.start = time.monotonic()
+            self.images = 0
+            self.photos_wanted = False
+            self.last_photo = -math.inf
+
+            reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
+                                  durability=DurabilityPolicy.VOLATILE)
+            wanted_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                    reliability=ReliabilityPolicy.RELIABLE)
+            self.pub = self.create_publisher(Obstacles, "hw/obstacles", reliable)
+            self.photo_pub = self.create_publisher(ObstacleImage, "hw/obstacle_images", reliable)
+            self.create_subscription(Bool, "obstacles/photos_wanted", self.on_photos_wanted, wanted_qos)
+            self.jpeg = array.array("B", plain_jpeg())
+            self.create_timer(1.0 / self.rate, self.tick)
+
+        def on_photos_wanted(self, msg):
+            self.photos_wanted = msg.data
+
+        def tick(self):
+            now = time.monotonic()
+            flags = read_json(self.flags_path)
+            if flags.get("obstacles_off"):
+                return
+            taken = now - self.delay
+            t = taken - self.start
+            msg = Obstacles()
+            msg.header.frame_id = "base_link"
+            msg.header.stamp = (self.get_clock().now() - Duration(seconds=self.delay)).to_msg()
+            msg.source = self.source
+            msg.view_x, msg.view_y = float(self.view.x), float(self.view.y)
+            msg.view_angle_left, msg.view_angle_right = self.view.left, self.view.right
+            msg.view_range_min, msg.view_range_max = float(self.view.range_min), float(self.view.range_max)
+            pose = carry(read_json(self.state_path), taken)
+            if flags.get("obstacles_dark"):
+                msg.reason, msg.detail = Obstacles.REASON_DARK, "flag obstacles_dark"
+            elif sight_reason(self.scene["sight"], t):
+                msg.reason, msg.detail = sight_reason(self.scene["sight"], t), "scene"
+            elif pose is None:
+                msg.reason, msg.detail = Obstacles.REASON_NO_FRAMES, "no true pose"
+            else:
+                msg.sight = True
+                self.images += 1
+                msg.obstacles = [Obstacle(position_from=Obstacle.FROM_BOTH, **fields) for fields in
+                                 observe(self.scene["obstacles"], t, pose, self.view, self.images, self.sigma,
+                                         self.rng)]
+            self.pub.publish(msg)
+            if msg.obstacles and self.photos_wanted and now - self.last_photo >= PHOTO_PERIOD_S:
+                self.last_photo = now
+                photo = ObstacleImage()
+                photo.header = msg.header
+                photo.source = msg.source
+                photo.width, photo.height = IMAGE_WIDTH, IMAGE_HEIGHT
+                photo.jpeg = self.jpeg
+                self.photo_pub.publish(photo)
+
+    rclpy.init()
+    node = FakeObstacles()
+    # SIGINT from launch, as an interrupt or as the shutdown of rclpy, is a normal end.
+    try:
+        rclpy.spin(node)
+    except (ExternalShutdownException, KeyboardInterrupt):
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()
