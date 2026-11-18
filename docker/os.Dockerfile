@@ -157,8 +157,8 @@ ARG BUILD_WORKERS=2
 ARG BUILD_JOBS=2
 
 # The MowBite Planner at a fixed commit of its branch os-pin: its two ROS 2 packages and the two of MowBite OS
-# (os/: the node and its service), the source removed after.
-ARG PLANNER_COMMIT=1cc55d9c6e055d89f8d2bddadc92225ea315bfc6
+# (os/: the node and its service) with its licence text, the source removed after.
+ARG PLANNER_COMMIT=5c567236033974967c673b9448b29c016ce97cf6
 RUN --mount=type=bind,from=planer,target=/src/planer \
     git init -q /tmp/planner && cd /tmp/planner \
  && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
@@ -172,6 +172,7 @@ RUN --mount=type=bind,from=planer,target=/src/planer \
       --build-base /tmp/planner_build --install-base /opt/mowbite_planner \
       --parallel-workers $BUILD_WORKERS --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
  && printf '{"commit": "%s", "serial": %s}\n' "$PLANNER_COMMIT" "$commit_time" > /opt/mowbite_planner/source.json \
+ && cp LICENSE /opt/mowbite_planner/LICENSE \
  && rm -rf /tmp/planner /tmp/planner_build /tmp/planner_log
 
 # Every package but the simulation; PACKAGES narrows it (colcon selection, e.g. "--packages-up-to xcore_driver").
