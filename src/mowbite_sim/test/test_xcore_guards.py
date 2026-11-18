@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import XCORE_CLAIM as CLAIM, XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
 from sim_common import XCORE_EMERGENCY as EMERGENCY, XCORE_MOWER as MOWER  # noqa: E402
 from sim_common import (DriverProbe, SimProbe, TestShutdown, fake_xcore, loopback_group, read_json,  # noqa: E402,F401
-                        sim_files, write_json, xcore_datagrams, xcore_driver)
+                        sim_files, wait_until, write_json, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_guards_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
@@ -143,8 +143,14 @@ class TestXcoreGuards(unittest.TestCase):
         self.assertEqual(board()["host_bits"] & (LATCH | HIGH_LEVEL), LATCH | HIGH_LEVEL)
         self.assertEqual(board()["mower_speed"], 0.0)
         set_flags(roll=30)
-        time.sleep(0.3)
-        answer = self.probe.set_emergency(False)
+
+        def refusal():
+            answer = self.probe.set_emergency(False)
+            return None if "45 deg" in answer.message else answer
+
+        # The driver takes the new angle with a later sample, under load after more than a fixed wait.
+        answer = wait_until(refusal, 3, poll=0.1)
+        self.assertIsNotNone(answer, "the driver still sees 45 deg")
         self.assertFalse(answer.success)
         self.assertIn("still tilted 30 deg", answer.message)
         self.assertEqual(answer.code, "STILL_TILTED")
@@ -152,8 +158,9 @@ class TestXcoreGuards(unittest.TestCase):
         self.assertEqual(answer.limit, 26.0)
         self.assertTrue(self.probe.status.emergency_reason & TILT)
         set_flags()
-        time.sleep(0.3)
-        self.assertTrue(self.release(), "release failed level")
+        released = wait_until(lambda: self.probe.set_emergency(False).success, 3, poll=0.1)
+        self.assertTrue(released, "release refused level")
+        self.assertTrue(self.probe.wait_for(healthy, 5), "release failed level")
 
     def test_c_wheels_turning_after_the_stop_latch(self):
         self.probe.drive(0.1, 1.0)

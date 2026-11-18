@@ -29,7 +29,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE  # noqa: E402
 from sim_common import XCORE_EMERGENCY as EMERGENCY, XCORE_MOWER as MOWER  # noqa: E402
 from sim_common import (HwProbe, TestShutdown, fake_xcore, loopback_group, read_json, sim_files,  # noqa: E402,F401
-                        write_json, xcore_datagrams, xcore_driver)
+                        wait_until, write_json, xcore_datagrams, xcore_driver)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_xcore_")
 STATE, FLAGS, LOG, _ = sim_files(WORK)
@@ -183,18 +183,25 @@ class TestXcoreContract(unittest.TestCase):
         for _ in range(10):
             self.probe.cmd_vel.publish(Twist(linear=Vector3(x=0.5)))
             time.sleep(0.1)
+        last_command = board_time()
         moving_odom = self.probe.odom[-1].twist.linear.x
-        time.sleep(1.2)
-        twists = [(e["t"], struct.unpack("<6d", bytes.fromhex(e["hex"])))
-                  for e in received(t0, DIFF_DRIVE, DATA, 0)]
-        moving = [(t, v) for t, v in twists if v[0] != 0 or v[5] != 0]
-        zeros = [t for t, v in twists if v[0] == 0 and v[5] == 0]
+
+        def twists():
+            return [(e["t"], struct.unpack("<6d", bytes.fromhex(e["hex"])))
+                    for e in received(t0, DIFF_DRIVE, DATA, 0)]
+
+        # Under load the zeros come later than a fixed wait; a short settle catches a fourth.
+        wait_until(lambda: sum(1 for _, v in twists() if v[0] == 0 and v[5] == 0) >= 3, 5)
+        time.sleep(0.3)
+        sent = twists()
+        moving = [(t, v) for t, v in sent if v[0] != 0 or v[5] != 0]
+        zeros = [t for t, v in sent if v[0] == 0 and v[5] == 0]
         self.assertGreaterEqual(len(moving), 8)
         # 0.5 m/s is cut to the 0.163 m/s that max_duty 0.3 reaches: duty 0.163 / 0.58 + 0.019 = 0.3.
         self.assertTrue(all(abs(v[0] - 0.3) < 1e-6 and abs(v[5]) < 1e-6 for _, v in moving), str(moving[:3]))
-        self.assertEqual(len(zeros), 3, str(twists[-5:]))
-        # The setpoint goes out every 0.1 s until cmd_vel has been silent for 0.5 s: commands for 1.0 s, then 0.5 s.
-        self.assertAlmostEqual(zeros[0] - moving[0][0], 1.4, delta=0.2)
+        self.assertEqual(len(zeros), 3, str(sent[-5:]))
+        # The setpoint goes out every 0.1 s until cmd_vel has been silent for 0.5 s.
+        self.assertAlmostEqual(zeros[0] - last_command, 0.5, delta=0.2)
         self.assertLess(zeros[0] - moving[-1][0], 0.15)
         self.assertAlmostEqual(zeros[2] - zeros[0], 0.2, delta=0.06)
         # The fake's wheels follow the same model: the ticks show 0.163 m/s forward, also on the falling counter.

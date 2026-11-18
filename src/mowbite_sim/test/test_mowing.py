@@ -147,6 +147,10 @@ class TestMowing(unittest.TestCase):
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
         # Before the start no cutter frame turns the blade on.
         self.assertFalse(any(f["cutter"] > 0 for f in p.cutter_frames()))
+        # Under load the planner comes up late, a start before it is refused (PLANNER_MISSING).
+        planner = {"/mowbite_planner/plan_coverage", "/mowbite_planner/plan_transit"}
+        self.assertTrue(p.wait(lambda: planner <= {name for name, _ in p.node.get_service_names_and_types()}, 60),
+                        "the planner offers no plan_coverage and plan_transit")
 
     def test_02_start_opens_a_job_on_the_lawn(self):
         p = self.probe
