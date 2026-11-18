@@ -1,6 +1,8 @@
 #include "tron_vision/stereo_node.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 
@@ -14,6 +16,9 @@ namespace {
 const char kStateSensor[] = "stereo_state";
 constexpr char kRecordDir[] = "/run/mowbite-os/stereo-record";
 const char kFpsSensor[] = "stereo_fps";
+const char kObstaclesSensor[] = "stereo_obstacles";
+// Loading the model takes at most this long.
+constexpr double kLoadLimit = 20.0;
 constexpr double kReportPeriod = 1.0;
 // Silence of the loop thread or of the ROS thread that ends the process.
 constexpr double kWatchLimit = 2.0;
@@ -25,7 +30,118 @@ std::string StateText(const StereoStatus& status) {
   return text;
 }
 
+std::string Joined(const std::string& a, const std::string& b) {
+  return a.empty() ? b : a + ", " + b;
+}
+
+// The parameters of the obstacles; what is missing goes to not_set_up.
+void ReadObstacleConfig(rclcpp::Node& node, ObstacleConfig& config) {
+  config.library_path = node.declare_parameter("library_path", config.library_path);
+  config.model_path = node.declare_parameter("model_path", config.model_path);
+  config.labels_path = node.declare_parameter("labels_path", config.labels_path);
+  config.npu_core = static_cast<int>(node.declare_parameter("npu_core", static_cast<int64_t>(config.npu_core)));
+  config.swap_rb = node.declare_parameter("swap_rb", config.swap_rb);
+  config.decode.score_threshold = static_cast<float>(
+      node.declare_parameter("score_threshold", static_cast<double>(config.decode.score_threshold)));
+  config.rate = node.declare_parameter("obstacle_rate", config.rate);
+  config.range_max = node.declare_parameter("range_max", config.range_max);
+  config.person = node.declare_parameter("kind_person", std::vector<std::string>{});
+  config.animal = node.declare_parameter("kind_animal", std::vector<std::string>{});
+  config.ignore = node.declare_parameter("kind_ignore", std::vector<std::string>{});
+  for (const std::string& entry : node.declare_parameter("known_heights", std::vector<std::string>{})) {
+    const size_t eq = entry.find('=');
+    char* end = nullptr;
+    const double height = eq == std::string::npos ? 0.0 : std::strtod(entry.c_str() + eq + 1, &end);
+    if (eq == std::string::npos || eq == 0 || end == nullptr || *end != '\0' || !(height > 0.0 && height < 3.0)) {
+      config.not_set_up = Joined(config.not_set_up, "known_heights needs class=metres, not " + entry);
+    } else {
+      config.known_height[entry.substr(0, eq)] = height;
+    }
+  }
+  config.calibration_path = node.declare_parameter("calibration_path", config.calibration_path);
+  config.wheel_radius = node.declare_parameter("wheel_radius", 0.0);
+  if (!(config.wheel_radius > 0.0 && config.wheel_radius < 0.5)) {
+    config.not_set_up = Joined(config.not_set_up, "no wheel_radius");
+  }
+  // x, y, z (m) and yaw, pitch, roll (rad) of the left eye in base_link.
+  const std::vector<double> mount = node.declare_parameter("mount", std::vector<double>{});
+  bool finite = true;
+  for (const double v : mount) finite = finite && std::isfinite(v);
+  if (mount.size() == 6 && finite) {
+    config.mount = {mount[0], mount[1], mount[2], mount[5], mount[4], mount[3]};
+    config.have_mount = true;
+  } else {
+    config.not_set_up = Joined(config.not_set_up, mount.empty() ? "no camera mount" : "mount needs 6 numbers");
+  }
+}
+
 }  // namespace
+
+std::string ObstacleReasonName(SightReason reason) {
+  using mowbite_msgs::msg::Obstacles;
+  switch (reason) {
+    case SightReason::kNone: return "";
+    case SightReason::kNotSetUp: return Obstacles::REASON_NOT_SET_UP;
+    case SightReason::kTooDark: return Obstacles::REASON_TOO_DARK;
+    case SightReason::kTooBright: return Obstacles::REASON_TOO_BRIGHT;
+    case SightReason::kCovered: return Obstacles::REASON_COVERED;
+    case SightReason::kNoSignal: return Obstacles::REASON_NO_SIGNAL;
+    case SightReason::kTooHot: return Obstacles::REASON_TOO_HOT;
+    case SightReason::kSelfTest: return Obstacles::REASON_SELF_TEST;
+    case SightReason::kLockedAfterCrash: return Obstacles::REASON_LOCKED_AFTER_CRASH;
+  }
+  return Obstacles::REASON_NO_SIGNAL;
+}
+
+mowbite_msgs::msg::Obstacles ObstaclesMessage(const ObstacleReport& report, const std::string& source,
+                                               const builtin_interfaces::msg::Time& stamp) {
+  using mowbite_msgs::msg::Obstacle;
+  mowbite_msgs::msg::Obstacles msg;
+  msg.header.stamp = stamp;
+  msg.header.frame_id = "base_link";
+  msg.source = source;
+  msg.sight = report.reason == SightReason::kNone;
+  msg.reason = ObstacleReasonName(report.reason);
+  msg.detail = report.detail;
+  msg.view_x = static_cast<float>(report.view.x);
+  msg.view_y = static_cast<float>(report.view.y);
+  msg.view_angle_left = static_cast<float>(report.view.angle_left);
+  msg.view_angle_right = static_cast<float>(report.view.angle_right);
+  msg.view_range_min = static_cast<float>(report.view.range_min);
+  msg.view_range_max = static_cast<float>(report.view.range_max);
+  if (!msg.sight) return msg;
+  for (const FoundObstacle& found : report.obstacles) {
+    Obstacle o;
+    switch (found.kind) {
+      case ObstacleKind::kPerson: o.kind = Obstacle::KIND_PERSON; break;
+      case ObstacleKind::kAnimal: o.kind = Obstacle::KIND_ANIMAL; break;
+      case ObstacleKind::kObject:
+      case ObstacleKind::kIgnore: o.kind = Obstacle::KIND_OBJECT; break;
+    }
+    o.class_name = found.class_name;
+    o.score = static_cast<float>(found.score);
+    o.x = static_cast<float>(found.spot.x);
+    o.y = static_cast<float>(found.spot.y);
+    o.radius = static_cast<float>(found.radius);
+    o.height = static_cast<float>(found.height);
+    o.cov_xx = static_cast<float>(found.spot.cov_xx);
+    o.cov_xy = static_cast<float>(found.spot.cov_xy);
+    o.cov_yy = static_cast<float>(found.spot.cov_yy);
+    o.cut_bottom = found.cut_bottom;
+    switch (found.from) {
+      case PositionFrom::kGround: o.position_from = Obstacle::FROM_GROUND; break;
+      case PositionFrom::kStereo: o.position_from = Obstacle::FROM_STEREO; break;
+      case PositionFrom::kBoth: o.position_from = Obstacle::FROM_BOTH; break;
+    }
+    o.agrees = found.agrees;
+    o.box_x = static_cast<float>(found.box.x1);
+    o.box_y = static_cast<float>(found.box.y1);
+    o.box_w = static_cast<float>(found.box.x2 - found.box.x1);
+    o.box_h = static_cast<float>(found.box.y2 - found.box.y1);
+    msg.obstacles.push_back(o);
+  }
+  return msg;
+}
 
 Availability StereoAvailability(StereoState state) {
   using mowbite_msgs::msg::Camera;
@@ -53,6 +169,9 @@ Availability StereoAvailability(StereoState state) {
 StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams& seams)
     : rclcpp::Node("tron_stereo", options) {
   StereoConfig config;
+  config.camera_id = declare_parameter("camera_id", config.camera_id);
+  camera_id_ = config.camera_id;
+  config.obstacles = declare_parameter("obstacles", config.obstacles);
   config.marker_dir = declare_parameter("crash_dir", config.marker_dir);
   config.encoder.bitrate_bps =
       static_cast<int>(declare_parameter("bitrate_kbps", config.encoder.bitrate_bps / 1000)) * 1000;
@@ -79,6 +198,17 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   camera.stream_name = declare_parameter("stream_name", camera.stream_name);
   camera.processes_using = mowbite_serial::ProcessesUsing;
   if (seams.adjust) seams.adjust(config, camera);
+  if (config.obstacles) {
+    ObstacleConfig obstacles;
+    ReadObstacleConfig(*this, obstacles);
+    obstacles.eye_width = config.encoder.width;
+    obstacles.eye_height = config.encoder.height;
+    if (seams.adjust_obstacles) seams.adjust_obstacles(obstacles);
+    if (!config.stream_while_mowing) {
+      RCLCPP_WARN(get_logger(), "Obstacles without stream_while_mowing: no sight while the blade runs");
+    }
+    obstacles_ = std::make_unique<ObstacleCore>(std::move(obstacles), MonotonicSeconds);
+  }
 
   RtspConfig rtsp;
   const int64_t port = declare_parameter("rtsp_port", static_cast<int64_t>(rtsp.port));
@@ -107,6 +237,15 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   using mowbite_msgs::msg::SensorSpec;
   sensor_info_pub_->publish(PlainSensor(kStateSensor, "Stereo Camera", SensorSpec::KIND_TEXT, ""));
   sensor_info_pub_->publish(PlainSensor(kFpsSensor, "Stereo Camera Rate", SensorSpec::KIND_NUMBER, "1/s"));
+  if (obstacles_) {
+    sensor_info_pub_->publish(PlainSensor(kObstaclesSensor, "Stereo Camera Obstacles", SensorSpec::KIND_TEXT, ""));
+    obstacles_pub_ = create_publisher<mowbite_msgs::msg::Obstacles>("hw/obstacles", 10);
+    images_pub_ = create_publisher<mowbite_msgs::msg::ObstacleImage>("hw/obstacle_images", 2);
+    // Latched by the OS; without a message no photo leaves the process.
+    photos_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "obstacles/photos_wanted", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local(),
+        [this](const std_msgs::msg::Bool& msg) { obstacles_->SetPhotosWanted(msg.data); });
+  }
 
   camera_ = std::make_unique<TronStereoCamera>(std::move(camera), seams.device);
   encoder_ = std::make_unique<MppEncoder>(library);
@@ -114,7 +253,8 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   std::string error;
   if (server_->Listen(error)) {
     guard_ = std::make_unique<CrashGuard>(config.marker_dir, seams.crash_flag, config.boot_id_file);
-    loop_ = std::make_unique<StereoLoop>(std::move(config), *camera_, *encoder_, *server_, *guard_, MonotonicSeconds);
+    loop_ = std::make_unique<StereoLoop>(std::move(config), *camera_, *encoder_, *server_, *guard_, MonotonicSeconds,
+                                         obstacles_.get());
   } else {
     failed_.state = StereoState::kFailed;
     failed_.detail = "RTSP port " + std::to_string(rtsp.port) + ": " + error;
@@ -141,7 +281,14 @@ void StereoNode::OnStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
 }
 
 void StereoNode::Run() {
-  // Signed after each step: a step that hangs in the camera or the encoder ends the process.
+  if (obstacles_) {
+    {
+      mowbite_watch::Watch load("tron_stereo_load", kLoadLimit);
+      obstacles_->Load();
+    }
+    for (const std::string& warning : obstacles_->Warnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
+  }
+  // Signed after each step: a step that hangs in the camera, the encoder or the model ends the process.
   mowbite_watch::Watch watch("tron_stereo_loop", kWatchLimit);
   while (running_) {
     bool go_on = true;
@@ -171,7 +318,18 @@ void StereoNode::Run() {
       if (!logged_gain_error_.empty()) RCLCPP_WARN(get_logger(), "Gain wish: %s", logged_gain_error_.c_str());
     }
     PublishCamera(status);
-    Report(status, MonotonicSeconds());
+    const double now = MonotonicSeconds();
+    if (obstacles_) {
+      ObstacleReport report;
+      if (obstacles_->Poll(now, status, report)) PublishObstacles(report, now);
+      if (obstacles_->Status().exit_code != kExitNone && go_on) {
+        exit_code_ = obstacles_->Status().exit_code;
+        RCLCPP_ERROR(get_logger(), "Ending with code %d: %s", exit_code_.load(), obstacles_->Status().last.c_str());
+        rclcpp::shutdown();
+        return;
+      }
+    }
+    Report(status, now);
     if (!go_on) {
       exit_code_ = status.exit_code;
       RCLCPP_ERROR(get_logger(), "Ending with code %d: %s", status.exit_code, status.detail.c_str());
@@ -202,6 +360,34 @@ void StereoNode::Report(const StereoStatus& status, double now) {
   value.text.clear();
   value.value = status.state == StereoState::kStreaming ? status.fps : 0.0;
   sensor_value_pub_->publish(value);
+  if (!obstacles_) return;
+  value.sensor_id = kObstaclesSensor;
+  value.value = 0.0;
+  value.text = reported_obstacles_;
+  sensor_value_pub_->publish(value);
+}
+
+void StereoNode::PublishObstacles(const ObstacleReport& report, double now) {
+  // The frame was taken this long before now on the monotonic clock of the driver.
+  const rclcpp::Time stamp = this->now() - rclcpp::Duration::from_seconds(std::max(0.0, now - report.taken));
+  obstacles_pub_->publish(ObstaclesMessage(report, camera_id_, stamp));
+  const ObstacleStatus& core = obstacles_->Status();
+  if (report.reason == SightReason::kNone) {
+    char rate[48];
+    std::snprintf(rate, sizeof(rate), " (%.1f/s, %.0f ms)", core.rate, core.infer_ms);
+    reported_obstacles_ = core.last + rate;
+  } else {
+    reported_obstacles_ = ObstacleReasonName(report.reason) + ": " + report.detail;
+  }
+  if (report.jpeg.empty()) return;
+  mowbite_msgs::msg::ObstacleImage image;
+  image.header.stamp = stamp;
+  image.header.frame_id = "base_link";
+  image.source = camera_id_;
+  image.width = report.width;
+  image.height = report.height;
+  image.jpeg = report.jpeg;
+  images_pub_->publish(image);
 }
 
 void StereoNode::PublishCamera(const StereoStatus& status) {

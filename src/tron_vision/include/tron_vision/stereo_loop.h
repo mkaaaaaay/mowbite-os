@@ -67,6 +67,27 @@ struct StereoConfig {
   double gain_wish_s = 10.0;
   double gain_lock_wait_s = 0.5;
   GainWishLimits gain;
+  // Obstacles: after the self-test the camera runs on and hands each frame to the sink, H.264 only while a viewer
+  // plays; a missing or failing encoder ends only the stream. Needs a sink; stream_while_mowing false still stops the
+  // camera while the blade runs.
+  bool obstacles = false;
+};
+
+// What the loop knows of the moment a frame was taken.
+struct FrameContext {
+  // The wheels are commanded to move.
+  bool moving = false;
+  // The camera runs at its highest gain level; true without a gain wish.
+  bool at_max_gain = true;
+};
+
+// Takes the frames of the stereo camera in the loop thread; the frame is valid only during the call.
+class FrameSink {
+ public:
+  virtual ~FrameSink() = default;
+  virtual void OnFrame(const CapturedFrame& frame, double now, const FrameContext& context) = 0;
+  // The camera stopped; frames come again only after a new start.
+  virtual void OnStop() = 0;
 };
 
 // The mower as the last message on hw/status gave it.
@@ -131,16 +152,19 @@ struct StereoStatus {
   // Why the last wish could not be written; empty after one that could.
   std::string gain_error;
   int exit_code = kExitNone;
+  // Obstacles: the camera runs and its frames go to the sink.
+  bool capturing = false;
 };
 
 // Live picture of the stereo camera without ROS: the left eye as H.264 for one RTSP client, which is the viewer
 // signal. The camera streams only after one self-test per boot, taken while the mower stands with the blade off; a
-// stream without frames or with a gap ends streaming for that boot. One thread calls Step() in a loop; it blocks at
-// most until the next frame deadline or the idle wait and returns false once the process has to end.
+// stream without frames or with a gap ends streaming for that boot. With obstacles on and a sink, the camera runs on
+// after the self-test without a viewer. One thread calls Step() in a loop; it blocks at most until the next frame
+// deadline or the idle wait and returns false once the process has to end.
 class StereoLoop {
  public:
   StereoLoop(StereoConfig config, FrameSource& camera, H264Encoder& encoder, RtspServer& server, CrashGuard& guard,
-             std::function<double()> now);
+             std::function<double()> now, FrameSink* sink = nullptr);
   ~StereoLoop();
   StereoLoop(const StereoLoop&) = delete;
   StereoLoop& operator=(const StereoLoop&) = delete;
@@ -164,6 +188,7 @@ class StereoLoop {
     kPrepare,
     kIdle,
     kStream,
+    kCapture,
     kEnd,
   };
   enum class Gate {
@@ -200,6 +225,20 @@ class StereoLoop {
   // The lock file while a wish is on, else none.
   std::string GainLock() const;
   void StopStream();
+  bool Obstacles() const {
+    return config_.obstacles && sink_ != nullptr;
+  }
+  // Obstacles: the camera runs on its own, the encoder follows the viewer.
+  void StepIdleCapture(double now);
+  void StartCapture(double now);
+  void StepCapture(double now);
+  void StepVideo(double now);
+  void PrepareVideo(double now);
+  void VideoFailed(double now, const std::string& error);
+  void EndVideo();
+  // The state of a running camera by its stream.
+  void SetCaptureState();
+  bool AtMaxGain() const;
   // Notes that the camera gave no picture, which holds for this boot.
   void FailForThisBoot(StereoState state, const std::string& detail);
   // Counts a failure that may pass; true once it has happened too often.
@@ -212,6 +251,7 @@ class StereoLoop {
   RtspServer& server_;
   CrashGuard& guard_;
   std::function<double()> now_;
+  FrameSink* sink_;
   ThermalGate thermal_;
   StereoStatus status_;
   Phase phase_ = Phase::kInit;
@@ -241,6 +281,12 @@ class StereoLoop {
   double luma_sum_ = 0.0;
   int luma_frames_ = 0;
   double luma_from_ = 0.0;
+  // Obstacles: the stream beside the running camera.
+  bool video_prepared_ = false;
+  bool video_off_ = false;
+  bool video_missing_ = false;
+  std::string video_error_;
+  double next_video_retry_ = 0.0;
 };
 
 }  // namespace tron_vision

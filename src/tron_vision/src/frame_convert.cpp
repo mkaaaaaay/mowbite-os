@@ -212,4 +212,35 @@ void ConvertFrame(const Nv12View& frame, const Placement& p, const ColorGains& g
   }
 }
 
+void ConvertYuyv(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, const Placement& p,
+                 bool swap_rb, uint32_t out_width, uint32_t out_height, std::vector<uint8_t>& rgb) {
+  rgb.resize(static_cast<size_t>(out_width) * out_height * 3);
+  if (p.dst_w != out_width || p.dst_h != out_height) std::fill(rgb.begin(), rgb.end(), kPadGray);
+  if (p.dst_w == 0 || p.dst_h == 0 || width < 2) return;
+  const std::vector<Tap> cols = Taps(p.src_x, p.src_w, p.dst_w, width);
+  const std::vector<Tap> rows = Taps(p.src_y, p.src_h, p.dst_h, height);
+  for (uint32_t j = 0; j < p.dst_h; j++) {
+    const Tap& ty = rows[j];
+    const uint8_t* r0 = yuyv + static_cast<size_t>(ty.i0) * line_bytes;
+    const uint8_t* r1 = yuyv + static_cast<size_t>(ty.i1) * line_bytes;
+    const uint8_t* rn = yuyv + static_cast<size_t>(ty.nearest) * line_bytes;
+    uint8_t* out = rgb.data() + ((static_cast<size_t>(p.dst_y) + j) * out_width + p.dst_x) * 3;
+    for (uint32_t i = 0; i < p.dst_w; i++) {
+      const Tap& tx = cols[i];
+      const uint32_t top = r0[2 * tx.i0] * (256 - tx.weight) + r0[2 * tx.i1] * tx.weight;
+      const uint32_t bottom = r1[2 * tx.i0] * (256 - tx.weight) + r1[2 * tx.i1] * tx.weight;
+      const int luma = static_cast<int>((top * (256 - ty.weight) + bottom * ty.weight + 32768) >> 16);
+      // Y0 U Y1 V: U and V of a pixel pair at bytes 1 and 3 of its four.
+      const size_t pair = 4 * static_cast<size_t>(std::min(tx.nearest, width - 1) / 2);
+      const int c = 298 * (luma - 16);
+      const int d = rn[pair + 1] - 128;
+      const int e = rn[pair + 3] - 128;
+      out[swap_rb ? 2 : 0] = Clamp8((c + 409 * e + 128) / 256);
+      out[1] = Clamp8((c - 100 * d - 208 * e + 128) / 256);
+      out[swap_rb ? 0 : 2] = Clamp8((c + 516 * d + 128) / 256);
+      out += 3;
+    }
+  }
+}
+
 }  // namespace tron_vision

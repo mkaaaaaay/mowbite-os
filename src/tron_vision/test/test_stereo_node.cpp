@@ -3,12 +3,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/obstacles.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <set>
@@ -486,6 +488,106 @@ TEST(StereoAvailability, ReasonsOfTheStates) {
     EXPECT_FALSE(StereoAvailability(state).available) << StateName(state);
     EXPECT_EQ(StereoAvailability(state).reason, reason) << StateName(state);
   }
+}
+
+// With obstacles on, hw/obstacles and hw/obstacle_images come out and obstacles/photos_wanted goes in; nothing else.
+TEST_F(StereoNodeTest, ObstaclesAddOnlyTheirTopics) {
+  test::TempDir dir;
+  rclcpp::NodeOptions options = Options(dir.Path(), FreePort(), "/nonexistent/librockchip_mpp.so.1");
+  options.append_parameter_override("obstacles", true);
+  auto node = std::make_shared<StereoNode>(options);
+  const std::set<std::string> allowed = {"/bridge/sensor_info", "/bridge/sensor_value", "/hw/cameras", "/rosout",
+                                         "/parameter_events",    "/hw/obstacles",        "/hw/obstacle_images"};
+  const auto graph = node->get_node_graph_interface();
+  const auto publishers = graph->get_publisher_names_and_types_by_node("tron_stereo", "/");
+  EXPECT_TRUE(publishers.count("/hw/obstacles"));
+  EXPECT_TRUE(publishers.count("/hw/obstacle_images"));
+  for (const auto& [topic, types] : publishers) EXPECT_TRUE(allowed.count(topic)) << topic;
+  const auto subscribers = graph->get_subscriber_names_and_types_by_node("tron_stereo", "/");
+  EXPECT_TRUE(subscribers.count("/obstacles/photos_wanted"));
+  for (const auto& [topic, types] : subscribers) {
+    EXPECT_TRUE(topic == "/hw/status" || topic == "/parameter_events" || topic == "/obstacles/photos_wanted") << topic;
+  }
+  EXPECT_TRUE(graph->get_client_names_and_types_by_node("tron_stereo", "/").empty());
+  const auto photos = node->get_subscriptions_info_by_topic("/obstacles/photos_wanted");
+  ASSERT_EQ(photos.size(), 1U);
+  EXPECT_EQ(photos[0].qos_profile().durability(), rclcpp::DurabilityPolicy::TransientLocal);
+}
+
+// Without its setup the camera says so on hw/obstacles at the fixed rate, without sight and without obstacles.
+TEST_F(StereoNodeTest, NotSetUpIsSaidAtTheFixedRate) {
+  Rig rig;
+  rclcpp::NodeOptions options = Options(rig.dir.Path() + "/markers", rig.port, FAKE_MPP_LIB);
+  options.append_parameter_override("obstacles", true);
+  options.append_parameter_override("stream_while_mowing", true);
+  options.append_parameter_override("wheel_radius", 0.1125);
+  auto node = std::make_shared<StereoNode>(options, rig.seams);
+  Spinner spinner;
+  std::mutex mutex;
+  std::vector<mowbite_msgs::msg::Obstacles> got;
+  auto sub = spinner.Listener().create_subscription<mowbite_msgs::msg::Obstacles>(
+      "hw/obstacles", 10, [&](const mowbite_msgs::msg::Obstacles& m) {
+        std::lock_guard<std::mutex> lock(mutex);
+        got.push_back(m);
+      });
+  spinner.Add(node);
+  spinner.Start();
+  std::this_thread::sleep_for(1500ms);
+  std::lock_guard<std::mutex> lock(mutex);
+  // 5 per second; the first ones may come before the listener is matched.
+  EXPECT_GE(got.size(), 5U);
+  EXPECT_LE(got.size(), 9U);
+  for (const auto& m : got) {
+    EXPECT_FALSE(m.sight);
+    EXPECT_EQ(m.reason, mowbite_msgs::msg::Obstacles::REASON_NOT_SET_UP);
+    EXPECT_EQ(m.detail, "no camera mount");
+    EXPECT_EQ(m.source, "stereo");
+    EXPECT_EQ(m.header.frame_id, "base_link");
+    EXPECT_TRUE(m.obstacles.empty());
+  }
+}
+
+TEST(ObstaclesMessage, CarriesTheReport) {
+  ObstacleReport report;
+  report.view = {0.6, 0.03, 0.75, -0.75, 0.4, 3.0};
+  FoundObstacle o;
+  o.kind = ObstacleKind::kAnimal;
+  o.class_name = "dog";
+  o.score = 0.8;
+  o.spot = {1.5, -0.2, 0.01, 0.002, 0.004};
+  o.radius = 0.2;
+  o.height = std::nan("");
+  o.cut_bottom = true;
+  o.from = PositionFrom::kBoth;
+  o.agrees = true;
+  o.box = {100.0, 200.0, 180.0, 300.0};
+  report.obstacles = {o};
+  builtin_interfaces::msg::Time stamp;
+  stamp.sec = 7;
+  const auto m = ObstaclesMessage(report, "stereo", stamp);
+  EXPECT_TRUE(m.sight);
+  EXPECT_EQ(m.reason, "");
+  EXPECT_EQ(m.header.stamp.sec, 7);
+  EXPECT_FLOAT_EQ(m.view_angle_right, -0.75F);
+  EXPECT_FLOAT_EQ(m.view_range_min, 0.4F);
+  ASSERT_EQ(m.obstacles.size(), 1U);
+  const auto& g = m.obstacles[0];
+  EXPECT_EQ(g.kind, mowbite_msgs::msg::Obstacle::KIND_ANIMAL);
+  EXPECT_EQ(g.class_name, "dog");
+  EXPECT_FLOAT_EQ(g.x, 1.5F);
+  EXPECT_FLOAT_EQ(g.cov_xy, 0.002F);
+  EXPECT_TRUE(std::isnan(g.height));
+  EXPECT_TRUE(g.cut_bottom);
+  EXPECT_EQ(g.position_from, mowbite_msgs::msg::Obstacle::FROM_BOTH);
+  EXPECT_TRUE(g.agrees);
+  EXPECT_FLOAT_EQ(g.box_w, 80.0F);
+  EXPECT_FLOAT_EQ(g.box_h, 100.0F);
+  // Without sight nothing on the ground counts.
+  report.reason = SightReason::kTooDark;
+  const auto dark = ObstaclesMessage(report, "stereo", stamp);
+  EXPECT_FALSE(dark.sight);
+  EXPECT_EQ(dark.reason, mowbite_msgs::msg::Obstacles::REASON_TOO_DARK);
+  EXPECT_TRUE(dark.obstacles.empty());
 }
 
 }  // namespace

@@ -44,6 +44,25 @@ class YuyvGrayJpeg {
   std::vector<uint8_t> gray_;
 };
 
+// A YUYV picture as a color JPEG with 4:2:2 chroma through libturbojpeg. One handle per object.
+class YuyvJpeg {
+ public:
+  YuyvJpeg();
+  ~YuyvJpeg();
+  YuyvJpeg(const YuyvJpeg&) = delete;
+  YuyvJpeg& operator=(const YuyvJpeg&) = delete;
+
+  // As YuyvGrayJpeg::Encode; the width must be even.
+  bool Encode(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, int quality,
+              std::vector<uint8_t>& jpeg, std::string& error);
+
+ private:
+  void* handle_ = nullptr;
+  std::vector<uint8_t> y_;
+  std::vector<uint8_t> u_;
+  std::vector<uint8_t> v_;
+};
+
 }  // namespace tron_vision
 
 #endif  // TRON_VISION_JPEG_LUMA_H

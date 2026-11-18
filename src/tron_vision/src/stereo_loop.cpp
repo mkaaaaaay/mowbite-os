@@ -63,13 +63,14 @@ const char* StateName(StereoState state) {
 }
 
 StereoLoop::StereoLoop(StereoConfig config, FrameSource& camera, H264Encoder& encoder, RtspServer& server,
-                       CrashGuard& guard, std::function<double()> now)
+                       CrashGuard& guard, std::function<double()> now, FrameSink* sink)
     : config_(std::move(config)),
       camera_(camera),
       encoder_(encoder),
       server_(server),
       guard_(guard),
       now_(std::move(now)),
+      sink_(sink),
       thermal_(config_.pause_at_c, config_.resume_below_c),
       started_(now_()),
       stream_(encoder_, server_, config_.slow_encode_s, now_),
@@ -158,7 +159,15 @@ bool StereoLoop::Step() {
       if (!guard_.MayStream(config_.camera_id, text)) {
         End(StereoState::kLocked, text);
       } else if (!encoder_.Probe(text)) {
-        End(StereoState::kEncoderMissing, text);
+        if (!Obstacles()) {
+          End(StereoState::kEncoderMissing, text);
+          return true;
+        }
+        // Without the stream the camera still serves the obstacles.
+        video_off_ = true;
+        video_missing_ = true;
+        video_error_ = text;
+        phase_ = Phase::kSetup;
       } else {
         phase_ = Phase::kSetup;
       }
@@ -171,6 +180,7 @@ bool StereoLoop::Step() {
     case Phase::kPrepare: Prepare(now); break;
     case Phase::kIdle: StepIdle(now); return true;
     case Phase::kStream: StepStream(now); return true;
+    case Phase::kCapture: StepCapture(now); return true;
     case Phase::kEnd: break;
   }
   // Nothing streams: a client gets its answer, and the wait for one paces the loop.
@@ -329,6 +339,11 @@ void StereoLoop::StepSelftest(double now) {
 }
 
 void StereoLoop::Prepare(double now) {
+  if (Obstacles()) {
+    // The stream is prepared beside the running camera.
+    phase_ = Phase::kIdle;
+    return;
+  }
   std::string text;
   const Gate gate = CheckGate(now, false, text);
   if (gate != Gate::kOpen) {
@@ -352,6 +367,10 @@ void StereoLoop::Prepare(double now) {
 }
 
 void StereoLoop::StepIdle(double now) {
+  if (Obstacles()) {
+    StepIdleCapture(now);
+    return;
+  }
   std::string text;
   const Gate gate = CheckGate(now, false, text);
   if (gate != Gate::kOpen) {
@@ -436,6 +455,167 @@ void StereoLoop::StopStream() {
   streaming_ = false;
   status_.fps = 0.0;
   status_.kbps = 0.0;
+  if (status_.capturing) sink_->OnStop();
+  status_.capturing = false;
+}
+
+void StereoLoop::StepIdleCapture(double now) {
+  std::string text;
+  const Gate gate = CheckGate(now, false, text);
+  if (gate != Gate::kOpen) {
+    if (status_.detail != text) Pause(gate, text);
+  } else if (now >= next_retry_) {
+    StartCapture(now);
+    if (phase_ == Phase::kCapture) return;
+  } else if (status_.state != StereoState::kWaitingIdle) {
+    Set(StereoState::kWaitingIdle, "next try of the camera");
+  }
+  server_.Poll(config_.idle_wait_ms);
+}
+
+void StereoLoop::StartCapture(double now) {
+  std::string text;
+  if (!guard_.MayStream(config_.camera_id, text)) {
+    End(StereoState::kLocked, text);
+    return;
+  }
+  const FileLock lock(GainLock(), config_.gain_lock_wait_s);
+  if (!lock.held()) {
+    Set(StereoState::kWaitingIdle, "the gain level is being set");
+    return;
+  }
+  if (!camera_.Open(text)) {
+    camera_.Close();
+    if (CountFailure(camera_failures_, now)) {
+      End(StereoState::kFailed, text);
+    } else {
+      Set(StereoState::kWaitingIdle, "camera: " + text);
+    }
+    return;
+  }
+  if (!guard_.Arm(config_.camera_id, text)) {
+    camera_.Close();
+    End(StereoState::kFailed, text);
+    return;
+  }
+  streaming_ = true;
+  if (!camera_.Start(text)) {
+    FailForThisBoot(StereoState::kNoFrames, text);
+    return;
+  }
+  stream_start_ = now;
+  last_frame_ = -1.0;
+  have_sequence_ = false;
+  luma_frames_ = 0;
+  status_.capturing = true;
+  if (!video_prepared_ && !video_off_ && now >= next_video_retry_) {
+    PrepareVideo(now);
+  } else if (video_prepared_ && !video_off_) {
+    stream_.Offer();
+  }
+  SetCaptureState();
+  phase_ = Phase::kCapture;
+}
+
+void StereoLoop::SetCaptureState() {
+  if (stream_.Running()) {
+    Set(StereoState::kStreaming, "");
+  } else if (video_off_) {
+    Set(video_missing_ ? StereoState::kEncoderMissing : StereoState::kEncoderError, video_error_);
+  } else if (!video_prepared_) {
+    Set(StereoState::kEncoderError, video_error_.empty() ? "stream not prepared yet" : video_error_);
+  } else {
+    Set(StereoState::kReady, video_error_);
+  }
+}
+
+void StereoLoop::StepCapture(double now) {
+  server_.Poll(0);
+  std::string text;
+  const Gate gate = CheckGate(now, false, text);
+  if (gate != Gate::kOpen) {
+    StopStream();
+    Pause(gate, text);
+    phase_ = Phase::kIdle;
+    return;
+  }
+  StepVideo(now);
+  const bool first = last_frame_ < 0.0;
+  const double deadline = first ? stream_start_ + config_.first_frame_s : last_frame_ + config_.frame_gap_s;
+  if (now >= deadline) {
+    FailForThisBoot(first ? StereoState::kNoFrames : StereoState::kStalled,
+                    "no frame within " + Fixed(first ? config_.first_frame_s : config_.frame_gap_s) + " s");
+    return;
+  }
+  CapturedFrame frame;
+  const int got =
+      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, text);
+  if (got < 0) {
+    FailForThisBoot(StereoState::kStalled, text);
+    return;
+  }
+  if (got == 0) return;
+  last_frame_ = now_();
+  if (have_sequence_ && frame.sequence > last_sequence_ + 1) status_.lost += frame.sequence - last_sequence_ - 1;
+  have_sequence_ = true;
+  last_sequence_ = frame.sequence;
+  AddLuma(frame, last_frame_);
+  sink_->OnFrame(frame, last_frame_, {mower_.moving, AtMaxGain()});
+  if (stream_.Running()) SendFrame(frame);
+}
+
+void StereoLoop::StepVideo(double now) {
+  if (stream_.Running()) {
+    if (server_.Playing()) return;
+    EndVideo();
+    SetCaptureState();
+    return;
+  }
+  if (!video_prepared_ && !video_off_ && now >= next_video_retry_) PrepareVideo(now);
+  if (!server_.Playing()) return;
+  std::string text;
+  if (!video_prepared_ || video_off_ || now < next_video_retry_) {
+    server_.DropClient();
+  } else if (!stream_.Begin(text)) {
+    server_.DropClient();
+    VideoFailed(now, "encoder: " + text);
+  } else {
+    video_error_.clear();
+    SetCaptureState();
+  }
+}
+
+void StereoLoop::PrepareVideo(double now) {
+  config_.encoder.fps = static_cast<int>(std::lround(status_.camera_fps));
+  std::string text;
+  if (!stream_.Prepare(config_.encoder, text)) {
+    VideoFailed(now, "encoder: " + text);
+    return;
+  }
+  video_prepared_ = true;
+  video_error_.clear();
+  stream_.Offer();
+  SetCaptureState();
+}
+
+void StereoLoop::VideoFailed(double now, const std::string& error) {
+  video_error_ = error;
+  next_video_retry_ = now + config_.retry_s;
+  if (++encoder_failures_ >= config_.max_attempts) {
+    video_off_ = true;
+    server_.SetUnavailable();
+  }
+  SetCaptureState();
+}
+
+void StereoLoop::EndVideo() {
+  stream_.End();
+  status_.fps = 0.0;
+  status_.kbps = 0.0;
+}
+
+bool StereoLoop::AtMaxGain() const {
+  return config_.gain_wish_file.empty() || gain_.level == GainLevel::kNight;
 }
 
 void StereoLoop::StepStream(double now) {
@@ -521,6 +701,16 @@ void StereoLoop::AddLuma(const CapturedFrame& frame, double now) {
 void StereoLoop::SendFrame(const CapturedFrame& frame) {
   std::string text;
   const H264Stream::Sent sent = stream_.Send(frame, text);
+  if (Obstacles() && sent != H264Stream::Sent::kOk) {
+    // Only the stream ends; the camera runs on.
+    EndVideo();
+    if (sent == H264Stream::Sent::kEncoderFailed) {
+      VideoFailed(now_(), "encoder: " + text);
+    } else {
+      SetCaptureState();
+    }
+    return;
+  }
   if (sent == H264Stream::Sent::kEncoderFailed) {
     StopStream();
     if (CountFailure(encoder_failures_, now_())) {

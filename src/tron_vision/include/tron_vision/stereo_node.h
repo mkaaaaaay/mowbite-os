@@ -6,10 +6,13 @@
 #include <memory>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/obstacle_image.hpp>
+#include <mowbite_msgs/msg/obstacles.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
 #include <mutex>
 #include <rclcpp/rclcpp.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <string>
 #include <thread>
 
@@ -18,6 +21,7 @@
 #include "tron_vision/camera_node.h"
 #include "tron_vision/crash_guard.h"
 #include "tron_vision/h264_encoder.h"
+#include "tron_vision/obstacle_core.h"
 #include "tron_vision/rtsp_server.h"
 #include "tron_vision/stereo_camera.h"
 #include "tron_vision/stereo_loop.h"
@@ -25,19 +29,26 @@
 namespace tron_vision {
 
 Availability StereoAvailability(StereoState state);
+std::string ObstacleReasonName(SightReason reason);
+// One report of the core as the message of hw/obstacles; `stamp` is when its frame was taken, by the host clock.
+mowbite_msgs::msg::Obstacles ObstaclesMessage(const ObstacleReport& report, const std::string& source,
+                                               const builtin_interfaces::msg::Time& stamp);
 
 // Stand-ins for the tests; left empty, the node uses the system.
 struct StereoNodeSeams {
   VideoDevice* device = nullptr;
   // Applied to the configuration before the loop is made.
   std::function<void(StereoConfig&, StereoCameraConfig&)> adjust;
+  std::function<void(ObstacleConfig&)> adjust_obstacles;
   std::string crash_flag = kCrashFlag;
 };
 
 // The live picture of the stereo camera in a process of its own. It reads hw/status and nothing else of the stack, and
-// publishes only its state and its camera entry, so it cannot move the mower. A loop thread runs StereoLoop with the
-// last hw/status and the time it came; the watch of the process ends it when that thread or the ROS thread stays
-// silent for 2 s (exit code 86), the loop ends it over its memory limit (3).
+// publishes only its state, its camera entry and, with obstacles on, what it sees on the ground (hw/obstacles,
+// hw/obstacle_images), so it cannot move the mower. A loop thread runs StereoLoop with the last hw/status and the time
+// it came, and the obstacles beside it; the watch of the process ends it when that thread or the ROS thread stays
+// silent for 2 s (exit code 86), or when loading the model takes over 20 s; the loop ends it over its memory limit (3),
+// the model when it hangs or keeps running slow (4).
 class StereoNode : public rclcpp::Node {
  public:
   explicit StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams& seams = {});
@@ -54,12 +65,15 @@ class StereoNode : public rclcpp::Node {
   void Run();
   void Report(const StereoStatus& status, double now);
   void PublishCamera(const StereoStatus& status);
+  void PublishObstacles(const ObstacleReport& report, double now);
 
   std::unique_ptr<TronStereoCamera> camera_;
   std::unique_ptr<MppEncoder> encoder_;
   std::unique_ptr<RtspServer> server_;
   std::unique_ptr<CrashGuard> guard_;
+  std::unique_ptr<ObstacleCore> obstacles_;
   std::unique_ptr<StereoLoop> loop_;
+  std::string camera_id_;
   // Set instead of the loop when the RTSP port cannot be had.
   StereoStatus failed_;
   mowbite_msgs::msg::Camera camera_entry_;
@@ -68,6 +82,10 @@ class StereoNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::Camera>::SharedPtr cameras_pub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr status_sub_;
+  rclcpp::Publisher<mowbite_msgs::msg::Obstacles>::SharedPtr obstacles_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::ObstacleImage>::SharedPtr images_pub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr photos_sub_;
+  std::string reported_obstacles_;
   // From the ROS thread to the loop thread.
   std::mutex mower_mutex_;
   MowerView mower_;

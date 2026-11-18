@@ -12,6 +12,7 @@ find_package(rclcpp REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_serial REQUIRED)
 find_package(mowbite_watch REQUIRED)
+find_package(mowbite_obstacles REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -26,11 +27,12 @@ add_library(tron_vision_core STATIC src/npu_model.cpp src/model_check.cpp src/yo
   src/text_file.cpp src/preview.cpp src/h264_rtp.cpp src/rtsp_server.cpp src/h264_encoder.cpp src/h264_stream.cpp
   src/stereo_camera.cpp src/stereo_loop.cpp src/lens_model.cpp src/dock_marker.cpp src/dock_pose.cpp
   src/dock_exposure.cpp src/jpeg_luma.cpp src/rear_camera.cpp src/rear_loop.cpp src/preview_loop.cpp src/inference_worker.cpp
-  src/video_feed.cpp src/dma_frames.cpp src/frame_recorder.cpp src/gain_level.cpp)
+  src/video_feed.cpp src/dma_frames.cpp src/frame_recorder.cpp src/gain_level.cpp src/stereo_lens.cpp src/stereo_depth.cpp
+  src/obstacle_sight.cpp src/obstacle_core.cpp)
 target_include_directories(tron_vision_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(tron_vision_core ${CMAKE_DL_LIBS} PkgConfig::TURBOJPEG)
+target_link_libraries(tron_vision_core ${CMAKE_DL_LIBS} PkgConfig::TURBOJPEG mowbite_obstacles::mowbite_obstacles_ground)
 set_target_properties(tron_vision_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The node, a process of its own outside the container: a crash of the NPU runtime takes nothing else along.
@@ -50,7 +52,7 @@ install(TARGETS tron_vision_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 # The live picture of the stereo camera, a process of its own: a crash in the media library takes nothing else along.
 add_library(tron_stereo_node_lib STATIC src/stereo_node.cpp)
 target_link_libraries(tron_stereo_node_lib tron_vision_core mowbite_serial::mowbite_serial mowbite_watch::mowbite_watch)
-ament_target_dependencies(tron_stereo_node_lib rclcpp mowbite_msgs ament_index_cpp)
+ament_target_dependencies(tron_stereo_node_lib rclcpp mowbite_msgs std_msgs ament_index_cpp)
 add_executable(tron_stereo_node src/stereo_node_main.cpp)
 target_link_libraries(tron_stereo_node tron_stereo_node_lib)
 install(TARGETS tron_stereo_node RUNTIME DESTINATION lib/${PROJECT_NAME})
@@ -103,7 +105,7 @@ if(BUILD_TESTING)
                   test/test_v4l2_capture.cpp test/test_h264_rtp.cpp test/test_rtsp_server.cpp
                   test/test_h264_encoder.cpp test/test_stereo_camera.cpp test/test_stereo_loop.cpp
                   test/test_rear_camera.cpp test/test_preview_loop.cpp test/test_dma_frames.cpp
-                  test/test_gain_level.cpp
+                  test/test_gain_level.cpp test/test_stereo_obstacles.cpp
                   # The loops are tested in real time, about a minute in all.
                   TIMEOUT 180)
   target_link_libraries(tron_vision_test tron_vision_core)
@@ -138,4 +140,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_tron_vision HAS_LIBRARY_TARGET)
+ament_export_dependencies(mowbite_obstacles)
 ament_package()

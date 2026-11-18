@@ -79,4 +79,54 @@ bool YuyvGrayJpeg::Encode(const uint8_t* yuyv, uint32_t width, uint32_t height, 
   return true;
 }
 
+YuyvJpeg::YuyvJpeg() : handle_(tjInitCompress()) {}
+
+YuyvJpeg::~YuyvJpeg() {
+  if (handle_ != nullptr) tjDestroy(handle_);
+}
+
+bool YuyvJpeg::Encode(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, int quality,
+                      std::vector<uint8_t>& jpeg, std::string& error) {
+  jpeg.clear();
+  if (handle_ == nullptr) {
+    error = "no JPEG encoder";
+    return false;
+  }
+  if (yuyv == nullptr || width < 2 || width % 2 != 0 || height == 0 || line_bytes < 2 * width) {
+    error = "no YUYV frame of " + std::to_string(width) + "x" + std::to_string(height);
+    return false;
+  }
+  const size_t half = width / 2;
+  y_.resize(static_cast<size_t>(width) * height);
+  u_.resize(half * height);
+  v_.resize(half * height);
+  for (uint32_t y = 0; y < height; y++) {
+    const uint8_t* line = yuyv + static_cast<size_t>(y) * line_bytes;
+    uint8_t* luma = y_.data() + static_cast<size_t>(y) * width;
+    uint8_t* u = u_.data() + y * half;
+    uint8_t* v = v_.data() + y * half;
+    for (size_t x = 0; x < half; x++) {
+      luma[2 * x] = line[4 * x];
+      u[x] = line[4 * x + 1];
+      luma[2 * x + 1] = line[4 * x + 2];
+      v[x] = line[4 * x + 3];
+    }
+  }
+  const auto w = static_cast<int>(width);
+  const auto h = static_cast<int>(height);
+  const unsigned char* planes[3] = {y_.data(), u_.data(), v_.data()};
+  const int strides[3] = {w, w / 2, w / 2};
+  jpeg.resize(tjBufSize(w, h, TJSAMP_422));
+  unsigned char* data = jpeg.data();
+  unsigned long size = jpeg.size();
+  if (tjCompressFromYUVPlanes(handle_, planes, w, strides, h, TJSAMP_422, &data, &size, quality, TJFLAG_NOREALLOC) !=
+      0) {
+    error = std::string("JPEG: ") + tjGetErrorStr2(handle_);
+    jpeg.clear();
+    return false;
+  }
+  jpeg.resize(size);
+  return true;
+}
+
 }  // namespace tron_vision

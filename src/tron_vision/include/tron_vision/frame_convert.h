@@ -93,6 +93,11 @@ void ShiftChroma(uint8_t* uv, uint32_t width, uint32_t height, uint32_t stride, 
 void ConvertFrame(const Nv12View& frame, const Placement& p, const ColorGains& gains, bool swap_rb,
                   uint32_t out_width, uint32_t out_height, std::vector<uint8_t>& rgb);
 
+// As ConvertFrame for a YUYV picture of width x height in the first 2 * width bytes of each line of line_bytes,
+// without gains.
+void ConvertYuyv(const uint8_t* yuyv, uint32_t width, uint32_t height, uint32_t line_bytes, const Placement& p,
+                 bool swap_rb, uint32_t out_width, uint32_t out_height, std::vector<uint8_t>& rgb);
+
 }  // namespace tron_vision
 
 #endif  // TRON_VISION_FRAME_CONVERT_H

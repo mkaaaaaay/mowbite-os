@@ -122,7 +122,7 @@ struct Rig {
   void Make() {
     loop.reset();
     guard = std::make_unique<CrashGuard>(config.marker_dir, dir.Path() + "/crash", config.boot_id_file);
-    loop = std::make_unique<StereoLoop>(config, camera, encoder, server, *guard, [this] { return clock; });
+    loop = std::make_unique<StereoLoop>(config, camera, encoder, server, *guard, [this] { return clock; }, sink);
   }
   void Configured() {
     dir.Write("stereo", "configured\n");
@@ -184,6 +184,7 @@ struct Rig {
   RtspServer server;
   std::unique_ptr<CrashGuard> guard;
   std::unique_ptr<StereoLoop> loop;
+  FrameSink* sink = nullptr;
   bool listening = false;
   // Blade state that Describes() keeps reporting.
   bool last_blade = false;
@@ -1032,6 +1033,209 @@ TEST(StereoLoop, AWishThatCannotBeWrittenIsSaidAndTheStreamGoesOn) {
   EXPECT_NE(rig.loop->Status().gain_error, "");
   Client client(rig.server.Port());
   EXPECT_TRUE(rig.Play(client));
+}
+
+// Counts what the camera hands on for the obstacles.
+class CountingSink : public FrameSink {
+ public:
+  void OnFrame(const CapturedFrame& frame, double, const FrameContext& context) override {
+    frames++;
+    last = frame.sequence;
+    moving = context.moving;
+    at_max_gain = context.at_max_gain;
+  }
+  void OnStop() override {
+    stops++;
+  }
+  int frames = 0;
+  int stops = 0;
+  uint32_t last = 0;
+  bool moving = false;
+  bool at_max_gain = false;
+};
+
+struct ObstacleRig : Rig {
+  ObstacleRig() {
+    config.obstacles = true;
+    config.stream_while_mowing = true;
+    sink = &counted;
+  }
+  // The loop tells the sink of its last stop, so it goes first.
+  ~ObstacleRig() {
+    loop.reset();
+  }
+  // Configured, standing, self-test passed, the camera running for the obstacles.
+  void Running() {
+    Configured();
+    Make();
+    Steps(40);
+    ASSERT_TRUE(loop->Status().capturing) << StateName(State()) << ": " << loop->Status().detail;
+  }
+  CountingSink counted;
+};
+
+TEST(StereoLoopObstacles, TheCameraRunsWithoutAViewer) {
+  ObstacleRig rig;
+  rig.Running();
+  EXPECT_EQ(rig.State(), StereoState::kReady);
+  EXPECT_TRUE(rig.camera.streaming);
+  // Self-test, then one start for good.
+  EXPECT_EQ(rig.camera.starts, 2);
+  const int before = rig.counted.frames;
+  rig.Steps(50);
+  EXPECT_EQ(rig.counted.frames, before + 50);
+  EXPECT_EQ(rig.counted.stops, 0);
+  // Nothing encoded without a viewer, the stream offered.
+  EXPECT_FALSE(rig.encoder.is_open);
+  EXPECT_TRUE(rig.Describes());
+  EXPECT_EQ(rig.Marker("stream-stereo"), kBoot);
+}
+
+TEST(StereoLoopObstacles, OffWithoutTheSwitchOrTheSink) {
+  Rig plain;
+  CountingSink counted;
+  plain.sink = &counted;
+  plain.Ready();
+  plain.Steps(30);
+  EXPECT_FALSE(plain.camera.streaming);
+  EXPECT_EQ(counted.frames, 0);
+  Rig no_sink;
+  no_sink.config.obstacles = true;
+  no_sink.Ready();
+  no_sink.Steps(30);
+  EXPECT_FALSE(no_sink.camera.streaming);
+}
+
+TEST(StereoLoopObstacles, TheViewerComesAndGoesBesideTheCamera) {
+  ObstacleRig rig;
+  rig.Running();
+  {
+    Client client(rig.server.Port());
+    ASSERT_TRUE(rig.Play(client));
+    EXPECT_TRUE(rig.encoder.is_open);
+    const int before = rig.counted.frames;
+    rig.Steps(20);
+    EXPECT_EQ(rig.State(), StereoState::kStreaming);
+    EXPECT_EQ(rig.counted.frames, before + 20);
+    const Received got(client);
+    EXPECT_GE(got.packets.size(), 4U + 19U);
+  }
+  rig.Steps(3);
+  EXPECT_EQ(rig.State(), StereoState::kReady);
+  EXPECT_FALSE(rig.encoder.is_open);
+  EXPECT_TRUE(rig.camera.streaming);
+  EXPECT_EQ(rig.camera.starts, 2);
+  EXPECT_EQ(rig.counted.stops, 0);
+}
+
+TEST(StereoLoopObstacles, WithoutTheEncoderOnlyTheStreamIsMissing) {
+  ObstacleRig rig;
+  rig.encoder.present = false;
+  rig.Running();
+  EXPECT_EQ(rig.State(), StereoState::kEncoderMissing);
+  EXPECT_TRUE(rig.camera.streaming);
+  rig.Steps(10);
+  EXPECT_GT(rig.counted.frames, 10);
+  EXPECT_FALSE(rig.Describes());
+}
+
+TEST(StereoLoopObstacles, EncoderFailuresEndOnlyTheStream) {
+  ObstacleRig rig;
+  rig.Running();
+  rig.encoder.fail_encode = true;
+  for (int attempt = 1; attempt <= 3; attempt++) {
+    Client client(rig.server.Port());
+    // The stream begins and its first frame fails in the same step.
+    rig.Play(client);
+    rig.Steps(2);
+    EXPECT_EQ(rig.encoder.opens, 1 + attempt) << attempt;
+    EXPECT_EQ(client.Receive().find("$"), std::string::npos);
+    EXPECT_TRUE(rig.camera.streaming);
+    if (attempt < 3) {
+      EXPECT_EQ(rig.State(), StereoState::kReady);
+      EXPECT_EQ(rig.loop->Status().detail, "encoder: put frame -1");
+    }
+    // The camera runs on: the pause before the next try passes with frames.
+    rig.Steps(125);
+  }
+  EXPECT_EQ(rig.State(), StereoState::kEncoderError);
+  EXPECT_FALSE(rig.Describes());
+  const int before = rig.counted.frames;
+  rig.Steps(10);
+  EXPECT_EQ(rig.counted.frames, before + 10);
+  EXPECT_EQ(rig.counted.stops, 0);
+  EXPECT_EQ(rig.Marker("failed-stereo"), "");
+}
+
+TEST(StereoLoopObstacles, HeatStopsTheCameraAndCoolingStartsItAgain) {
+  ObstacleRig rig;
+  rig.Running();
+  rig.dir.Write("temp", "80000\n");
+  rig.clock += 5.1;
+  rig.Steps(2);
+  EXPECT_EQ(rig.State(), StereoState::kPausedHot);
+  EXPECT_FALSE(rig.loop->Status().capturing);
+  EXPECT_FALSE(rig.camera.streaming);
+  EXPECT_EQ(rig.counted.stops, 1);
+  rig.dir.Write("temp", "74900\n");
+  rig.clock += 5.1;
+  rig.Steps(3);
+  EXPECT_TRUE(rig.loop->Status().capturing);
+  EXPECT_EQ(rig.State(), StereoState::kReady);
+  EXPECT_EQ(rig.camera.starts, 3);
+}
+
+TEST(StereoLoopObstacles, TheBladeStopsTheCameraUnlessStreamWhileMowing) {
+  ObstacleRig rig;
+  rig.config.stream_while_mowing = false;
+  rig.Running();
+  rig.Steps(2, true);
+  EXPECT_EQ(rig.State(), StereoState::kPausedBlade);
+  EXPECT_FALSE(rig.camera.streaming);
+  EXPECT_EQ(rig.counted.stops, 1);
+  rig.Steps(3);
+  EXPECT_TRUE(rig.loop->Status().capturing);
+
+  ObstacleRig mowing;
+  mowing.Running();
+  const int before = mowing.counted.frames;
+  mowing.Steps(10, true, true);
+  EXPECT_TRUE(mowing.camera.streaming);
+  EXPECT_EQ(mowing.counted.frames, before + 10);
+  EXPECT_TRUE(mowing.counted.moving);
+}
+
+TEST(StereoLoopObstacles, AGapEndsTheCameraForThisBoot) {
+  ObstacleRig rig;
+  rig.Running();
+  rig.camera.frames_left = 0;
+  rig.Steps(20);
+  EXPECT_EQ(rig.State(), StereoState::kStalled);
+  EXPECT_FALSE(rig.loop->Status().capturing);
+  EXPECT_EQ(rig.counted.stops, 1);
+  EXPECT_NE(rig.Marker("failed-stereo"), "");
+}
+
+TEST(StereoLoopObstacles, TheGainLevelGoesWithTheFrames) {
+  ObstacleRig rig;
+  WithGainWish(rig);
+  rig.dir.Write("stereo-level", "night 12.000 1794800000.000\n");
+  rig.Running();
+  rig.Steps(2);
+  EXPECT_TRUE(rig.counted.at_max_gain);
+  ObstacleRig day;
+  WithGainWish(day);
+  day.Running();
+  day.Steps(2);
+  EXPECT_FALSE(day.counted.at_max_gain);
+}
+
+TEST(StereoLoopObstacles, ShutdownTellsTheSink) {
+  ObstacleRig rig;
+  rig.Running();
+  rig.loop->Shutdown();
+  EXPECT_EQ(rig.counted.stops, 1);
+  EXPECT_FALSE(rig.camera.open);
 }
 
 }  // namespace
