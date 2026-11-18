@@ -713,7 +713,9 @@ const std::vector<SetupCheck>& SetupChecks() {
        "0.5 s, and the odometry has to show it with its sign and 0.5 to 1.5 times speed. In the part one_wheel only "
        "the right wheel turns, and inputs[] asks which one turns. " + DriveRules(),
        {Speed(), Seconds("time", 1, 3, 2, "Each part drives this long"),
-        Seconds("answer_time", 3, kSetupMoveTime, kSetupMoveTime, "The part one_wheel waits this long for the answer")},
+        Seconds("answer_time", 3, kSetupMoveTime, kSetupMoveTime,
+                "The part one_wheel turns the wheel at most this long while it waits for the answer, then it stands "
+                "and the answer is taken for " + Num(kSetupPressedTime) + " s more")},
        {{"speed", "m/s", "Speed of the wheels along the part, one value by part with the id of the part",
          Named("Geschwindigkeit", "Speed")}},
        DriveReasons({"WRONG_DIRECTION", "WRONG_WHEEL", "LIMIT", "NOT_SEEN", "NOT_DONE"}),
@@ -909,13 +911,13 @@ const std::vector<SetupCheck>& SetupChecks() {
          Named("Halt ohne Steuerung", "Stop without control")}},
        {"NOT_APPLIED", "RESTART_FAILED", "NO_DATA", "STOPPED", "INTERRUPTED"},
        Both({"Sicherheit freigeben",
-             "Alle Sicherheitsprüfungen sind bestanden. Mit einem Tipp gibt der Mäher das selbstständige Fahren und "
+             "Sind alle Sicherheitsprüfungen bestanden, gibt der Mäher mit einem Tipp das selbstständige Fahren und "
              "Mähen frei. Dafür startet MowBite OS einmal neu.",
              "Fehlt eine Prüfung, zuerst sie abschließen. Kommt der Haken nach dem Neustart nicht: die von Hand "
              "gepflegte Gerätedatei prüfen."},
             {"Release safety",
-             "All safety checks passed. With one tap the mower allows driving and mowing on its own. MowBite OS "
-             "restarts once for it.",
+             "Once every safety check passed, one tap lets the mower drive and mow on its own. MowBite OS restarts "
+             "once for it.",
              "If a check is missing, finish it first. If the tick does not come after the restart, check the device "
              "file kept by hand."})},
   });

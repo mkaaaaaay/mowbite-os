@@ -569,7 +569,9 @@ void Program::TickRelease(double now) {
   if (!own.held && Signal(own.role)) return;
   if (now - (own.last_try < 0 ? own.edge : own.last_try) < kReleaseEvery) return;
   own.last_try = now;
-  release_ = ReleaseRequest{hardware_.latch_count, "setup: the input " + own.role + " was checked"};
+  // A latch the step brought itself (silence, driver_end, blade) has no input.
+  const std::string what = own.role.empty() ? "the latch of the step" : "the input " + own.role;
+  release_ = ReleaseRequest{hardware_.latch_count, "setup: " + what + " was checked"};
 }
 
 // state: ok, failed, skipped, or open for a step that was stopped or cut off, which the event tells as failed.
@@ -1855,8 +1857,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       for (const auto& value : mowbite_api::SetupWheelValues()) {
         values.push_back({{"id", value.id}, {"texts", mowbite_api::Texts(value.texts)}});
       }
-      const bool wheel_asks = is_run && step.parts[run_->part].id == "one_wheel" && run_->drive == Drive::kMeasure &&
-                              run_->answer.empty();
+      const bool wheel_asks = is_run && step.parts[run_->part].id == "one_wheel" &&
+                              (run_->drive == Drive::kMeasure || run_->drive == Drive::kAnswer) && run_->answer.empty();
       inputs.push_back({{"name", question.id},
                         {"type", "choice"},
                         {"ask", wheel_asks},
@@ -1921,6 +1923,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
         ends_at = std::floor(run_->drive_wall + step.Number("time"));
       } else if (step.check == "wheels" && run_->drive == Drive::kMeasure && step.parts[run_->part].id == "one_wheel") {
         ends_at = std::floor(run_->drive_wall + step.Number("answer_time"));
+      } else if (step.check == "wheels" && run_->drive == Drive::kAnswer) {
+        ends_at = std::floor(run_->drive_wall + mowbite_api::kSetupPressedTime);
       }
     } else if (is_run && !IsSummary(step)) {
       if (!step.parts.empty()) {

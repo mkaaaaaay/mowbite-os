@@ -268,6 +268,8 @@ class Program {
     kPause,
     kMeasure,
     kAsk,
+    // one_wheel without an answer after its turn: the wheel stands, the answer is taken within kSetupPressedTime.
+    kAnswer,
   };
   struct Run {
     size_t step = 0;

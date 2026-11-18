@@ -274,6 +274,7 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
     case Drive::kArm:
     case Drive::kPause:
     case Drive::kAsk:
+    case Drive::kAnswer:
       command = Command{0, 0};
       break;
     case Drive::kEnter:
@@ -366,8 +367,8 @@ uint32_t Program::AllowedNow() const {
 void Program::TickDrive(double now, double wall) {
   Run& run = *run_;
   const Step& step = StepOf(run);
-  // While pressed waits for its answer the motion stands: TickPressed bounds the wait, not setup.keep.
-  if (run.drive != Drive::kAsk && now - run.keep > mowbite_api::kSetupKeepTimeout) {
+  // While a question waits for its answer the motion stands: its own time bounds the wait, not setup.keep.
+  if (run.drive != Drive::kAsk && run.drive != Drive::kAnswer && now - run.keep > mowbite_api::kSetupKeepTimeout) {
     DriveFail("RELEASED", "No setup.keep for " + std::to_string(now - run.keep) + " s", json::object(), now, wall);
     return;
   }
@@ -409,9 +410,10 @@ void Program::TickDrive(double now, double wall) {
     AskPressed("NOT_SEEN", json::object(), now, wall);
     return;
   }
+  // one_wheel turns at most answer_time; then the wheel stands and the question stays.
   if (step.check == "wheels" && run.drive == Drive::kMeasure && WheelPartOf(step.parts[run.part].id).left == 0 &&
       run.answer.empty() && now - run.move_began > step.Number("answer_time")) {
-    DriveFail("NOT_DONE", "No answer which wheel turns", json::object(), now, wall);
+    EnterDrive(Drive::kAnswer, now, wall);
     return;
   }
   // A single move: while the wheels are to turn. After a trigger the commands go on only to show that the wheels stay.
@@ -569,6 +571,7 @@ void Program::TickDrive(double now, double wall) {
       }
       return;
     case Drive::kMeasure:
+    case Drive::kAnswer:
       return;
     case Drive::kAsk:
       TickPressed(now, wall);
@@ -601,6 +604,7 @@ void Program::TickWheels(double now, double wall) {
   Run& run = *run_;
   const Step& step = StepOf(run);
   const double elapsed = now - run.drive_began;
+  const bool stood = Standing(now) && still_since_ >= run.drive_began;
   switch (run.drive) {
     case Drive::kEnter:
       if (world_.state == "SETUP") {
@@ -618,6 +622,19 @@ void Program::TickWheels(double now, double wall) {
         EnterDrive(Drive::kMeasure, now, wall);
       }
       return;
+    case Drive::kAnswer:
+      // The zero of this state stands for the one of kPause: the wheel has to come to a stand within its wait.
+      if (!stood && elapsed > kPauseWait) {
+        DriveFail("STARTED_AGAIN", "The wheels did not stand after the zero",
+                  {{"speed", Rounded(std::max(std::abs(left_), std::abs(right_)), 1000)}}, now, wall);
+        return;
+      }
+      if (run.answer.empty() && elapsed > mowbite_api::kSetupPressedTime) {
+        DriveFail("NOT_DONE", "No answer which wheel turns", json::object(), now, wall);
+        return;
+      }
+      if (!stood || run.answer.empty()) return;
+      [[fallthrough]];
     case Drive::kMeasure: {
       const Part& part = step.parts[run.part];
       const WheelPart& signs = WheelPartOf(part.id);
@@ -664,11 +681,15 @@ void Program::TickWheels(double now, double wall) {
         return;
       }
       run.part_states[run.part] = "ok";
-      EnterDrive(Drive::kPause, now, wall);
+      if (run.drive == Drive::kAnswer) {
+        NextPass(now, wall);
+      } else {
+        EnterDrive(Drive::kPause, now, wall);
+      }
       return;
     }
     case Drive::kPause:
-      if (Standing(now) && still_since_ >= run.drive_began) {
+      if (stood) {
         NextPass(now, wall);
       } else if (elapsed > kPauseWait) {
         DriveFail("STARTED_AGAIN", "The wheels did not stand after the zero",
@@ -713,8 +734,8 @@ void Program::OnEndAnswer(bool success, const std::string& code, double now, dou
 
 std::optional<Refusal> Program::AnswerWheel(const Step& step, const json& params) {
   const std::string& name = mowbite_api::SetupWheelQuestion().id;
-  if (!IsRun(step) || step.parts[run_->part].id != "one_wheel" || run_->drive != Drive::kMeasure ||
-      !run_->answer.empty()) {
+  if (!IsRun(step) || step.parts[run_->part].id != "one_wheel" ||
+      (run_->drive != Drive::kMeasure && run_->drive != Drive::kAnswer) || !run_->answer.empty()) {
     return Refuse("WRONG_METHOD", step.id + " asks nothing right now");
   }
   const json none = json::object();

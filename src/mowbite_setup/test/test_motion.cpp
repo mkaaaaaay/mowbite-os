@@ -167,6 +167,7 @@ struct Mower {
     program.Tick(now, kWall + now);
     if (const auto release = program.TakeRelease()) {
       releases++;
+      release_reasons.push_back(release->reason);
       if (release->latch_count == hardware.latch_count && !hardware.stop && !hardware.bumper_left) {
         hardware.emergency_reason = 0;
       }
@@ -363,6 +364,7 @@ struct Mower {
   bool blade_runs_on = false;
   bool restarts_blade = false;
   int releases = 0;
+  std::vector<std::string> release_reasons;
   int silences = 0;
   std::vector<json> ends;
   std::vector<std::string> motion_ends;
@@ -445,6 +447,46 @@ TEST(Motion, WheelsTurnPartByPartAndOneWheelIsAskedFor) {
   EXPECT_EQ(mower.motion_ends, std::vector<std::string>{"wheels"});
   EXPECT_FALSE(mower.program.MotionNow());
   EXPECT_FALSE(mower.program.CommandNow());
+}
+
+// After answer_time the wheel of one_wheel stands and the question stays for kSetupPressedTime.
+TEST(Motion, OneWheelStandsAfterItsTurnAndNoAnswerIsNotDone) {
+  const auto asks = [](Mower& mower) {
+    const json step = mower.StepState("wheels");
+    for (const auto& input : step["inputs"]) {
+      if (input["name"] == "wheel") return input["ask"].get<bool>();
+    }
+    return false;
+  };
+  const auto until_asked = [&asks](Mower& mower) {
+    for (const double end = mower.now + 25; mower.now < end && !asks(mower);) mower.Step();
+    return asks(mower);
+  };
+  Mower late;
+  ASSERT_EQ(late.Start("wheels"), "");
+  ASSERT_TRUE(until_asked(late));
+  late.Run(10.5);
+  ASSERT_TRUE(late.ends.empty()) << late.ends.back().dump();
+  EXPECT_TRUE(asks(late));
+  ASSERT_TRUE(late.program.CommandNow());
+  EXPECT_EQ(late.program.CommandNow()->linear, 0.0);
+  late.Run(20);
+  EXPECT_TRUE(late.ends.empty());
+  json params = {{"step", "wheels"}, {"version", late.program.version()}, {"values", {{"wheel", "right"}}}};
+  EXPECT_FALSE(late.program.Answer(params, late.now, kWall + late.now));
+  const json end = late.RunToEnd(10);
+  EXPECT_EQ(end["state"], "ok") << end.dump();
+  EXPECT_NEAR(ValueOf(late.StepState("wheels"), "one_wheel")["value"].get<double>(), 0.05, 0.005);
+
+  Mower none;
+  ASSERT_EQ(none.Start("wheels"), "");
+  ASSERT_TRUE(until_asked(none));
+  const double asked = none.now;
+  const json failed = none.RunToEnd(45);
+  EXPECT_EQ(failed["reason"], "NOT_DONE") << failed.dump();
+  EXPECT_GT(none.now - asked, 10 + mowbite_api::kSetupPressedTime - 1);
+  EXPECT_EQ(none.StepState("wheels")["state"], "open");
+  EXPECT_FALSE(none.program.TakeLock());
 }
 
 TEST(Motion, AWrongAnswerOrSwappedWheelsFail) {
@@ -539,6 +581,9 @@ TEST(Motion, DriverEndComesBackLatchedAndIsReleased) {
   EXPECT_EQ(end["state"], "ok") << end.dump();
   EXPECT_NEAR(ValueOf(mower.StepState("driver_end"), "return")["value"].get<double>(), 3.8, 0.1);
   EXPECT_EQ(mower.hardware.emergency_reason, 0u);
+  // The latch came from the step, not from an input: the reason says so.
+  ASSERT_FALSE(mower.release_reasons.empty());
+  for (const auto& reason : mower.release_reasons) EXPECT_EQ(reason, "setup: the latch of the step was checked");
 
   Mower gone;
   gone.comes_back = false;
@@ -629,15 +674,6 @@ TEST(Motion, TheQuestionPressedWaitsWithoutKeep) {
   const json end = mower.RunToEnd(1);
   EXPECT_EQ(end["reason"], "NOT_SEEN") << end.dump();
   EXPECT_TRUE(mower.program.TakeLock().has_value());
-}
-
-TEST(Motion, NoAnswerWhichWheelTurnsIsNotDone) {
-  Mower mower;
-  ASSERT_EQ(mower.Start("wheels"), "");
-  const json end = mower.RunToEnd(40);
-  EXPECT_EQ(end["reason"], "NOT_DONE") << end.dump();
-  EXPECT_EQ(mower.StepState("wheels")["state"], "open");
-  EXPECT_FALSE(mower.program.TakeLock());
 }
 
 TEST(Motion, WheelsThatRunOnCloseTheLock) {
