@@ -280,8 +280,17 @@ class TestObstacleAvoid(unittest.TestCase):
         print(f"ball: nearest {nearest:.2f} m, {avoided['left_out']:.1f} m left out")
         place()
 
+    def mow_anew(self):
+        """Ends mowing and starts it again: the circles go with it, the job goes on."""
+        p = self.probe
+        p.act("mower_logic:mowing/abort_mowing")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 30), "mowing did not end")
+        p.act("mower_logic:idle/start_mowing")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 60), "mowing did not start")
+
     def test_03_around_a_ball_amid_the_lanes_little_stays_unmowed(self):
         p = self.probe
+        self.mow_anew()
         start = p.straight_run(5.0, timeout=600.0, ahead_inner=2.2)
         self.assertIsNotNone(start, "no straight run amid the lanes")
         x, y = point(start, FRONT + BALL_RADIUS + BALL_GAP)
@@ -290,13 +299,10 @@ class TestObstacleAvoid(unittest.TestCase):
         place(ball(x, y))
         avoided = p.event(since, "OBSTACLE_AVOIDED", 30)
         self.assertIsNotNone(avoided, [e["type"] for e in p.events[since:]])
-        # The lanes go on side by side: once the mower mows AROUND and a bit more off the ball's lane, the band of the
-        # lanes around it is done.
-        c, s = math.cos(start["yaw"]), math.sin(start["yaw"])
-        aside = lambda t: abs(-(t["x"] - x) * s + (t["y"] - y) * c)  # noqa: E731
-        reached = p.wait(lambda: aside(p.truth()) > AROUND + 0.4, 900)
+        # The planner does not mow the lanes in their order: the patch is judged once the job is done.
+        done = p.event(since, "JOB_COMPLETE", 1500)
         place()
-        self.assertTrue(reached, "the lanes never got past the ball")
+        self.assertIsNotNone(done, "the job did not complete")
         with p.lock:
             whole = list(p.track)
         # The lanes before the ball count as mowed too.
@@ -314,9 +320,11 @@ class TestObstacleAvoid(unittest.TestCase):
     def test_04_a_person_in_the_way_is_waited_for(self):
         p = self.probe
         # No circle left from the balls: the mower mows lanes, no way around.
+        if p.robot.current_state != "MOWING":
+            p.act("mower_logic:idle/start_mowing")
         circles = lambda: [e for e in p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]  # noqa
                            if e["keep_out_r"] is not None]
-        self.assertTrue(p.wait(lambda: not circles(), 120), "a circle stays")
+        self.assertTrue(p.wait(lambda: not circles() and p.robot.current_state == "MOWING", 120), "no mowing")
         start = p.straight_run(5.0)
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, FRONT + 0.25 + 2.0)
