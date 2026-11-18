@@ -161,6 +161,8 @@ class McuNode : public rclcpp::Node {
     imu_roll_offset_deg_ = declare_parameter("imu_roll_offset_deg", 0.0);
     imu_pitch_offset_deg_ = declare_parameter("imu_pitch_offset_deg", 0.0);
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
+    // The sensors that send hw/obstacles, as their ids there; empty while none does.
+    obstacle_sources_ = declare_parameter("obstacle_sources", std::vector<std::string>{});
     safety_measurement_date_ = read_only_ ? "" : declare_parameter("safety_measurement_date", "");
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this Tron yet: remote control only");
@@ -644,6 +646,7 @@ class McuNode : public rclcpp::Node {
     msg.driver_end = !read_only_;
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
+    msg.obstacle_sources = obstacle_sources_;
     capabilities_pub_->publish(msg);
   }
 
@@ -962,6 +965,7 @@ class McuNode : public rclcpp::Node {
   // When the process ends after hw/end, under mutex_.
   std::optional<double> end_at_s_;
   std::string safety_measurement_date_;
+  std::vector<std::string> obstacle_sources_;
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
   // BlockOf the last hw/status, under mutex_.
