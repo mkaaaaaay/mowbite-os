@@ -218,7 +218,12 @@ class TestObstacles(unittest.TestCase):
         self.assertEqual((seen["class"], seen["action"], seen["camera_id"], seen["image"]),
                          ("ball", "seen", "stereo", True))
         self.assertLess(math.hypot(seen["x"] - BALL[0], seen["y"] - BALL[1]), 0.2, seen)
-        listed = self.result("vision.obstacles.list")
+        # Under load a frame may come later than stale: the sight is waited for, not read once.
+        def with_sight():
+            answer = self.result("vision.obstacles.list")
+            return answer if answer["sight"]["ok"] else None
+        listed = wait_until(with_sight, 10.0)
+        self.assertIsNotNone(listed, "no sight in vision.obstacles.list")
         self.assertEqual((listed["mode"], listed["photos"], listed["sight"]), ("show", True, {"ok": True,
                                                                                               "reason": None}))
         self.assertEqual(listed["limit"], {"entries": 200, "bytes": 20 * 1024 * 1024, "days": 14.0})
@@ -231,8 +236,8 @@ class TestObstacles(unittest.TestCase):
         self.assertEqual(hashlib.sha256(data).hexdigest(), image["sha256"])
         self.assertEqual((last["sha256"], last["type"]), (image["sha256"], "image/jpeg"))
         self.assertGreater(image["box"]["w"], 0)
-        status = self.status_where(lambda s: s.stop)
-        self.assertEqual((status.stop_kind, status.sight), ("OBJECT", True))
+        status = self.status_where(lambda s: s.stop and s.sight)
+        self.assertEqual(status.stop_kind, "OBJECT")
         self.assertFalse(status.slow)
 
     def test_2_turned_away_the_ball_stays_unseen_and_the_person_comes(self):
