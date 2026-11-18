@@ -1395,7 +1395,7 @@ TEST_F(FilterTest, AFailureLatchesHighLevelOnceAndTheReleaseLeavesTheLockClosed)
   EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
 }
 
-TEST_F(FilterTest, TheFirstLookAndTheOneAfterAnUnreadableFileOnlyTakeTheCount) {
+TEST_F(FilterTest, TheFirstLookOnlyTakesTheCountAndAnUnreadableFileKeepsIt) {
   filter_.OnSafetyLock(true, false, 4);
   EXPECT_EQ(filter_.Latched(), 0u);
   // Unreadable: closed, and the count of the program starts anew after it.
@@ -1414,11 +1414,28 @@ TEST_F(FilterTest, TheFirstLookAndTheOneAfterAnUnreadableFileOnlyTakeTheCount) {
   EXPECT_EQ(filter_.Latched(), 0u);
 }
 
-TEST_F(FilterTest, AfterAnOpenLockTheCountStartsAtZero) {
+TEST_F(FilterTest, AnOpenLockKeepsTheCount) {
   filter_.OnSafetyLock(true, false, 3);
   filter_.OnSafetyLock(false, false, 0);
   EXPECT_EQ(filter_.Latched(), 0u);
-  // The program keeps its count: the next failure is 4, and any count over 0 is new.
+  // The program keeps its count: the next failure is 4.
   filter_.OnSafetyLock(true, false, 4);
+  EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
+}
+
+TEST_F(FilterTest, TheSummaryClosingWithTheOldCountLatchesNothing) {
+  // A failure earlier, the lock opened by a reset, then the summary closes it with the same count.
+  filter_.OnSafetyLock(false, false, 0);
+  filter_.OnSafetyLock(true, false, 1);
+  ASSERT_EQ(filter_.Latched(), kReasonHighLevel);
+  ASSERT_TRUE(filter_.OnRelease(now_).allowed);
+  filter_.OnReleaseAnswer(true, now_);
+  filter_.OnSafetyLock(false, false, 0);
+  filter_.OnSafetyLock(true, false, 1);
+  EXPECT_EQ(filter_.Latched(), 0u);
+  EXPECT_TRUE(filter_.LockClosed());
+  // A real failure while the file could not be read still latches.
+  filter_.OnSafetyLock(true, true, 0);
+  filter_.OnSafetyLock(true, false, 2);
   EXPECT_EQ(filter_.Latched(), kReasonHighLevel);
 }

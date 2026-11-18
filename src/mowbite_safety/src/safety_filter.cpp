@@ -402,11 +402,12 @@ void SafetyFilter::OnRestartHold(bool present) {
 
 void SafetyFilter::OnSafetyLock(bool closed, bool unreadable, uint32_t failures) {
   lock_closed_ = closed;
-  if (unreadable) {
-    lock_failures_.reset();
+  // An unreadable file and an open lock keep the count to compare with; an open lock at the start counts as none.
+  if (unreadable) return;
+  if (!closed) {
+    if (!lock_failures_) lock_failures_ = 0;
     return;
   }
-  if (!closed) failures = 0;
   if (lock_failures_ && failures > *lock_failures_) {
     Latch(kReasonHighLevel, kLockClosed);
   }

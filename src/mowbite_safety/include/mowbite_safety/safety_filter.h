@@ -136,9 +136,10 @@ class SafetyFilter {
   // with a release; the logic removes the file before it asks for one.
   void OnRestartHold(bool present);
   // <data_dir>/safety_lock.json of the setup program (mowbite_hold::ReadSafetyLock): while closed, autonomous drives
-  // and those in the station frame do not pass, whatever the date says. When failures goes up over what the last
-  // readable look showed, HIGH_LEVEL latches like TILT; the first look after the start and the one after an unreadable
-  // file only take the count. A release does not open the lock.
+  // and those in the station frame do not pass, whatever the date says. When a closed lock shows more failures than
+  // the last closed one (none: 0 after an open lock at the start), HIGH_LEVEL latches like TILT; the first look at a
+  // closed lock after the start only takes the count. An open lock or an unreadable file keeps the count, so closing
+  // again with the same count (the summary of the setup program) latches nothing. A release does not open the lock.
   void OnSafetyLock(bool closed, bool unreadable, uint32_t failures);
   // The own latch for hw/emergency: once when it is new, again every second while hw/status does not show it.
   std::optional<LatchRequest> TakeLatchRequest(double now);
@@ -240,7 +241,7 @@ class SafetyFilter {
   uint32_t latched_ = 0;
   bool restart_hold_ = false;
   bool lock_closed_ = false;
-  // failures of the last readable look at the lock, none before it and after an unreadable one.
+  // failures of the last closed lock, 0 after an open one at the start, none before the first look.
   std::optional<uint32_t> lock_failures_;
   std::string latch_reason_;
   // The latch a release took, until the driver answered.
