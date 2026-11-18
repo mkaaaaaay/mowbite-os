@@ -71,14 +71,14 @@ class ObstacleService {
   // After a frame: confirmed tracks become entries, the seen ones move their entries, ended ones are forgotten.
   void OnFrame(const Tracker& tracker, const FrameResult& frame, double now);
   void OnEnded(const std::vector<uint32_t>& tracks);
-  void OnImage(const Tracker& tracker, Image image, double now);
+  void OnImage(const Tracker& tracker, Image image);
   // Events that waited for a photo, writing the list, the limits.
   void Tick(double now);
   // Writes the list now if it changed.
   void Flush();
 
   // vision.obstacles.*; nullopt for another method.
-  std::optional<Outcome> Call(const std::string& method, const Json& params, double now);
+  std::optional<Outcome> Call(const std::string& method, const Json& params);
   // Details of OBSTACLE_SEEN and OBSTACLES_CLEARED by type, in their order.
   std::vector<std::pair<std::string, Json>> TakeEvents();
 
@@ -96,7 +96,7 @@ class ObstacleService {
   void RemovePhotos(const std::vector<std::string>& names);
   Outcome List(const Json& params) const;
   Outcome Piece(const Json& params) const;
-  Outcome Clear(const Json& params, double now);
+  Outcome Clear(const Json& params);
 
   ServiceConfig config_;
   std::function<void(const std::string&)> warn_;

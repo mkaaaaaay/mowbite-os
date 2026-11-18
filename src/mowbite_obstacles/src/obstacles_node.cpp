@@ -223,8 +223,7 @@ class ObstaclesNode : public rclcpp::Node {
         "hw/obstacle_images", 2, [this](const mowbite_msgs::msg::ObstacleImage& msg) {
           service_->OnImage(tracker_,
                             {msg.source, Seconds(msg.header.stamp), static_cast<int>(msg.width),
-                             static_cast<int>(msg.height), std::string(msg.jpeg.begin(), msg.jpeg.end())},
-                            Now());
+                             static_cast<int>(msg.height), std::string(msg.jpeg.begin(), msg.jpeg.end())});
           Publish();
         });
   }
@@ -288,7 +287,7 @@ class ObstaclesNode : public rclcpp::Node {
     const std::optional<Outcome> outcome =
         params.is_discarded()
             ? Outcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON"}
-            : service_->Call(request.method, params, Now());
+            : service_->Call(request.method, params);
     if (!outcome) return;
     if (outcome->ok) {
       mowbite_msgs::msg::RpcResponse response;

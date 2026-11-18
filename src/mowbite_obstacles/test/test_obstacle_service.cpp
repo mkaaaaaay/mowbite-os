@@ -74,7 +74,7 @@ class ServiceTest : public ::testing::Test {
   }
 
   Json Call(const std::string& method, const Json& params = Json::object()) {
-    const std::optional<Outcome> outcome = service->Call(method, params, 1.0e9);
+    const std::optional<Outcome> outcome = service->Call(method, params);
     EXPECT_TRUE(outcome.has_value());
     if (!outcome->ok) return Json{{"error", outcome->code}, {"message", outcome->message}};
     return outcome->result;
@@ -133,7 +133,7 @@ TEST_F(ServiceTest, ThePhotoOfTheFrameComesWithTheEventAndStays) {
   Feed(kT + 0.2, {Ball()});
   EXPECT_TRUE(Types().empty()) << "OBSTACLE_SEEN waits for the photo";
   const std::string jpeg = "\xff\xd8 a jpeg \xff\xd9";
-  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, jpeg}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, jpeg});
   auto events = service->TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].second["image"], true);
@@ -171,8 +171,8 @@ TEST_F(ServiceTest, AnImageOfAnotherFrameIsNoPhoto) {
   service->SetPhotos(true);
   Feed(kT, {Ball()});
   Feed(kT + 0.2, {Ball()});
-  service->OnImage(tracker, {"stereo", kT + 0.1, 640, 480, "x"}, kT + 0.3);
-  service->OnImage(tracker, {"rear", kT + 0.2, 640, 480, "x"}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.1, 640, 480, "x"});
+  service->OnImage(tracker, {"rear", kT + 0.2, 640, 480, "x"});
   EXPECT_TRUE(Call("vision.obstacles.list")["obstacles"][0]["image"].is_null());
 }
 
@@ -180,7 +180,7 @@ TEST_F(ServiceTest, ImagesAreTakenOnlyWhileWanted) {
   service->SetMode(1);
   Feed(kT, {Ball()});
   Feed(kT + 0.2, {Ball()});
-  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "x"}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "x"});
   EXPECT_TRUE(Call("vision.obstacles.list")["obstacles"][0]["image"].is_null());
   EXPECT_FALSE(fs::exists(fs::path(dir.path()) / "obstacles" / "o1.jpg"));
 }
@@ -190,7 +190,7 @@ TEST_F(ServiceTest, TheListOutlivesARestartAndStrayPhotosGo) {
   service->SetPhotos(true);
   Feed(kT, {Ball()});
   Feed(kT + 0.2, {Ball()});
-  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"});
   service->Flush();
   std::ofstream(fs::path(dir.path()) / "obstacles" / "stray.jpg") << "x";
   const Json before = Call("vision.obstacles.list")["obstacles"];
@@ -205,7 +205,7 @@ TEST_F(ServiceTest, AnEntryWhosePhotoIsGoneLosesIt) {
   service->SetPhotos(true);
   Feed(kT, {Ball()});
   Feed(kT + 0.2, {Ball()});
-  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"});
   service->Flush();
   fs::remove(fs::path(dir.path()) / "obstacles" / "o1.jpg");
   Make();
@@ -219,7 +219,7 @@ TEST_F(ServiceTest, ClearRemovesEntriesWithTheirPhotos) {
   service->SetPhotos(true);
   Feed(kT, {Ball()});
   Feed(kT + 0.2, {Ball()});
-  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"}, kT + 0.3);
+  service->OnImage(tracker, {"stereo", kT + 0.2, 640, 480, "jpeg"});
   service->TakeEvents();
   EXPECT_EQ(Call("vision.obstacles.clear", {{"id", 5}})["error"], -32602);
   EXPECT_EQ(Call("vision.obstacles.clear", {{"id", "1"}})["error"], -32602);
@@ -238,7 +238,7 @@ TEST_F(ServiceTest, BadParametersAreRefused) {
   EXPECT_EQ(Call("vision.obstacles.list", {{"since", "x"}})["error"], -32602);
   EXPECT_EQ(Call("vision.obstacles.image", {{"name", "../list.json"}})["error"], -32602);
   EXPECT_EQ(Call("vision.obstacles.image", Json::object())["error"], -32602);
-  EXPECT_FALSE(service->Call("camera.list", Json::object(), kT).has_value());
+  EXPECT_FALSE(service->Call("camera.list", Json::object()).has_value());
 }
 
 TEST_F(ServiceTest, TheSightIsToldOnceItSettles) {

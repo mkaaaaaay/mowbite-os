@@ -125,7 +125,7 @@ void ObstacleService::OnEnded(const std::vector<uint32_t>& tracks) {
   for (const uint32_t id : tracks) list_.ForgetTrack(id);
 }
 
-void ObstacleService::OnImage(const Tracker& tracker, Image image, double) {
+void ObstacleService::OnImage(const Tracker& tracker, Image image) {
   if (!PhotosWanted() || config_.dir.empty() || image.jpeg.empty() || image.jpeg.size() > kMaxImageBytes) return;
   images_.push_back(std::move(image));
   while (images_.size() > config_.images) images_.pop_front();
@@ -248,11 +248,11 @@ void ObstacleService::Flush() {
   }
 }
 
-std::optional<Outcome> ObstacleService::Call(const std::string& method, const Json& params, double now) {
+std::optional<Outcome> ObstacleService::Call(const std::string& method, const Json& params) {
   if (!params.is_object()) return Refused("The parameters are no object");
   if (method == "vision.obstacles.list") return List(params);
   if (method == "vision.obstacles.image") return Piece(params);
-  if (method == "vision.obstacles.clear") return Clear(params, now);
+  if (method == "vision.obstacles.clear") return Clear(params);
   return std::nullopt;
 }
 
@@ -304,13 +304,11 @@ Outcome ObstacleService::Piece(const Json& params) const {
           ""};
 }
 
-Outcome ObstacleService::Clear(const Json& params, double) {
+Outcome ObstacleService::Clear(const Json& params) {
   uint32_t id = 0;
   const auto it = params.find("id");
   if (it != params.end() && !it->is_null()) {
-    if (!it->is_number_unsigned() && !(it->is_number_integer() && it->get<int64_t>() > 0)) {
-      return Refused("id is the id of an obstacle of the list");
-    }
+    if (!it->is_number_integer()) return Refused("id is the id of an obstacle of the list");
     const int64_t value = it->get<int64_t>();
     if (value <= 0 || value > UINT32_MAX || !list_.Get(static_cast<uint32_t>(value))) {
       return Refused("No obstacle " + std::to_string(value));
