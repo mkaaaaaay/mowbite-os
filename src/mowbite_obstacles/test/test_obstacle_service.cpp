@@ -259,7 +259,7 @@ TEST_F(ServiceTest, TheSightIsToldOnceItSettles) {
   EXPECT_TRUE(Types().empty());
 }
 
-TEST_F(ServiceTest, TheListIsWrittenAtMostEverySoOften) {
+TEST_F(ServiceTest, ANewEntryIsWrittenSoonAFollowingOneSeldom) {
   service->SetMode(1);
   const fs::path file = fs::path(dir.path()) / "obstacles" / "list.json";
   Feed(kT, {Ball()});
@@ -267,11 +267,20 @@ TEST_F(ServiceTest, TheListIsWrittenAtMostEverySoOften) {
   service->Tick(kT + 0.3);
   const std::string first = ReadFile(file);
   EXPECT_NE(first.find("\"ball\""), std::string::npos);
+  // The entry only follows its track: kept after a minute, not after five seconds.
   Feed(kT + 0.4, {Ball(2.3)});
-  service->Tick(kT + 1.0);
-  EXPECT_EQ(ReadFile(file), first);
   service->Tick(kT + 5.4);
-  EXPECT_NE(ReadFile(file), first);
+  EXPECT_EQ(ReadFile(file), first);
+  service->Tick(kT + 60.4);
+  const std::string followed = ReadFile(file);
+  EXPECT_NE(followed, first);
+  // A new entry again after five seconds.
+  Feed(kT + 60.6, {Ball(4.0)});
+  Feed(kT + 60.8, {Ball(4.0)});
+  service->Tick(kT + 61.0);
+  EXPECT_EQ(ReadFile(file), followed);
+  service->Tick(kT + 65.5);
+  EXPECT_NE(ReadFile(file), followed);
 }
 
 }  // namespace

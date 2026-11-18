@@ -1358,7 +1358,7 @@ const std::vector<SettingEntry>& LogicSettings() {
        "What obstacles the sensors see do: off, or show them in the list and on the map without any effect on "
        "driving; stop and avoid follow",
        ObstacleModes()},
-      {"obstacle_photos", true, 0, 1, 0, "",
+      {"obstacle_photos", true, 0, 1, 1, "",
        "Whether a new entry of the obstacles gets a photo of the whole image, kept on the mower only"},
   };
   return settings;
