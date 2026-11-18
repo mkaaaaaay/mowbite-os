@@ -106,8 +106,9 @@ def inner(x, y):
     return min(x - LAWN_MIN[0], LAWN_MAX[0] - x, y - LAWN_MIN[1], LAWN_MAX[1] - y)
 
 
-def unmowed(track, x, y, keep_out):
-    """m² within AROUND of x, y, outside the circle keep_out around it, that the blade never went over on the track."""
+def unmowed(track, x, y, keep_out, picture=None):
+    """m² within AROUND of x, y, outside the circle keep_out around it, that the blade never went over on the track;
+    picture gets a line of text per row (north up): # unmowed, . mowed, o the circle, blank outside."""
     n = int(round(2 * AROUND / CELL))
     cut = [[False] * n for _ in range(n)]
     for a, b in zip(track, track[1:]):
@@ -129,11 +130,18 @@ def unmowed(track, x, y, keep_out):
                 if math.hypot(ax + t * dx - cx, ay + t * dy - cy) <= BLADE_RADIUS:
                     cut[i][j] = True
     left = 0
+    rows = [[" "] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
             cx, cy = x - AROUND + (i + 0.5) * CELL, y - AROUND + (j + 0.5) * CELL
-            if not cut[i][j] and math.hypot(cx - x, cy - y) > keep_out and math.hypot(cx - x, cy - y) <= AROUND:
-                left += 1
+            r = math.hypot(cx - x, cy - y)
+            if r <= keep_out:
+                rows[n - 1 - j][i] = "o"
+            elif r <= AROUND:
+                rows[n - 1 - j][i] = "." if cut[i][j] else "#"
+                left += 0 if cut[i][j] else 1
+    if picture is not None:
+        picture.extend("".join(row[::2]) for row in rows[::2])
     return left * CELL * CELL
 
 
@@ -290,7 +298,11 @@ class TestObstacleAvoid(unittest.TestCase):
         with p.lock:
             whole = list(p.track)
         # The lanes before the ball count as mowed too.
-        left = unmowed(whole, x, y, avoided["keep_out_r"])
+        picture = []
+        left = unmowed(whole, x, y, avoided["keep_out_r"], picture)
+        cutting = sum(1 for t in whole if t.get("cutter"))
+        print(f"blade on in {cutting} of {len(whole)} poses, lanes along {math.degrees(start['yaw']):.0f} deg")
+        print("\n".join(picture))
         nearest = min(clearance(t, x, y, BALL_RADIUS) for t in whole[index:])
         print(f"amid the lanes: {left:.2f} m² unmowed outside the circle of {avoided['keep_out_r']:.2f} m, "
               f"{avoided['left_out']:.1f} m of lanes left out, nearest {nearest:.2f} m")
