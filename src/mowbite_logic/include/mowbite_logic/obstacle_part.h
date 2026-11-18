@@ -93,8 +93,9 @@ struct ObstacleNote {
 // The hold for obstacles (FP30 stop): with obstacle_mode stop on a platform proven for it, the mower stands while a
 // confirmed track lies in the stop zone, and goes on once that zone is seen free for free_wait (near_wait after a thing
 // right at the nose). A place out of view or without sight is never free; a status that stops coming starts nothing.
-// obstacle_mode show only notes where the mower would have stopped. The core applies the hold to MOWING and to the map
-// legs of DOCKING (logic_obstacle.cpp). With obstacle_mode avoid, objects alone that hold the mower and stand become
+// obstacle_mode show only notes where the mower would have stopped. The core applies the hold to MOWING, to the map
+// legs of DOCKING (logic_obstacle.cpp) and to a start of mowing (WaiveForStart, StartProblem), as undocking does not
+// wait for it. With obstacle_mode avoid, objects alone that hold the mower and stand become
 // circles to drive around (AvoidDue, Avoid); a confirmed object inside a circle holds the mower no more, a person or
 // animal there still does.
 class ObstaclePart {
@@ -125,6 +126,12 @@ class ObstaclePart {
   // mowing.continue in a hold: the things that held it and lie out of view now count no more until a sensor sees them
   // again, and the hold ends. False, and nothing changes, while one of them is in view.
   bool Waive();
+  // A start of mowing: of what holds the mower a person or animal counts, an object only if objects is set (the way out
+  // of the station leads forwards; objects hold only ahead of the nose, and mowing holds for them as before).
+  // mowing.start lets go what of that lies out of view, like Waive; false, and nothing changes, while one is in view.
+  bool WaiveForStart(bool objects);
+  // OBSTACLE while such a thing holds the mower, else empty: a run of the schedule waives nothing.
+  Reason StartProblem(bool objects) const;
   std::vector<ObstacleNote> TakeNotes();
 
   // In a hold of objects alone that stood avoid_wait s and was not refused: the circles to keep out of around them;
@@ -149,6 +156,8 @@ class ObstaclePart {
  private:
   // The tracks that hold the mower: confirmed in the stop zone, unless waived and out of view.
   std::vector<const ObstacleTrackSample*> Holders(const ObstacleSample& sample) const;
+  // The holders a start counts (WaiveForStart).
+  std::vector<const ObstacleTrackSample*> StartHolders(bool objects) const;
   void Note(uint32_t id, const std::string& action);
   // A confirmed object inside a circle, with avoid_still to spare.
   bool Inside(const ObstacleTrackSample& track, const AvoidCircle& circle) const;

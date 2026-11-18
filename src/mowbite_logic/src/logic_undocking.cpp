@@ -60,6 +60,10 @@ Reason UndockingPart::OnDockCheck(CoreAccess core, bool ok, double x, double y, 
   }
   if (why.empty() && purpose == DockCheck::kMowing) why = core.Busy();
   if (why.empty() && purpose == DockCheck::kMowing) why = core.HoldProblem();
+  // Undocking does not wait for obstacles: what holds the mower now refuses the start.
+  if (why.empty() && purpose == DockCheck::kMowing) {
+    why = core.obstacle_part().StartProblem(core.LeavesForwards());
+  }
   if (why.empty()) {
     why = purpose == DockCheck::kMowing ? core.RequestMowProblem(core.start_request()) : core.DriveProblem();
   }

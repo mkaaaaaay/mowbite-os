@@ -41,6 +41,9 @@ Reason MowingPart::RequestStart(CoreAccess core, StartRequest request, const Rea
                                 CommandOutcome* out) {
   Reason why = core.StartProblem(request.tasks);
   if (why.empty()) why = node_problem;
+  if (why.empty() && !core.obstacle_part().WaiveForStart(core.LeavesForwards())) {
+    why = core.obstacle_part().StartProblem(core.LeavesForwards()).WithMessage("An obstacle in view is in the way");
+  }
   if (!why.empty()) {
     core.RefuseStart(why);
     return why;

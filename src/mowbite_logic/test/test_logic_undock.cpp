@@ -322,6 +322,55 @@ TEST(Undock, WhatChangedMeanwhileKeepsMowingFromStarting) {
   EXPECT_EQ(outcome->why.code, "RAIN");
 }
 
+namespace {
+
+// A confirmed thing in the stop zone: id, kind, confirmed, in view, edge ahead of the nose (m), zone, x, y, radius, sigma.
+ObstacleSample Holding(const char* kind, bool in_view, double ahead) {
+  return {true, {{7, kind, true, in_view, ahead, 2, 0.0, 0.0, 0.1, 0.05}}};
+}
+
+}  // namespace
+
+// Undocking does not wait for obstacles (G45): a start goes past what is out of view, like continue, and only then.
+TEST(Undock, AStartGoesPastAnAnimalOutOfViewOnlyAndCountsAnObjectOnTheWayOut) {
+  TestCore core = Docked();
+  core.SetObstacleMode(2, 2);
+  core.OnObstacleStatus(Holding("ANIMAL", true, -0.3), 0);
+  // The button stays: the user may let go what is out of view.
+  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
+  auto events = core.TakeEvents();
+  const Event* refused = Find(events, "MOWING_REFUSED");
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->details["reason"], "OBSTACLE");
+  EXPECT_EQ(refused->details["kind"], "ANIMAL");
+  EXPECT_FALSE(core.TakeDockCheck());
+  // Behind the mower out of view: the user lets it go with the start.
+  core.OnObstacleStatus(Holding("ANIMAL", false, -0.3), 0.1);
+  StartUndocking(core);
+  EXPECT_TRUE(core.Undocking());
+  // The Tron leaves forwards: an object on the way out refuses a start, then a check that passes.
+  TestCore ahead = Docked();
+  ahead.SetObstacleMode(2, 2);
+  ahead.OnObstacleStatus(Holding("OBJECT", true, 0.4), 0);
+  EXPECT_EQ(ahead.OnAction(kStart), ActionResult::kRejected);
+  ahead.OnObstacleStatus(Holding("OBJECT", false, 0.4), 0.1);
+  ASSERT_EQ(ahead.OnAction(kStart), ActionResult::kDone);
+  ASSERT_TRUE(ahead.TakeDockCheck());
+  // Seen again during the reference check: the start is refused there.
+  ahead.OnObstacleStatus(Holding("OBJECT", true, 0.4), 0.2);
+  ahead.TakeEvents();
+  EXPECT_EQ(ahead.OnDockCheck(true, kStartX, kDock.y, 0.02f, "").code, "OBSTACLE");
+  EXPECT_TRUE(ahead.Idle());
+  ASSERT_TRUE(Find(ahead.TakeEvents(), "MOWING_REFUSED"));
+  // Leaving backwards an object ahead holds no start; mowing holds for it after undocking.
+  TestCore back = Docked(kLawn, Front());
+  back.SetObstacleMode(2, 2);
+  back.OnObstacleStatus(Holding("OBJECT", true, 0.4), 0);
+  StartUndocking(back);
+  EXPECT_TRUE(back.Undocking());
+}
+
 TEST(Undock, ADriveFromTheStationGoesOnAfterUndocking) {
   TestCore core = Docked();
   ASSERT_TRUE(core.DriveProblem().empty()) << core.DriveProblem().code;

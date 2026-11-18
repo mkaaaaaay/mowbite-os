@@ -103,6 +103,10 @@ bool CoreFacts::ContactsBack() const {
   return read_->ContactsBack();
 }
 
+bool CoreFacts::LeavesForwards() const {
+  return read_->LeavesForwards();
+}
+
 const char* CoreFacts::LeaveWords() const {
   return read_->LeaveWords();
 }

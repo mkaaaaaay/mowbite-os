@@ -247,6 +247,40 @@ TEST(ScheduleStart, RefusalsInTheirOrderWithSourceSchedule) {
   EXPECT_EQ(refused(day, Reason("PLANNER_MISSING", "The planner is not running")).code, "PLANNER_MISSING");
 }
 
+// A run of the schedule waives nothing: what holds the mower refuses it like rain, also after the announcement.
+TEST(ScheduleStart, AnAnimalOutOfViewThatHoldsTheMowerRefusesTheRun) {
+  const ObstacleSample animal{true, {{7, "ANIMAL", true, false, -0.3, 2, 0.0, 0.0, 0.1, 0.05}}};
+  TestCore core = Docked();
+  core.SetObstacleMode(2, 2);
+  core.OnObstacleStatus(animal, 0);
+  const Reason why = core.StartRun(Plan(), Reason(), 0);
+  EXPECT_EQ(why.code, "OBSTACLE");
+  EXPECT_EQ(why.fields["kind"], "ANIMAL");
+  const auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].type, "MOWING_REFUSED");
+  EXPECT_EQ(events[0].details["source"], "schedule");
+  EXPECT_TRUE(core.TakeRuns().empty());
+  // Came during the announcement: refused at its end.
+  TestCore announced = Docked();
+  announced.SetObstacleMode(2, 2);
+  ASSERT_TRUE(announced.StartRun(Plan(), Reason(), 0).empty());
+  announced.OnObstacleStatus(animal, 5);
+  announced.OnTick(kAnnounceS);
+  EXPECT_FALSE(announced.TakeDockCheck());
+  EXPECT_EQ(Ended(announced), "ENDED REFUSED OBSTACLE");
+  // Came during the reference check: refused there, before undocking.
+  TestCore checked = Docked();
+  checked.SetObstacleMode(2, 2);
+  ASSERT_TRUE(checked.StartRun(Plan(), Reason(), 0).empty());
+  checked.OnTick(kAnnounceS);
+  ASSERT_TRUE(checked.TakeDockCheck());
+  checked.OnObstacleStatus(animal, kAnnounceS + 0.1);
+  EXPECT_EQ(checked.OnDockCheck(true, kStartX, kDock.y, 0.02f, "").code, "OBSTACLE");
+  EXPECT_FALSE(checked.Undocking());
+  EXPECT_EQ(Ended(checked), "ENDED REFUSED OBSTACLE");
+}
+
 TEST(ScheduleStart, InTheDarkOnlyWithDarkAllowedAndADatumForTheSun) {
   ScheduleRun dark = Plan();
   dark.dark_allowed = true;

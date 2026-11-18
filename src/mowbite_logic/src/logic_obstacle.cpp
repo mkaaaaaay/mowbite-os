@@ -23,6 +23,11 @@ int Weight(const std::string& kind) {
   return 0;
 }
 
+Reason ObstacleWhy(const std::string& worst_kind) {
+  const std::string kind = worst_kind.empty() ? "UNKNOWN" : worst_kind;
+  return Reason("OBSTACLE", "An obstacle is in the way (" + kind + ")").With("kind", kind);
+}
+
 // Corners of KeepOutRing.
 constexpr int kKeepOutCorners = 24;
 
@@ -188,8 +193,7 @@ void ObstaclePart::Tick(double now_s) {
 }
 
 Reason ObstaclePart::Why() const {
-  const std::string kind = kind_.empty() ? "UNKNOWN" : kind_;
-  return Reason("OBSTACLE", "An obstacle is in the way (" + kind + ")").With("kind", kind);
+  return ObstacleWhy(kind_);
 }
 
 bool ObstaclePart::Waive() {
@@ -198,6 +202,31 @@ bool ObstaclePart::Waive() {
   for (const auto* track : holders) waived_.insert(track->id);
   EndHold();
   return true;
+}
+
+std::vector<const ObstacleTrackSample*> ObstaclePart::StartHolders(bool objects) const {
+  std::vector<const ObstacleTrackSample*> counted;
+  if (!hold_) return counted;
+  for (const auto* track : Holders(last_)) {
+    if (objects || Weight(track->kind) >= Weight("ANIMAL")) counted.push_back(track);
+  }
+  return counted;
+}
+
+bool ObstaclePart::WaiveForStart(bool objects) {
+  const auto counted = StartHolders(objects);
+  if (fresh_ && std::any_of(counted.begin(), counted.end(), [](const auto* t) { return t->in_view; })) return false;
+  for (const auto* track : counted) waived_.insert(track->id);
+  if (hold_ && Holders(last_).empty()) EndHold();
+  return true;
+}
+
+Reason ObstaclePart::StartProblem(bool objects) const {
+  std::string kind;
+  for (const auto* track : StartHolders(objects)) {
+    if (kind.empty() || Weight(track->kind) > Weight(kind)) kind = track->kind;
+  }
+  return kind.empty() ? Reason() : ObstacleWhy(kind);
 }
 
 std::vector<AvoidCircle> ObstaclePart::AvoidDue(double now_s) const {

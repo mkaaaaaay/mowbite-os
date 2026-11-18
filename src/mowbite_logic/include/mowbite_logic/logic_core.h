@@ -435,6 +435,8 @@ class LogicCore {
   double DockedHeading() const;
   // The contacts lie behind base_link: the mower backs onto the station and leaves it forwards.
   bool ContactsBack() const;
+  // On the station with the contacts at the back: the way out leads forwards.
+  bool LeavesForwards() const;
   // "straight ahead" or "straight back": the way off the station, for the messages.
   const char* LeaveWords() const;
   void BeginDockCheck(DockCheck purpose);

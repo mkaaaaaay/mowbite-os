@@ -187,6 +187,46 @@ TEST(ObstaclePart, TheUserLetsItGoPastWhatNoSensorSees) {
   EXPECT_TRUE(part.Holding());
 }
 
+TEST(ObstaclePart, AStartLetsGoALivingThingOutOfViewAndIsRefusedByOneInView) {
+  ObstaclePart part = Armed();
+  EXPECT_TRUE(part.StartProblem(true).empty());
+  EXPECT_TRUE(part.WaiveForStart(true));
+  part.OnStatus(Seen({Track(1, "ANIMAL", kStop, -0.5, false)}), 0, false);
+  ASSERT_TRUE(part.Holding());
+  const Reason why = part.StartProblem(false);
+  EXPECT_EQ(why.code, "OBSTACLE");
+  EXPECT_EQ(why.fields["kind"], "ANIMAL");
+  // A person in view refuses the start, and nothing is let go.
+  part.OnStatus(Seen({Track(1, "ANIMAL", kStop, -0.5, false), Track(2, "PERSON", kStop, 0.5, true)}), 0.1, false);
+  EXPECT_FALSE(part.WaiveForStart(false));
+  EXPECT_EQ(part.StartProblem(false).fields["kind"], "PERSON");
+  part.OnStatus(Seen({Track(1, "ANIMAL", kStop, -0.5, false), Track(2, "PERSON", kStop, 0.5, false)}), 0.2, false);
+  EXPECT_TRUE(part.WaiveForStart(false));
+  EXPECT_FALSE(part.Holding());
+  EXPECT_TRUE(part.StartProblem(false).empty());
+  // Seen again, the animal holds again.
+  part.OnStatus(Seen({Track(1, "ANIMAL", kStop, 0.5, true), Track(2, "PERSON", kStop, 0.5, false)}), 0.3, false);
+  EXPECT_TRUE(part.Holding());
+  EXPECT_EQ(part.StartProblem(false).fields["kind"], "ANIMAL");
+}
+
+TEST(ObstaclePart, AnObjectCountsForAStartOnlyWhenTheWayOutLeadsForwards) {
+  ObstaclePart part = Armed();
+  part.OnStatus(Seen({Track(1, "OBJECT", kStop, 0.5, true)}), 0, false);
+  ASSERT_TRUE(part.Holding());
+  EXPECT_TRUE(part.StartProblem(false).empty());
+  EXPECT_EQ(part.StartProblem(true).fields["kind"], "OBJECT");
+  EXPECT_FALSE(part.WaiveForStart(true));
+  // Not counted, it is not let go: the hold stays for mowing.
+  EXPECT_TRUE(part.WaiveForStart(false));
+  EXPECT_TRUE(part.Holding());
+  part.OnStatus(Seen({Track(1, "OBJECT", kStop, 0.5, true)}), 0.1, false);
+  EXPECT_TRUE(part.Holding());
+  // Below stop nothing holds a start.
+  part.SetMode(1, 2);
+  EXPECT_TRUE(part.StartProblem(true).empty());
+}
+
 TEST(ObstaclePart, AnObjectThatStandsThreeSecondsIsDrivenAround) {
   ObstaclePart part = Avoiding();
   EXPECT_EQ(part.mode(), 3);

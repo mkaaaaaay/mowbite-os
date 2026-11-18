@@ -73,6 +73,8 @@ Reason LogicCore::ScheduleProblem(const StartRequest& request, const ScheduleRun
   if (!DockContact()) {
     return Reason("NOT_DOCKED", "The mower is not on the docking station: a plan of the schedule starts only there");
   }
+  why = obstacle_part_.StartProblem(LeavesForwards());
+  if (!why.empty()) return why;
   if (!clock_safe_) {
     const std::string text = "The clock is not safe (" + clock_reason_ + "): a plan of the schedule does not start";
     return Reason("CLOCK_UNSAFE", text).With("clock_reason", clock_reason_);

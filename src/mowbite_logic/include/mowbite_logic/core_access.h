@@ -42,6 +42,7 @@ class CoreFacts {
   const StartRequest& start_request() const;
   double DockedHeading() const;
   bool ContactsBack() const;
+  bool LeavesForwards() const;
   const char* LeaveWords() const;
   Reason RequestMowProblem(const StartRequest& request) const;
   Reason DriveProblem() const;

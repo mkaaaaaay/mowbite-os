@@ -33,6 +33,10 @@ bool LogicCore::ContactsBack() const {
   return config_.dock_contact_x < 0;
 }
 
+bool LogicCore::LeavesForwards() const {
+  return DockContact() && ContactsBack();
+}
+
 bool LogicCore::CanDock() const {
   return config_.dock_contact_x != 0;
 }
