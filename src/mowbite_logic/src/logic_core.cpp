@@ -194,7 +194,9 @@ std::vector<Effect> LogicCore::TakeEffects() {
     SetDue<ActionsChanged>(true);
   }
   for (auto& effect : effects_) {
-    if (auto* checkpoint = std::get_if<Checkpoint>(&effect)) checkpoint->text = CheckpointText(job_.progress());
+    if (auto* checkpoint = std::get_if<Checkpoint>(&effect)) {
+      checkpoint->text = CheckpointText(mowing_.job().progress());
+    }
   }
   return effects_.Take();
 }
@@ -218,8 +220,8 @@ void LogicCore::OnPositionJump(double to_x, double to_y, double distance_m, bool
 std::string LogicCore::AddEvent(const std::string& type, json details) {
   details["x"] = last_x_;
   details["y"] = last_y_;
-  if (!job_.progress().job_id.empty()) details["job_id"] = job_.progress().job_id;
-  if (!session_id_.empty()) details["session_id"] = session_id_;
+  if (!mowing_.job().progress().job_id.empty()) details["job_id"] = mowing_.job().progress().job_id;
+  if (!mowing_.session_id().empty()) details["session_id"] = mowing_.session_id();
   if (!client_.empty() && !details.contains("client")) details["client"] = client_;
   // Who released or asked names the source there.
   if (schedule_.run() && !details.contains("source") && type != "EMERGENCY" && type != "EMERGENCY_RESET_REFUSED") {
@@ -311,7 +313,7 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   out.invalid = mowbite_api::CheckParams(*command, params, &out.invalid_field);
   StartRequest start;
   if (out.invalid.empty() && name == "mowing.start") {
-    out.invalid = ReadStartRequest(params, &start, &out.invalid_field);
+    out.invalid = mowing_.ReadStartRequest(CoreFacts(*this), params, &start, &out.invalid_field);
   }
   if (out.invalid.empty() && name == "docking.test" && params.contains("runs")) {
     const json& runs = params["runs"];
@@ -325,8 +327,9 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   // Effects may go away while the command runs, events never: its events are those after the ones before it.
   const auto is_event = [](const Effect& effect) { return std::holds_alternative<Event>(effect); };
   const auto events_before = std::count_if(effects_.begin(), effects_.end(), is_event);
-  const Reason why = name == "mowing.start" ? RequestStart(std::move(start), node_problem, &out)
-                                            : RunCommand(*command, params, node_problem, &out);
+  const Reason why = name == "mowing.start"
+                         ? mowing_.RequestStart(CoreAccess(*this), std::move(start), node_problem, &out)
+                         : RunCommand(*command, params, node_problem, &out);
   client_.clear();
   if (why.empty()) {
     out.accepted = true;
@@ -397,11 +400,11 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
   }
   if (name == "mowing.reset_job") {
     if (state_ != State::kIdle) return WrongState();
-    if (!job_.Unfinished()) return Reason("NO_JOB", "There is no unfinished job");
-    out->result["job_id"] = job_.progress().job_id;
+    if (!mowing_.job().Unfinished()) return Reason("NO_JOB", "There is no unfinished job");
+    out->result["job_id"] = mowing_.job().progress().job_id;
     // The event carries the id of the dropped job, the checkpoint is saved without it.
     AddEvent("JOB_RESET", json::object());
-    job_.Reset();
+    mowing_.job().Reset();
     CheckpointNow();
     SetDue<ActionsChanged>(true);
     return {};
@@ -410,12 +413,12 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     if (state_ != State::kMowing) return WrongState();
     const int waiting = kPauseManual | kPauseEmergency | kPauseFault;
     if (name == "mowing.pause") {
-      if (pause_ & kPauseManual) return WrongState();
+      if (mowing_.pause() & kPauseManual) return WrongState();
       Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
       return {};
     }
     if (name == "mowing.continue") {
-      if ((pause_ & waiting) == 0) return WrongState();
+      if ((mowing_.pause() & waiting) == 0) return WrongState();
       // The EMERGENCY event told already: no MOWING_REFUSED.
       if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
       Reason why = Held() ? HoldProblem() : ContinueProblem();
@@ -435,14 +438,14 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     // skip_area, skip_path: only the area or path the client saw.
     const bool area = name == "mowing.skip_area";
     const char* key = area ? "area" : "path";
-    const int now = area ? job_.progress().area : job_.progress().path;
+    const int now = area ? mowing_.job().progress().area : mowing_.job().progress().path;
     if (params.contains(key) && params[key].get<double>() != now) {
       return Reason("CHANGED", std::string("The ") + key + " changed meanwhile: nothing was skipped").With(key, now);
     }
     out->result[key] = now;
-    (area ? skip_area_ : skip_path_) = true;
-    if (area) skip_why_ = Reason("MANUAL", "Skipped by the app");
-    skip_client_ = client_;
+    (area ? mowing_.skip_area() : mowing_.skip_path()) = true;
+    if (area) mowing_.skip_why() = Reason("MANUAL", "Skipped by the app");
+    mowing_.skip_client() = client_;
     // A leg on its way ends first, its index counts.
     if (LegDrives()) {
       CancelDrive(Reason("STOPPED", "Skipped by the app"));
@@ -593,7 +596,7 @@ bool LogicCore::FollowerActive() const {
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undocking_.Leaving();
   if (state_ == State::kDocking) return docking_part_.MapLegActive();
-  return state_ == State::kMowing && pause_ == 0 && LegDrives();
+  return state_ == State::kMowing && mowing_.pause() == 0 && LegDrives();
 }
 
 void LogicCore::CancelDrive(const Reason& reason) {
@@ -610,19 +613,10 @@ void LogicCore::SetState(State state) {
   }
   // A session is one run of mowing; the job lasts until it is finished or reset.
   if (state == State::kMowing) {
-    if (job_.progress().job_id.empty()) job_.SetJobId(NewId());
-    session_id_ = NewId();
+    mowing_.Enter(CoreAccess(*this));
   }
   if (state_ == State::kMowing) {
-    session_id_.clear();
-    if (LegDrives()) CancelDrive(Reason("STOPPED", "Mowing ended"));
-    leg_ = Leg::kNone;
-    pause_ = 0;
-    pause_reason_ = Reason();
-    skip_path_ = skip_area_ = drive_on_ = false;
-    skipped_.reset();
-    spinup_since_.reset();
-    gps_good_since_.reset();
+    mowing_.Leave(CoreAccess(*this));
   }
   if (state_ == State::kMowing || state == State::kMowing) {
     home_.StartOver();
@@ -643,7 +637,7 @@ void LogicCore::SetState(State state) {
 }
 
 std::string LogicCore::CurrentStateName() const {
-  if (state_ == State::kMowing && pause_ != 0) return "PAUSED";
+  if (state_ == State::kMowing && mowing_.pause() != 0) return "PAUSED";
   return StateName(state_);
 }
 
@@ -666,11 +660,11 @@ RobotStateData LogicCore::RobotState() const {
   RobotStateData s;
   s.state = CurrentStateName();
   if (state_ == State::kMowing) {
-    s.current_area = job_.progress().area;
-    s.current_path = job_.progress().path;
-    s.current_path_index = job_.progress().index;
-    s.task_index = job_.TaskIndex();
-    s.task_count = job_.TaskCount();
+    s.current_area = mowing_.job().progress().area;
+    s.current_path = mowing_.job().progress().path;
+    s.current_path_index = mowing_.job().progress().index;
+    s.task_index = mowing_.job().TaskIndex();
+    s.task_count = mowing_.job().TaskCount();
   }
   if (state_ == State::kAreaRecording) s.sub_state = recording_.recorder().SubState();
   if (state_ == State::kDriving) s.sub_state = "DRIVING";
@@ -709,9 +703,9 @@ std::vector<ActionGroup> LogicCore::Actions() const {
                     {{"start_mowing", "Begin mowing", start.empty(), start.code},
                      {"start_area_recording", "Record an area",
                       idle && !emergency_ && recording_.map_writable() && HoldProblem().empty()},
-                     {"reset_job", "Discard unfinished job", idle && job_.Unfinished()}}});
+                     {"reset_job", "Discard unfinished job", idle && mowing_.job().Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
-  const bool waits = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  const bool waits = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
   groups.push_back({kMowingPrefix,
                     {{"pause", "Pause", mowing && !waits},
                      {"continue", "Resume", mowing && waits && !emergency_ && !Held()},
@@ -794,13 +788,13 @@ std::vector<SensorReading> LogicCore::Readings() const {
 }
 
 void LogicCore::OnMowMap(std::vector<JobArea> areas, const Reason& problem) {
-  job_.SetAreas(std::move(areas));
+  mowing_.job().SetAreas(std::move(areas));
   mow_map_problem_ = problem;
   if (state_ == State::kMowing && !problem.empty()) Pause(kPauseFault, problem);
 }
 
 void LogicCore::RestoreJob(const JobProgress& progress) {
-  job_.Restore(progress);
+  mowing_.job().Restore(progress);
   SetDue<ActionsChanged>(true);
 }
 
@@ -888,7 +882,7 @@ Reason LogicCore::MowProblem(const std::vector<std::string>& tasks) const {
   why = PositionProblem();
   if (!why.empty()) return why;
   if (!mow_map_problem_.empty()) return mow_map_problem_;
-  if (!job_.HasMowableArea(tasks)) {
+  if (!mowing_.job().HasMowableArea(tasks)) {
     return Reason("NO_MOWING_AREA", tasks.empty() ? "The map has no active mowing area" : "No area of tasks is active");
   }
   return DockProblem();
@@ -901,7 +895,7 @@ void LogicCore::RefuseStart(const Reason& why) {
 }
 
 const std::string& LogicCore::JobId() const {
-  return job_.progress().job_id;
+  return mowing_.job().progress().job_id;
 }
 
 void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
@@ -988,22 +982,10 @@ void LogicCore::OnTick(double now_s) {
   if (state_ == State::kDocking) TickDocking(now_s);
   if (state_ == State::kAreaRecording) recording_.TickRecording(CoreAccess(*this), now_s);
   if (state_ != State::kMowing) return;
-  if (pause_ & kPauseGps) {
-    if (!PoseGood()) {
-      gps_good_since_.reset();
-    } else if (!gps_good_since_) {
-      gps_good_since_ = now_s;
-    } else if (now_s - *gps_good_since_ >= config_.gps_wait_time) {
-      gps_good_since_.reset();
-      Unpause(kPauseGps);
-    }
-  }
+  mowing_.TickGpsWait(CoreAccess(*this), now_s);
   WatchHome(now_s);
   if (state_ != State::kMowing) return;
-  if (leg_ == Leg::kFollow && now_s - last_checkpoint_s_ >= config_.checkpoint_period) {
-    last_checkpoint_s_ = now_s;
-    CheckpointNow();
-  }
+  mowing_.TickCheckpoint(CoreAccess(*this), now_s);
 }
 
 bool LogicCore::BladeWanted() const {
@@ -1011,13 +993,13 @@ bool LogicCore::BladeWanted() const {
     return setup_.setup_blade() != 0 && !setup_.setup_blade_refused() && !emergency_ && hw_.telemetry_ok &&
            !hw_.dock_contact;
   }
-  if (state_ != State::kMowing || pause_ != 0 || emergency_ || !config_.mow_with_blade || !safety_measured_ ||
+  if (state_ != State::kMowing || mowing_.pause() != 0 || emergency_ || !config_.mow_with_blade || !safety_measured_ ||
       !hw_.telemetry_ok || hw_.dock_contact) {
     return false;
   }
-  if (spinup_since_) return true;
-  const JobPose* pose = job_.CurrentPose();
-  return leg_ == Leg::kFollow && pose && IsMowKind(pose->kind);
+  if (mowing_.spinup_since()) return true;
+  const JobPose* pose = mowing_.job().CurrentPose();
+  return mowing_.leg() == Leg::kFollow && pose && IsMowKind(pose->kind);
 }
 
 void LogicCore::OnBladeRefused(const std::string& message, int emergency_reason) {

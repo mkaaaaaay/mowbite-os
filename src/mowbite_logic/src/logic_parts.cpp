@@ -297,4 +297,40 @@ void LogicCore::EndDocking(const Reason& why) {
   docking_part_.EndDocking(CoreAccess(*this), why);
 }
 
+JobStep LogicCore::NextJobStep(double now_s) {
+  return mowing_.NextJobStep(CoreAccess(*this), now_s);
+}
+
+void LogicCore::OnJobPlanned(std::vector<JobPath> paths, const std::string& fingerprint) {
+  mowing_.OnJobPlanned(CoreAccess(*this), std::move(paths), fingerprint);
+}
+
+void LogicCore::OnJobPlanFailed(const Reason& why) {
+  mowing_.OnJobPlanFailed(CoreAccess(*this), why);
+}
+
+void LogicCore::OnJobProgress(size_t index) {
+  mowing_.OnJobProgress(CoreFacts(*this), index);
+}
+
+void LogicCore::OnLegEnded(LegEnd end, size_t index, const Reason& reason) {
+  mowing_.OnLegEnded(CoreAccess(*this), end, index, reason);
+}
+
+void LogicCore::ApplySkips() {
+  mowing_.ApplySkips(CoreAccess(*this));
+}
+
+void LogicCore::Pause(int why, const Reason& reason) {
+  mowing_.Pause(CoreAccess(*this), why, reason);
+}
+
+void LogicCore::Unpause(int why) {
+  mowing_.Unpause(CoreAccess(*this), why);
+}
+
+bool LogicCore::LegDrives() const {
+  return mowing_.LegDrives();
+}
+
 }  // namespace mowbite_logic

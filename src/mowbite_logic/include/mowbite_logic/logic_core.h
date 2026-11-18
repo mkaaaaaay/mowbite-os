@@ -22,6 +22,7 @@
 #include "mowbite_logic/logic_types.h"
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
+#include "mowbite_logic/mowing_part.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/recording_part.h"
 #include "mowbite_logic/release_part.h"
@@ -478,11 +479,6 @@ class LogicCore {
   void AreasPassedOver(const std::vector<JobArea>& areas);
   // The first deadline of the run that is due: the sunset, then the end of the plan; empty when none is.
   Reason DeadlineDue(double now_s);
-  // tasks and restart of mowing.start; the problem with them for -32602 and its field, empty if none. The request
-  // is set only without a problem.
-  std::string ReadStartRequest(const json& params, StartRequest* request, std::string* field) const;
-  // mowing.start as ReadStartRequest read it: the refusal, or the reference check on the station, or mowing.
-  Reason RequestStart(StartRequest request, const Reason& node_problem, CommandOutcome* out);
   // Continues the open job, or begins the one mowing.start asked for.
   void StartMowing();
   void Pause(int why, const Reason& reason);
@@ -492,18 +488,9 @@ class LogicCore {
   void ApplySkips();
   // The follower drives a leg of the job.
   bool LegDrives() const;
-  // The path the last skip left, while the job stands at the start of the one after it, the mower within
-  // approach_distance of the pose it got to on the path left, and poses of it are left; else nothing.
-  const JobPath* SkippedPathHere() const;
-  // Its next piece as the step of the job: the poses within kSkippedPathPiece m of the one the mower stands at, at
-  // least the next one.
-  JobStep SkippedPiece(const JobPath& path);
   // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it,
   // with why as the reason of the event DOCKING.
   void EndJob(bool finished, bool home, const Reason& why = Reason());
-  // The planner gave the job no answer: it asks again where retry is set and tries are left, else the mower goes
-  // home; pause: the pause where it cannot.
-  void JobWithoutPlanner(const Reason& silent, const Reason& pause, bool retry);
   bool PoseGood() const;
   void CheckpointNow();
   // STORAGE_NOT_WRITABLE with the file while one cannot be written, else empty.
@@ -543,9 +530,7 @@ class LogicCore {
   EffectQueue effects_;
   RecordingPart recording_;
 
-  MowingJob job_;
-  // The start accepted last, until mowing begins.
-  StartRequest start_request_;
+  MowingPart mowing_;
   Reason mow_map_problem_ = MapReason(MapDatum::kUnknown, "The map status is not known yet");
   std::optional<DockPose> dock_;
   std::vector<Ring> drivable_;
@@ -554,41 +539,21 @@ class LogicCore {
   UndockingPart undocking_;
   DockingPart docking_part_;
   json shape_outside_ = json::array();
-  std::string session_id_;
-  int pause_ = 0;
-  Reason pause_reason_;
-  Leg leg_ = Leg::kNone;
-  bool approached_ = false;
-  // Questions of the job in a row the planner gave no answer for.
-  int planner_silent_ = 0;
-  bool skip_path_ = false;
-  bool skip_area_ = false;
-  // Where the job stood when a skip left a path that was not the last of its plan; index follows the mower along it.
-  std::optional<JobProgress> skipped_;
-  // The planner found no way from there to the next path: a piece of the path left is the next step.
-  bool drive_on_ = false;
-  std::string announced_area_;
-  std::optional<double> spinup_since_;
-  std::optional<double> gps_good_since_;
   GoingHomePart home_;
   SchedulePart schedule_;
-  // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
-  Reason skip_why_;
   // The clock and the datum the sunset needs.
   bool clock_safe_ = false;
   std::string clock_reason_ = "no_report";
   double clock_offset_ = 0;
   std::optional<std::pair<double, double>> datum_;
-  double last_checkpoint_s_ = 0;
   bool blades_running_ = false;
   // The reason of StartProblem() at the last actions, empty while a start would go.
   std::string last_start_reason_ = "-";
   SetupPart setup_;
   CalibrationPart calibration_;
   int64_t hold_until_ = 0;
-  // The client of the command being run, for its events; the one of a skip that waits for the leg to stop.
+  // The client of the command being run, for its events.
   std::string client_;
-  std::string skip_client_;
   ReleasePart release_;
 };
 

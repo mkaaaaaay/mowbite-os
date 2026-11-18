@@ -92,7 +92,7 @@ bool CoreFacts::charge_stop() const {
 }
 
 const StartRequest& CoreFacts::start_request() const {
-  return read_->start_request_;
+  return read_->mowing_.start_request();
 }
 
 double CoreFacts::DockedHeading() const {
@@ -145,6 +145,22 @@ const std::vector<Ring>& CoreFacts::drivable() const {
 
 const std::vector<Ring>& CoreFacts::obstacles() const {
   return read_->obstacles_;
+}
+
+const Reason& CoreFacts::mow_map_problem() const {
+  return read_->mow_map_problem_;
+}
+
+Reason CoreFacts::StartProblem(const std::vector<std::string>& tasks) const {
+  return read_->StartProblem(tasks);
+}
+
+const std::string& CoreFacts::JobId() const {
+  return read_->JobId();
+}
+
+bool CoreFacts::HomeReachable() const {
+  return read_->HomeReachable();
 }
 
 EffectQueue& CoreAccess::effects() {
@@ -205,6 +221,26 @@ void CoreAccess::StartMowing() {
 
 void CoreAccess::CancelDrive(const Reason& reason) {
   core_->CancelDrive(reason);
+}
+
+std::string CoreAccess::NewId() {
+  return core_->NewId();
+}
+
+void CoreAccess::CheckpointNow() {
+  core_->CheckpointNow();
+}
+
+void CoreAccess::BeginDockCheck(DockCheck purpose) {
+  core_->BeginDockCheck(purpose);
+}
+
+void CoreAccess::AreasPassedOver(const std::vector<JobArea>& areas) {
+  core_->AreasPassedOver(areas);
+}
+
+void CoreAccess::EndJob(bool finished, bool home, const Reason& why) {
+  core_->EndJob(finished, home, why);
 }
 
 }  // namespace mowbite_logic

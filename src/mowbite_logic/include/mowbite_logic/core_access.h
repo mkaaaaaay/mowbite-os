@@ -53,6 +53,10 @@ class CoreFacts {
   Reason PositionProblem() const;
   const std::vector<Ring>& drivable() const;
   const std::vector<Ring>& obstacles() const;
+  const Reason& mow_map_problem() const;
+  Reason StartProblem(const std::vector<std::string>& tasks) const;
+  const std::string& JobId() const;
+  bool HomeReachable() const;
 
  private:
   const LogicCore* read_;
@@ -79,6 +83,11 @@ class CoreAccess : public CoreFacts {
   void BeginDrive(double x, double y);
   void StartMowing();
   void CancelDrive(const Reason& reason);
+  std::string NewId();
+  void CheckpointNow();
+  void BeginDockCheck(DockCheck purpose);
+  void AreasPassedOver(const std::vector<JobArea>& areas);
+  void EndJob(bool finished, bool home, const Reason& why = Reason());
 
  private:
   LogicCore* core_;

@@ -65,7 +65,7 @@ void LogicCore::ActOnHome(const Reason& dark) {
   if (due.empty() && dark.empty()) return;
   const Reason first = due.empty() ? dark : HomeWhy(due.front());
   // A pause that waits for the user never goes home: the user may stand at the mower (G11).
-  const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  const bool waits_for_user = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
   if (!waits_for_user && HomeReachable()) {
     Reason why = first;
     why.message = "Going home: " + why.message;
@@ -79,7 +79,7 @@ void LogicCore::ActOnHome(const Reason& dark) {
     }
   }
   // A pause for GPS turns into this one in the tick it ends; any other pause stays as it is.
-  if (pause_ != 0) return;
+  if (mowing_.pause() != 0) return;
   Reason why = first;
   why.message = "It cannot go home: " + why.message;
   Pause(kPauseFault, why);

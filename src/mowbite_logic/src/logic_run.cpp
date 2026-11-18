@@ -47,7 +47,7 @@ std::string LogicCore::InvalidRun(const ScheduleRun& run) const {
   }
   // Unknown ids only in pass_over, never all areas in place of them; without a map the start is refused for that.
   for (const auto& id : run.area_ids) {
-    if (mow_map_problem_.empty() && !Contains(run.pass_over, id) && !job_.HasArea(id)) {
+    if (mow_map_problem_.empty() && !Contains(run.pass_over, id) && !mowing_.job().HasArea(id)) {
       return "area_ids: " + id + " is no mowing area of the map";
     }
   }
@@ -57,7 +57,7 @@ std::string LogicCore::InvalidRun(const ScheduleRun& run) const {
 Reason LogicCore::RequestMowProblem(const StartRequest& request) const {
   if (request.pass_over.empty()) return MowProblem(request.tasks);
   std::vector<std::string> left;
-  for (const auto& id : job_.TaskIds(request.tasks)) {
+  for (const auto& id : mowing_.job().TaskIds(request.tasks)) {
     if (!Contains(request.pass_over, id)) left.push_back(id);
   }
   if (!left.empty()) return MowProblem(left);
@@ -99,13 +99,13 @@ void LogicCore::EndAnnouncement(double now_s) {
     FinishRun();
     return;
   }
-  start_request_ = std::move(request);
+  mowing_.start_request() = std::move(request);
   SetRunPhase(RunPhase::kChecking);
   BeginDockCheck(DockCheck::kMowing);
 }
 
 std::optional<double> LogicCore::PlanAngle() const {
-  return job_.progress().angle_offset_deg;
+  return mowing_.job().progress().angle_offset_deg;
 }
 
 bool LogicCore::SunsetWanted() const {
@@ -125,21 +125,21 @@ Reason LogicCore::DropTasks(const std::string& run_id, const std::vector<std::st
     return Reason("NOT_ALLOWED", "No run " + run_id + " of the schedule: a run by hand is not the schedule's");
   }
   if (state_ != State::kMowing || schedule_.run()->phase != RunPhase::kMowing) return WrongState();
-  job_.PassOver(area_ids.empty() ? job_.TaskIds(job_.progress().tasks) : area_ids);
-  if (!job_.AreaLeft()) {
+  mowing_.job().PassOver(area_ids.empty() ? mowing_.job().TaskIds(mowing_.job().progress().tasks) : area_ids);
+  if (!mowing_.job().AreaLeft()) {
     Reason why = SchedulePause();
     // Like a reason of HomeWatch: never from a pause that waits for the user (G11); without a way home idle there.
-    const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+    const bool waits_for_user = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
     const bool home = !waits_for_user && HomeReachable();
     why.message = (home ? "Going home: " : "Mowing ends: ") + why.message;
     Notify("Schedule: " + why.message);
     EndJob(false, home, why);
     return {};
   }
-  const JobArea* area = job_.CurrentArea();
-  if (!area || !job_.PassedOver(area->id)) return {};
-  skip_area_ = true;
-  skip_why_ = SchedulePause();
+  const JobArea* area = mowing_.job().CurrentArea();
+  if (!area || !mowing_.job().PassedOver(area->id)) return {};
+  mowing_.skip_area() = true;
+  mowing_.skip_why() = SchedulePause();
   if (LegDrives()) {
     CancelDrive(Reason("STOPPED", "The area is paused in the schedule"));
     SetDue<StopRequest>(true);

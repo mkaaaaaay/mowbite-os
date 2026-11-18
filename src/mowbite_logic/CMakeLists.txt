@@ -35,7 +35,7 @@ add_library(mowbite_logic_core STATIC src/reasons.cpp src/logic_core.cpp src/are
   src/logic_recording.cpp src/logic_run.cpp src/logic_calibration.cpp src/logic_setup.cpp src/logic_charge.cpp
   src/marker_dock.cpp src/logic_marker.cpp src/logic_release.cpp src/core_access.cpp src/logic_parts.cpp
   src/logic_schedule.cpp src/logic_going_home.cpp
-  src/logic_undocking.cpp src/logic_docking.cpp)
+  src/logic_undocking.cpp src/logic_docking.cpp src/logic_mowing.cpp)
 target_include_directories(mowbite_logic_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
