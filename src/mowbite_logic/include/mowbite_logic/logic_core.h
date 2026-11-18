@@ -412,7 +412,6 @@ class LogicCore {
   const char* LeaveWords() const;
   void BeginDockCheck(DockCheck purpose);
   void BeginDrive(double x, double y);
-  // Stops the follower on its way out; undocking ends once it stopped, with UNDOCKING_FAILED if failure is set.
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
   // After JOB_COMPLETE, abort_mowing and a reason to go home: DOCKING where the platform docks and the map has a
@@ -439,23 +438,16 @@ class LogicCore {
   // The battery ends the run where it cannot go home: BATTERY_LOW with the limit it fell below, IDLE.
   void BatteryEndsMowing(HomeReason reason);
   void BeginDocking();
-  // runs 1 to 10: with more than one a series (runs above 1): after each DOCKED out to the start of the line in the
-  // station frame and docking again, every run ends with DOCKING_TEST_RUN, the first failure ends the series.
   Reason StartDockingTest(const Reason& node_problem, int runs);
-  // Docking asks for the marker once the map puts the mower within kMarkerRequestDistance of the approach point.
   void WatchMarkerNear();
   void OnDockingContact();
   // Only while the way out waits for charging off; OnChargeOff checks it.
   void DockingChargeOff(bool ok, const std::string& message);
-  // IDLE on the contacts: DOCKED once the charge is confirmed there, CHARGING_LOST when it stops (ChargeWatch).
   void WatchCharge();
-  // DOCKING_RETRY and the next try, or DOCKING_FAILED and IDLE (also when last). A copy: why may be the failure kept.
   void CountDockingFailure(Reason why, bool last = false);
   void WaitForDockingGps();
   void TickDocking(double now_s);
-  // Stops the leg on its way, if any.
   void CancelDockingLeg(const Reason& why);
-  // IDLE; a leg on its way stops with why.
   void EndDocking(const Reason& why);
   // The start problems of the areas of the request that are not passed over; NO_MOWING_AREA when none is left.
   Reason RequestMowProblem(const StartRequest& request) const;
@@ -465,11 +457,9 @@ class LogicCore {
   std::string InvalidRun(const ScheduleRun& run) const;
   // The announcement ran out: checked again, then the reference check, or the refusal ends the run.
   void EndAnnouncement(double now_s);
-  // An emergency, a hold or leaving the contacts cancels the announcement; a command cancels it with source rpc.
   void WatchAnnouncement();
   void CommandCancels();
   void SetRunPhase(RunPhase phase);
-  // How the run ends, the first word counts; FinishRun tells it (EMERGENCY or STOPPED without one) and drops the run.
   void RunEnds(const std::string& code, const std::string& detail = "");
   void FinishRun();
   // Whether a run goes home at sunset: one of the schedule unless it may mow in the dark without until_sunset, one by
@@ -486,7 +476,6 @@ class LogicCore {
   void CancelDrive(const Reason& reason);
   void Unpause(int why);
   void ApplySkips();
-  // The follower drives a leg of the job.
   bool LegDrives() const;
   // Ends the job: finished (JOB_COMPLETE) or not (it goes on from the checkpoint next time); home: docking after it,
   // with why as the reason of the event DOCKING.

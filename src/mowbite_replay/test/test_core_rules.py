@@ -20,6 +20,9 @@ CORES = {
 # Not part of a core although in its library: the STOP clear mark belongs to the node, the core only gets it as
 # SetStopClearMark.
 NOT_CORE = {"tron_mcu/src/stop_clear_mark.cpp", "tron_mcu/include/tron_mcu/stop_clear_mark.h"}
+# The parts of the logic core (FP25), in the order of their names.
+LOGIC_PARTS = ["calibration", "docking", "going_home", "mowing", "recording", "release", "schedule", "setup",
+               "undocking"]
 RULES = [
     ("clock", r"\b(steady_clock|system_clock|high_resolution_clock|clock_gettime|gettimeofday)\b|\btime\s*\("),
     ("randomness", r"\b(random_device|rand|srand|drand48)\b\s*[({]"),
@@ -75,12 +78,19 @@ class CoreRules(unittest.TestCase):
             if header.endswith("_part.h"):
                 parts.append(os.path.join("mowbite_logic", "include", "mowbite_logic", header))
                 parts.append(os.path.join("mowbite_logic", "src", "logic_" + header[:-len("_part.h")] + ".cpp"))
+        names = [os.path.basename(path)[:-len("_part.h")] for path in parts[::2]]
+        self.assertEqual(names, LOGIC_PARTS)
         found = []
         for path in parts:
+            own = os.path.basename(path).replace("logic_", "").replace("_part.h", "").replace(".cpp", "")
             with open(os.path.join(SRC, path)) as f:
                 lines = f.read().split("\n")
             for number, line in enumerate(lines, 1):
                 if re.match(r'\s*#\s*include\s*[<"]mowbite_logic/logic_core\.h[>"]', line):
+                    found.append(f"{path}:{number}")
+                # Nor into another part: what two parts share is an edge of the core.
+                other = re.match(r'\s*#\s*include\s*[<"]mowbite_logic/(\w+)_part\.h[>"]', line)
+                if other and other.group(1) != own:
                     found.append(f"{path}:{number}")
         self.assertEqual(found, [], "\n".join(found))
 
