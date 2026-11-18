@@ -246,6 +246,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
     stats = ComposableNode(
         package="mowbite_stats", plugin="mowbite_stats::StatsNode", name="mowbite_stats",
         parameters=[*files, {"data_dir": data_dir}, journal_dir])
+    # The obstacles of the sensors the platform reports (hw/obstacles): tracks, sight and zones on obstacles/status,
+    # and the list with photos for the app (vision.obstacles.*) in data_dir/obstacles.
+    obstacles = ComposableNode(
+        package="mowbite_obstacles", plugin="mowbite_obstacles::ObstaclesNode", name="mowbite_obstacles",
+        parameters=[*files, {"data_dir": data_dir}])
     # The setup program of the platform (setup.*): its steps come from layers.setup, layer is the parameter file it
     # writes for this mower, shadowed what the file kept by hand overrules of it, driver_restarts how often the start
     # starts an ended driver again.
@@ -256,7 +261,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
         parameters=[*files, {"data_dir": data_dir},
                     {name: ParameterValue(value, value_type=str) for name, value in setup.items()}])
     return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats,
-            program]
+            obstacles, program]
 
 
 # The names of these composable nodes, as their watch knows them.

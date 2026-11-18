@@ -3,11 +3,23 @@
 <package format="3">
   <name>mowbite_obstacles</name>
   <version>0.0.0</version>
-  <description>Obstacles of the sensors of a platform: their place on the ground, tracks in the map, sight and zones</description>
+  <description>Obstacles of the sensors of a platform: their place on the ground, tracks in the map, sight, zones, and the list with photos for the app</description>
   <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
   <license>PolyForm-Strict-1.0.0</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>mowbite_component</build_depend>
+  <depend>nlohmann-json-dev</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>std_msgs</depend>
+  <depend>mowbite_api</depend>
+  <depend>mowbite_bridge</depend>
+  <depend>mowbite_hold</depend>
+  <depend>mowbite_map</depend>
+  <depend>mowbite_msgs</depend>
+  <depend>mowbite_ntrip</depend>
+  <depend>mowbite_watch</depend>
   <test_depend>ament_cmake_gtest</test_depend>
 
   <export>

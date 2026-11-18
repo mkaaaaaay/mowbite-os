@@ -1091,6 +1091,22 @@ std::vector<ReasonEntry> CameraReasons(bool notice) {
           rated("SELF_TEST", "info", "auto")};
 }
 
+// Why the obstacle sensors do not see, in the order of Obstacles.msg; OBSTACLE_SIGHT only tells, so each a notice.
+std::vector<ReasonEntry> SightReasons() {
+  const auto reason = [](const char* code, const char* text) {
+    return ReasonEntry{code, "info", "auto", text, {}, Json::object(), {}};
+  };
+  return {reason("NOT_SET_UP", "The sensor lacks its calibration or mounting"),
+          reason("DARK", "Too dark to see"),
+          reason("BLINDED", "Blinded by light"),
+          reason("COVERED", "The lens is covered or dirty"),
+          reason("NO_FRAMES", "No frames from the sensor"),
+          reason("TOO_HOT", "The sensor pauses while too hot"),
+          reason("SELF_TEST", "The self-test after the start runs"),
+          reason("LOCKED_AFTER_CRASH", "Locked after a crash until released"),
+          reason("MODEL_MISSING", "The model of the camera AI is missing")};
+}
+
 // The triggers of an incident, the reasons of INCIDENT: each a notice without fields of its own.
 std::vector<ReasonEntry> IncidentKinds() {
   const auto kind = [](const char* code, const char* text) {
@@ -1598,6 +1614,25 @@ const std::vector<EventEntry>& Events() {
                     Integer("width", "", "Width of the picture in pixels now", true),
                     Integer("height", "", "Height of the picture in pixels now", true)}),
             CameraReasons(true), "info", "auto"),
+      Event("OBSTACLE_SEEN", "obstacles",
+            "A new entry in vision.obstacles.list; once per entry, after its photo or without one when none came. "
+            "Shown only while obstacle_mode is show or more",
+            Notice({Integer("obstacle_id", "", "Its id in vision.obstacles.list", true),
+                    Text("kind", "What it is", true, {"PERSON", "ANIMAL", "OBJECT", "UNKNOWN"}),
+                    Text("class", "As the model names it, empty for UNKNOWN"),
+                    Number("confidence", "", "Score of the model, 0 to 1"),
+                    Number("x", "m", "Middle in the map frame"), Number("y", "m", "Middle in the map frame"),
+                    Number("r", "m", "Radius on the ground"), Text("camera_id", "The sensor that saw it"),
+                    Text("action", "What the mower did", true, {"seen", "slowed", "stopped", "avoided"}),
+                    Bool("image", "It has a photo")})),
+      Event("OBSTACLES_CLEARED", "obstacles", "vision.obstacles.clear removed one entry or all",
+            Notice({Nullable(Integer("obstacle_id", "", "The entry, null for all", true))})),
+      Event("OBSTACLE_SIGHT", "obstacles",
+            "The obstacle sensors see again, or no longer and why, after 2 s in the new state; only while "
+            "obstacle_mode is show or more",
+            Notice({Bool("ok", "All of them see"), Text("reason", "Why not, only without ok (x-reasons)"),
+                    Text("source", "The sensor without sight, only without ok")}),
+            SightReasons(), "info", "auto"),
       Event("METHODS_CHANGED", "bridge",
             "rpc.methods lists other methods than before: the changes of one second together, also those of the start",
             Notice({Names("added", "Methods offered now"), Names("removed", "Methods no longer offered")})),

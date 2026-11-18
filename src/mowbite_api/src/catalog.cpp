@@ -122,6 +122,8 @@ const char kCameraOffered[] = "with at least one camera";
 
 const char kSetupOffered[] = "where the platform has a step list (setup/setup.yaml)";
 
+const char kObstaclesOffered[] = "where the platform has an obstacle sensor (obstacle_sources of hw/capabilities)";
+
 Field SetupAnswer() {
   Field state = SetupState();
   state.name = "result";
@@ -150,6 +152,28 @@ std::string HistorySteps(size_t first) {
 
 Field UnixTime(std::string name, std::string text) {
   return {std::move(name), Type::kInteger, "unix s", true, std::move(text), {}, false, {}, ""};
+}
+
+// An obstacle as vision.obstacles.list has it; x, y and r in the map frame as map/json.
+Field ObstacleRow() {
+  return Rows(
+      "obstacles", "The obstacles seen, last seen first",
+      {Integer("id", "Its id, stable while it is in the list"), UnixTime("t", "When it was first seen"),
+       UnixTime("last_t", "When it was last seen"), Integer("count", "How often it was seen anew"),
+       Number("x", "m", "Middle in the map frame"), Number("y", "m", "Middle in the map frame"),
+       Number("r", "m", "Radius on the ground"),
+       Text("kind", "What it is", true, {"PERSON", "ANIMAL", "OBJECT", "UNKNOWN"}),
+       Text("class", "As the model of the platform names it, for the app only; empty for UNKNOWN"),
+       Number("confidence", "", "Best score of the model, 0 to 1; 1 for UNKNOWN"),
+       Text("camera_id", "The sensor that saw it, an id of camera.list for a camera"),
+       Text("action", "What the mower did", true, {"seen", "slowed", "stopped", "avoided"}),
+       Nullable(Object("image", "Its photo, null without one",
+                       {Text("name", "For vision.obstacles.image; stays while the entry stays"),
+                        Text("sha256", "sha256 of the JPEG"), Integer("bytes", "Size of the JPEG"),
+                        Integer("width", "Width in pixels"), Integer("height", "Height in pixels"),
+                        Object("box", "Where it is in the photo, pixels from the top left",
+                               {Number("x", "px", "Left edge"), Number("y", "px", "Upper edge"),
+                                Number("w", "px", "Width"), Number("h", "px", "Height")})}))});
 }
 
 // unix s, or null when it is not known.
@@ -1098,6 +1122,39 @@ const std::vector<Method>& Methods() {
                UnixTime("expires", "The connection has to begin before this"),
                Bool("detections", "Whether the boxes of the camera AI are in the picture")}),
        kCameraOffered},
+      {"vision.obstacles.list", "mowbite_obstacles",
+       "The obstacles the sensors of the mower saw, kept on the mower only: at most limit.entries, limit.bytes with "
+       "the photos and limit.days since last seen, the least recently seen go first. Things of one place (objects "
+       "within 0.5 m) or of one kind within 30 s are one entry; OBSTACLE_SEEN tells of a new one",
+       Object("params", "Which",
+              {Client(), Number("since", "s", "Only the entries last seen after this unix time; all without", false)}),
+       Object("result", "The list",
+              {Text("mode", "obstacle_mode now", true, {"off", "show", "stop", "avoid"}),
+               Bool("photos", "obstacle_photos now: whether new entries get a photo"),
+               Object("sight", "Whether the sensors see now",
+                      {Bool("ok", "All of them see"),
+                       Nullable(Text("reason", "Why not, null with ok: a reason of OBSTACLE_SIGHT in x-reasons"))}),
+               Object("limit", "What the mower keeps",
+                      {Integer("entries", "Entries at most"), Integer("bytes", "Bytes with the photos at most"),
+                       Number("days", "d", "Days since last seen at most")}),
+               ObstacleRow()}),
+       kObstaclesOffered},
+      {"vision.obstacles.image", "mowbite_obstacles",
+       "The photo of an entry in pieces of at most " + std::to_string(kObstacleImageBytes) +
+           " bytes; -32602 for a name the list does not have",
+       Object("params", "The piece",
+              {Client(), Text("name", "image.name of an entry"), Count("offset", "B", "Where the piece begins, 0 without"),
+               Whole("size", "B", 1, kObstacleImageBytes, "Its size at most, the most without", false)}),
+       Object("result", "The piece",
+              {Count("size", "B", "Size of the whole photo"), Count("offset", "B", "Where the piece begins"),
+               Text("data", "The piece in base64, empty at the end"), Text("sha256", "sha256 of the whole photo"),
+               Text("type", "Always image/jpeg", true, {"image/jpeg"})}),
+       kObstaclesOffered},
+      {"vision.obstacles.clear", "mowbite_obstacles",
+       "Removes an entry with its photo, or all without id; OBSTACLES_CLEARED tells the other clients. -32602 for an "
+       "id the list does not have",
+       Object("params", "Which", {Client(), Integer("id", "The entry; all without", false)}),
+       Object("result", "What went", {Integer("removed", "Entries removed")}), kObstaclesOffered},
       {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
        List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),
@@ -1282,6 +1339,12 @@ const std::vector<SettingEntry>& LogicSettings() {
        "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform"},
       {"journal_enabled", true, 0, 1, 1, "",
        "Whether the OS keeps a journal of its processes for incidents; a change counts from the next start"},
+      {"obstacle_mode", true, 0, 1, 0, "",
+       "What obstacles the sensors see do: off, or show them in the list and on the map without any effect on "
+       "driving; stop and avoid follow",
+       {"off", "show", "stop", "avoid"}},
+      {"obstacle_photos", true, 0, 1, 0, "",
+       "Whether a new entry of the obstacles gets a photo of the whole image, kept on the mower only"},
   };
   return settings;
 }

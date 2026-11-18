@@ -120,7 +120,8 @@ TEST(Catalog, EntriesAreWellFormed) {
   std::set<std::string> types;
   for (const auto& event : Events()) {
     EXPECT_TRUE(types.insert(event.type).second) << "twice: " << event.type;
-    const std::set<std::string> emitters = {"logic", "map", "ntrip", "camera", "bridge", "stats", "setup"};
+    const std::set<std::string> emitters = {"logic", "map", "ntrip", "camera", "bridge", "stats", "setup",
+                                            "obstacles"};
     EXPECT_TRUE(emitters.count(event.emitter)) << event.type;
     EXPECT_FALSE(event.text.empty()) << event.type;
     EXPECT_TRUE(severities.count(event.other_severity)) << event.type;
@@ -509,7 +510,7 @@ TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
   const std::set<std::string> nodes = {"mowbite_bridge",      "mowbite_logic", "mowbite_map",   "mowbite_ntrip",
                                        "mowbite_calibration", "mowbite_light", "mowbite_sound", "mowbite_camera",
                                        "mowbite_schedule",    "mowbite_stats", "mowbite_net",   "mowbite_host",
-                                       "mowbite_setup"};
+                                       "mowbite_setup",       "mowbite_obstacles"};
   std::set<std::string> names;
   for (const auto& command : Commands()) names.insert(command.name);
   for (const auto& method : Methods()) {
@@ -537,7 +538,7 @@ TEST(Catalog, MethodsSensorsSettingsAndGeometry) {
     EXPECT_LE(setting.min, setting.def) << setting.name;
     EXPECT_LE(setting.def, setting.max) << setting.name;
   }
-  EXPECT_EQ(settings.size(), 16u);
+  EXPECT_EQ(settings.size(), 18u);
   std::set<std::string> keys;
   for (const auto& key : GeometryKeys()) {
     EXPECT_TRUE(keys.insert(key.name).second) << key.name;

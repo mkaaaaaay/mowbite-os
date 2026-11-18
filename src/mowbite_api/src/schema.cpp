@@ -301,6 +301,7 @@ Json BuildSchema(const Json& planner) {
     settings[setting.name] = {{"type", setting.integer ? "integer" : "number"}, {"min", setting.min},
                               {"max", setting.max}, {"default", setting.def}, {"unit", setting.unit},
                               {"description", setting.text}};
+    if (!setting.values.empty()) settings[setting.name]["values"] = setting.values;
   }
   Json geometry = Json::object();
   for (const auto& key : GeometryKeys()) {

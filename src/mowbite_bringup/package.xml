@@ -28,6 +28,7 @@
   <exec_depend>mowbite_time</exec_depend>
   <exec_depend>mowbite_schedule</exec_depend>
   <exec_depend>mowbite_stats</exec_depend>
+  <exec_depend>mowbite_obstacles</exec_depend>
   <exec_depend>mowbite_setup</exec_depend>
   <exec_depend>mowbite_net</exec_depend>
   <exec_depend>mowbite_planner</exec_depend>

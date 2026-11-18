@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 49;
+constexpr int kApi = 50;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -86,7 +86,8 @@ struct ReasonEntry {
 
 struct EventEntry {
   std::string type;
-  // logic, map, ntrip, camera, bridge, stats or setup; logic events carry x, y, job_id and session_id as well.
+  // logic, map, ntrip, camera, bridge, stats, setup or obstacles; logic events carry x, y, job_id and session_id as
+  // well.
   std::string emitter;
   std::string text;
   // The fields beyond the envelope (id, t, type) and those of the emitter.
@@ -129,7 +130,7 @@ struct Command {
 struct Method {
   std::string name;
   // mowbite_bridge, mowbite_logic, mowbite_map, mowbite_ntrip, mowbite_calibration, mowbite_light, mowbite_sound,
-  // mowbite_camera, mowbite_schedule, mowbite_stats, mowbite_net, mowbite_setup or mowbite_host.
+  // mowbite_camera, mowbite_schedule, mowbite_stats, mowbite_net, mowbite_setup, mowbite_obstacles or mowbite_host.
   std::string node;
   std::string text;
   // The params as one value, mostly an object of fields.
@@ -160,6 +161,8 @@ struct SettingEntry {
   double def = 0;
   std::string unit;
   std::string text;
+  // Names of the whole values from 0 on, for a setting that picks one of them; empty for a number.
+  std::vector<std::string> values = {};
 };
 
 // A key of robot.geometry.get and .set; a number outside the range is refused.
@@ -247,6 +250,8 @@ constexpr int kSensorsHistoryMaxStep = kSensorsHistorySteps[std::size(kSensorsHi
 constexpr int kIncidentTimelineBytes = 65536;
 constexpr int kIncidentChunkBytes = 262144;
 constexpr int kIncidentMaxNote = 500;
+// vision.obstacles.image: the most bytes of a piece (raw, before base64).
+constexpr int kObstacleImageBytes = 65536;
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 
