@@ -105,7 +105,7 @@ class ObstaclesNode : public rclcpp::Node {
     status_pub_ = create_publisher<mowbite_msgs::msg::ObstacleStatus>("obstacles/status", 10);
     photos_pub_ = create_publisher<std_msgs::msg::Bool>("obstacles/photos_wanted", LatchedQos(1));
     publish_pub_ = create_publisher<mowbite_msgs::msg::MqttPublish>("bridge/publish", 100);
-    PublishPhotosWanted();
+    FollowImages();
     capabilities_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1),
         [this](const mowbite_msgs::msg::HardwareCapabilities& msg) { OnCapabilities(msg.obstacle_sources); });
@@ -194,7 +194,6 @@ class ObstaclesNode : public rclcpp::Node {
     if (node == "/mower_logic") {
       if (const auto mode = number("obstacle_mode")) service_->SetMode(static_cast<int>(*mode));
       if (const auto photos = number("obstacle_photos")) service_->SetPhotos(*photos != 0.0);
-      PublishPhotosWanted();
       FollowImages();
     } else if (node == "/mowbite_geometry") {
       const auto front = number("robot_front"), rear = number("robot_rear"), width = number("robot_width");
@@ -202,18 +201,16 @@ class ObstaclesNode : public rclcpp::Node {
     }
   }
 
-  void PublishPhotosWanted() {
-    std_msgs::msg::Bool msg;
-    msg.data = service_->PhotosWanted() && !tracker_.sources().empty();
-    if (photos_wanted_ && *photos_wanted_ == msg.data) return;
-    photos_wanted_ = msg.data;
-    photos_pub_->publish(msg);
-  }
-
-  // Images are taken only while they are wanted, so none reach this process otherwise.
+  // Images are wanted, and taken, only while there is a sensor and the service wants them, so none reach this process
+  // otherwise.
   void FollowImages() {
-    PublishPhotosWanted();
     const bool wanted = service_->PhotosWanted() && !tracker_.sources().empty();
+    if (!photos_wanted_ || *photos_wanted_ != wanted) {
+      photos_wanted_ = wanted;
+      std_msgs::msg::Bool msg;
+      msg.data = wanted;
+      photos_pub_->publish(msg);
+    }
     if (!wanted) {
       images_sub_.reset();
       return;
@@ -284,21 +281,20 @@ class ObstaclesNode : public rclcpp::Node {
     if (std::find(methods.begin(), methods.end(), request.method) == methods.end()) return;
     Json params = Json::object();
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
-    const std::optional<Outcome> outcome =
+    const Outcome outcome =
         params.is_discarded()
             ? Outcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON"}
             : service_->Call(request.method, params);
-    if (!outcome) return;
-    if (outcome->ok) {
+    if (outcome.ok) {
       mowbite_msgs::msg::RpcResponse response;
-      response.result = Dump(outcome->result);
+      response.result = Dump(outcome.result);
       response.id = request.id;
       response_pub_->publish(response);
     } else {
-      RCLCPP_INFO(get_logger(), "%s refused: %s", request.method.c_str(), outcome->message.c_str());
+      RCLCPP_INFO(get_logger(), "%s refused: %s", request.method.c_str(), outcome.message.c_str());
       mowbite_msgs::msg::RpcError refused;
-      refused.code = outcome->code;
-      refused.message = outcome->message;
+      refused.code = outcome.code;
+      refused.message = outcome.message;
       refused.id = request.id;
       error_pub_->publish(refused);
     }

@@ -18,8 +18,7 @@ double Round(double value, double step) {
 ObstacleList::ObstacleList(ListLimits limits) : limits_(limits) {}
 
 ObstacleList::Seen ObstacleList::OnConfirmed(const Track& track) {
-  const auto known = by_track_.find(track.id);
-  if (known != by_track_.end() && entries_.count(known->second)) return {known->second, false};
+  if (const uint32_t known = EntryOf(track.id)) return {known, false};
   Entry* same = nullptr;
   for (auto& [id, entry] : entries_) {
     if (entry.kind != track.kind) continue;
@@ -48,10 +47,9 @@ ObstacleList::Seen ObstacleList::OnConfirmed(const Track& track) {
 }
 
 bool ObstacleList::Follow(const Track& track) {
-  const auto known = by_track_.find(track.id);
-  Entry* entry = known == by_track_.end() ? nullptr : Mutable(known->second);
+  Entry* entry = Mutable(EntryOf(track.id));
   if (!entry) return false;
-  const Entry before = *entry;
+  const double last_t = entry->last_t, x = entry->x, y = entry->y, r = entry->r, confidence = entry->confidence;
   entry->last_t = std::max(entry->last_t, track.last_seen);
   entry->x = Round(track.x, 0.01);
   entry->y = Round(track.y, 0.01);
@@ -61,8 +59,7 @@ bool ObstacleList::Follow(const Track& track) {
     entry->class_name = track.class_name;
   }
   if (entry->camera_id.empty()) entry->camera_id = track.source;
-  return entry->last_t != before.last_t || entry->x != before.x || entry->y != before.y || entry->r != before.r ||
-         entry->confidence != before.confidence;
+  return entry->last_t != last_t || entry->x != x || entry->y != y || entry->r != r || entry->confidence != confidence;
 }
 
 uint32_t ObstacleList::EntryOf(uint32_t track) const {
@@ -76,8 +73,7 @@ const Entry* ObstacleList::Get(uint32_t id) const {
 }
 
 Entry* ObstacleList::Mutable(uint32_t id) {
-  const auto it = entries_.find(id);
-  return it == entries_.end() ? nullptr : &it->second;
+  return const_cast<Entry*>(Get(id));
 }
 
 bool ObstacleList::SetPhoto(uint32_t id, const Photo& photo) {
@@ -100,11 +96,9 @@ uint32_t ObstacleList::ByPhoto(const std::string& name) const {
 
 std::vector<std::string> ObstacleList::Remove(uint32_t id) {
   std::vector<std::string> photos;
-  for (auto it = entries_.begin(); it != entries_.end();) {
-    if (id != 0 && it->first != id) {
-      ++it;
-      continue;
-    }
+  auto it = id == 0 ? entries_.begin() : entries_.find(id);
+  const auto end = id == 0 ? entries_.end() : (it == entries_.end() ? it : std::next(it));
+  while (it != end) {
     if (it->second.photo) photos.push_back(it->second.photo->name);
     it = entries_.erase(it);
   }

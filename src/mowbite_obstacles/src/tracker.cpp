@@ -318,7 +318,7 @@ Status Tracker::StatusAt(double now) const {
     if (fresh && sensor->second.sight) continue;
     status.sight = false;
     status.source = source;
-    status.reason = !fresh ? "NO_FRAMES" : sensor->second.reason;
+    status.reason = !fresh ? "NO_SIGNAL" : sensor->second.reason;
     break;
   }
   if (poses_.empty()) return status;

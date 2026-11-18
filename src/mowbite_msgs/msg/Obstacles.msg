@@ -7,15 +7,16 @@ string source
 
 # Whether the sensor sees now. Without sight obstacles is empty and tells nothing about the ground.
 bool sight
+# The names of hw/cameras where they mean the same: NOT_SET_UP also for a missing model, calibration or mount,
+# NO_SIGNAL also for frames that stand still.
 string REASON_NOT_SET_UP=NOT_SET_UP
-string REASON_DARK=DARK
-string REASON_BLINDED=BLINDED
+string REASON_TOO_DARK=TOO_DARK
+string REASON_TOO_BRIGHT=TOO_BRIGHT
 string REASON_COVERED=COVERED
-string REASON_NO_FRAMES=NO_FRAMES
+string REASON_NO_SIGNAL=NO_SIGNAL
 string REASON_TOO_HOT=TOO_HOT
 string REASON_SELF_TEST=SELF_TEST
 string REASON_LOCKED_AFTER_CRASH=LOCKED_AFTER_CRASH
-string REASON_MODEL_MISSING=MODEL_MISSING
 # Empty with sight.
 string reason
 # Why, in a few words for the log ("SoC 81 C").

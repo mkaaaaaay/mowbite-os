@@ -2,7 +2,7 @@
 # sight. Shown only for now; nothing drives by it.
 std_msgs/Header header
 
-# Every sensor of obstacle_sources sees; else reason (of Obstacles.msg, NO_FRAMES for a sensor without messages) and
+# Every sensor of obstacle_sources sees; else reason (of Obstacles.msg, NO_SIGNAL for a sensor without messages) and
 # the source it is of. True without obstacle sources.
 bool sight
 string reason

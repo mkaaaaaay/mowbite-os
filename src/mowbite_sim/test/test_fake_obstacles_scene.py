@@ -63,7 +63,7 @@ class Scene(unittest.TestCase):
     def test_example_loads(self):
         loaded = fo.load_scene(EXAMPLE, KINDS, REASONS)
         self.assertEqual(len(loaded["obstacles"]), 4)
-        self.assertEqual(loaded["sight"], [(30.0, 35.0, "DARK")])
+        self.assertEqual(loaded["sight"], [(30.0, 35.0, "TOO_DARK")])
         unknown = loaded["obstacles"][3]
         self.assertEqual((unknown["class_name"], unknown["score"]), ("", 1.0))
 
@@ -139,10 +139,10 @@ class Time(unittest.TestCase):
         self.assertEqual(seen(things, t=10.0), [])
 
     def test_sight_plan(self):
-        plan = scene([], [{"from_s": 3, "until_s": 6, "reason": "DARK"},
-                          {"from_s": 8, "until_s": 9, "reason": "BLINDED"}])["sight"]
+        plan = scene([], [{"from_s": 3, "until_s": 6, "reason": "TOO_DARK"},
+                          {"from_s": 8, "until_s": 9, "reason": "TOO_BRIGHT"}])["sight"]
         self.assertEqual([fo.sight_reason(plan, t) for t in (2.9, 3.0, 5.9, 6.0, 8.5, 9.0)],
-                         ["", "DARK", "DARK", "", "BLINDED", ""])
+                         ["", "TOO_DARK", "TOO_DARK", "", "TOO_BRIGHT", ""])
 
     def test_score_drop(self):
         things = scene([thing(x=2.0, y=0.0, score_drop=[3])])["obstacles"]

@@ -74,10 +74,9 @@ class ServiceTest : public ::testing::Test {
   }
 
   Json Call(const std::string& method, const Json& params = Json::object()) {
-    const std::optional<Outcome> outcome = service->Call(method, params);
-    EXPECT_TRUE(outcome.has_value());
-    if (!outcome->ok) return Json{{"error", outcome->code}, {"message", outcome->message}};
-    return outcome->result;
+    const Outcome outcome = service->Call(method, params);
+    if (!outcome.ok) return Json{{"error", outcome.code}, {"message", outcome.message}};
+    return outcome.result;
   }
 
   std::vector<std::string> Types() {
@@ -238,24 +237,24 @@ TEST_F(ServiceTest, BadParametersAreRefused) {
   EXPECT_EQ(Call("vision.obstacles.list", {{"since", "x"}})["error"], -32602);
   EXPECT_EQ(Call("vision.obstacles.image", {{"name", "../list.json"}})["error"], -32602);
   EXPECT_EQ(Call("vision.obstacles.image", Json::object())["error"], -32602);
-  EXPECT_FALSE(service->Call("camera.list", Json::object()).has_value());
+  EXPECT_EQ(Call("camera.list")["error"], -32601);
 }
 
 TEST_F(ServiceTest, TheSightIsToldOnceItSettles) {
   service->SetMode(1);
-  service->SetSight(false, "DARK", "stereo", kT);
+  service->SetSight(false, "TOO_DARK", "stereo", kT);
   service->Tick(kT + 1.0);
   EXPECT_TRUE(Types().empty());
-  EXPECT_EQ(Call("vision.obstacles.list")["sight"]["reason"], "DARK");
+  EXPECT_EQ(Call("vision.obstacles.list")["sight"]["reason"], "TOO_DARK");
   service->Tick(kT + 2.1);
   auto events = service->TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].first, "OBSTACLE_SIGHT");
   EXPECT_EQ(events[0].second["ok"], false);
-  EXPECT_EQ(events[0].second["reason"], "DARK");
+  EXPECT_EQ(events[0].second["reason"], "TOO_DARK");
   // A short flicker back is not told.
   service->SetSight(true, "", "", kT + 3.0);
-  service->SetSight(false, "DARK", "stereo", kT + 3.5);
+  service->SetSight(false, "TOO_DARK", "stereo", kT + 3.5);
   service->Tick(kT + 6.0);
   EXPECT_TRUE(Types().empty());
 }

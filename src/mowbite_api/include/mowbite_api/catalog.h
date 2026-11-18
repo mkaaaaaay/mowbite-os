@@ -252,6 +252,10 @@ constexpr int kIncidentChunkBytes = 262144;
 constexpr int kIncidentMaxNote = 500;
 // vision.obstacles.image: the most bytes of a piece (raw, before base64).
 constexpr int kObstacleImageBytes = 65536;
+// vision.obstacles.*: the values of obstacle_mode by number, the kinds of an obstacle and what the mower did.
+const std::vector<std::string>& ObstacleModes();
+const std::vector<std::string>& ObstacleKinds();
+const std::vector<std::string>& ObstacleActions();
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

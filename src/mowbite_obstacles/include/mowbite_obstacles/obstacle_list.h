@@ -88,6 +88,7 @@ class ObstacleList {
   std::vector<std::string> Prune(double now);
   int64_t Bytes() const;
   size_t size() const { return entries_.size(); }
+  const std::map<uint32_t, Entry>& entries() const { return entries_; }
   const ListLimits& limits() const { return limits_; }
 
   // The entries seen after since (all with 0), last seen first, as vision.obstacles.list has them.

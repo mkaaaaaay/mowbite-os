@@ -5,19 +5,16 @@
 
 #include <deque>
 #include <functional>
-#include <optional>
-#include <set>
 #include <string>
 #include <vector>
 
 #include "mowbite_obstacles/obstacle_list.h"
-#include "mowbite_obstacles/tracker.h"
 
 namespace mowbite_obstacles {
 
-// obstacle_mode: what the obstacles do. Only off and show are taken until stop and avoid are built.
+// obstacle_mode, its value the index in mowbite_api::ObstacleModes(). Only off and show are taken until stop and
+// avoid are built.
 enum class Mode { kOff = 0, kShow = 1 };
-constexpr int kHighestMode = 1;
 
 struct Outcome {
   bool ok = false;
@@ -36,8 +33,10 @@ struct ServiceConfig {
   size_t images = 4;
   // OBSTACLE_SIGHT once the sight stays this long in a new state (s).
   double sight_settle = 2.0;
-  // The list is written at most this often (s), at once on clear.
+  // The list is written at most this often (s) after a change, at once on clear; while entries only follow their
+  // tracks, at most every touch_gap.
   double save_gap = 5.0;
+  double touch_gap = 60.0;
   // The limits are kept this often (s).
   double prune_gap = 3600.0;
 };
@@ -62,7 +61,6 @@ class ObstacleService {
   void SetMode(int mode);
   void SetPhotos(bool on);
   Mode mode() const { return mode_; }
-  bool photos() const { return photos_; }
   // Whether the sensors are to send images: photos on and the obstacles shown.
   bool PhotosWanted() const { return photos_ && mode_ != Mode::kOff; }
   // The sight of the sensors as the tracker has it now.
@@ -77,12 +75,10 @@ class ObstacleService {
   // Writes the list now if it changed.
   void Flush();
 
-  // vision.obstacles.*; nullopt for another method.
-  std::optional<Outcome> Call(const std::string& method, const Json& params);
+  // vision.obstacles.*; -32601 for another method.
+  Outcome Call(const std::string& method, const Json& params);
   // Details of OBSTACLE_SEEN and OBSTACLES_CLEARED by type, in their order.
   std::vector<std::pair<std::string, Json>> TakeEvents();
-
-  const ObstacleList& list() const { return list_; }
 
  private:
   struct Pending {
@@ -118,6 +114,7 @@ class ObstacleService {
   std::vector<Pending> pending_;
   std::vector<std::pair<std::string, Json>> events_;
   bool dirty_ = false;
+  bool touched_ = false;
   double saved_at_ = -1e18;
   double pruned_at_ = -1e18;
 };

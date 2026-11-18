@@ -21,10 +21,6 @@ constexpr size_t kMaxListBytes = 4u << 20;
 constexpr size_t kMaxImageBytes = 200u * 1024u;
 constexpr double kSameStamp = 1e-6;
 
-const char* ModeName(Mode mode) {
-  return mode == Mode::kShow ? "show" : "off";
-}
-
 Outcome Refused(std::string message) {
   return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message)};
 }
@@ -36,7 +32,7 @@ bool Whole(const Json& params, const char* name, int64_t fallback, int64_t* valu
     *value = fallback;
     return true;
   }
-  if (!it->is_number_integer() && !it->is_number_unsigned()) return false;
+  if (!it->is_number_integer()) return false;
   *value = it->get<int64_t>();
   return true;
 }
@@ -69,13 +65,12 @@ void ObstacleService::Load(double now) {
     if (name == kListFile || list_.ByPhoto(name) != 0) continue;
     if (!mowbite_hold::RemoveFileSynced(file.path().string(), &error)) warn_("Cannot remove " + name + ": " + error);
   }
-  for (const Json& entry : list_.ToJson(0.0)) {
-    const Json& image = entry["image"];
-    if (image.is_object() && !fs::exists(fs::path(config_.dir) / image["name"].get<std::string>(), code)) {
-      list_.DropPhoto(entry["id"].get<uint32_t>());
-      dirty_ = true;
-    }
+  std::vector<uint32_t> lost;
+  for (const auto& [id, entry] : list_.entries()) {
+    if (entry.photo && !fs::exists(fs::path(config_.dir) / entry.photo->name, code)) lost.push_back(id);
   }
+  for (const uint32_t id : lost) list_.DropPhoto(id);
+  if (!lost.empty()) dirty_ = true;
   RemovePhotos(list_.Prune(now));
   pruned_at_ = now;
   Flush();
@@ -100,25 +95,26 @@ void ObstacleService::SetSight(bool ok, const std::string& reason, const std::st
 
 void ObstacleService::OnFrame(const Tracker& tracker, const FrameResult& frame, double now) {
   if (mode_ == Mode::kOff) return;
+  bool added = false;
   for (const uint32_t id : frame.confirmed) {
     const Track* track = tracker.TrackOf(id);
     if (!track) continue;
     const ObstacleList::Seen seen = list_.OnConfirmed(*track);
     dirty_ = true;
     if (!seen.added) continue;
+    added = true;
     if (PhotosWanted() && !config_.dir.empty()) {
       pending_.push_back({seen.id, now + config_.photo_wait});
     } else {
       Seen(seen.id);
     }
   }
+  // An entry only following its track is written less often than a new one.
   for (const auto& [id, track] : tracker.tracks()) {
-    if (track.confirmed && list_.Follow(track)) dirty_ = true;
+    if (track.confirmed && list_.Follow(track)) touched_ = true;
   }
   TryPhotos(tracker);
-  const size_t before = list_.size();
-  RemovePhotos(list_.Prune(0.0));
-  if (list_.size() != before) dirty_ = true;
+  if (added) RemovePhotos(list_.Prune(0.0));
 }
 
 void ObstacleService::OnEnded(const std::vector<uint32_t>& tracks) {
@@ -136,16 +132,15 @@ void ObstacleService::TryPhotos(const Tracker& tracker) {
   if (images_.empty()) return;
   for (const auto& [id, track] : tracker.tracks()) {
     const uint32_t entry_id = list_.EntryOf(id);
-    const Entry* entry = entry_id ? list_.Get(entry_id) : nullptr;
+    const Entry* entry = list_.Get(entry_id);
     if (!entry || entry->photo) continue;
-    bool done = false;
-    for (auto shot = track.shots.rbegin(); shot != track.shots.rend() && !done; ++shot) {
-      for (const Image& image : images_) {
-        if (image.source != shot->source || std::abs(image.stamp - shot->stamp) > kSameStamp) continue;
-        SavePhoto(entry_id, image, *shot);
-        done = true;
-        break;
-      }
+    for (auto shot = track.shots.rbegin(); shot != track.shots.rend(); ++shot) {
+      const auto image = std::find_if(images_.begin(), images_.end(), [&shot](const Image& i) {
+        return i.source == shot->source && std::abs(i.stamp - shot->stamp) <= kSameStamp;
+      });
+      if (image == images_.end()) continue;
+      SavePhoto(entry_id, *image, *shot);
+      break;
     }
   }
 }
@@ -182,17 +177,14 @@ void ObstacleService::SavePhoto(uint32_t entry, const Image& image, const Shot& 
 void ObstacleService::Seen(uint32_t id) {
   const Entry* entry = list_.Get(id);
   if (!entry) return;
-  events_.push_back({"OBSTACLE_SEEN",
-                     {{"obstacle_id", entry->id},
-                      {"kind", KindName(entry->kind)},
-                      {"class", entry->class_name},
-                      {"confidence", std::round(entry->confidence * 1000.0) / 1000.0},
-                      {"x", entry->x},
-                      {"y", entry->y},
-                      {"r", entry->r},
-                      {"camera_id", entry->camera_id},
-                      {"action", entry->action},
-                      {"image", entry->photo.has_value()}}});
+  // The fields of its entry in the list, the id as obstacle_id and only whether there is a photo.
+  const Json listed = ObstacleList::EntryJson(*entry);
+  Json details = {{"obstacle_id", entry->id}};
+  for (const char* key : {"kind", "class", "confidence", "x", "y", "r", "camera_id", "action"}) {
+    details[key] = listed[key];
+  }
+  details["image"] = entry->photo.has_value();
+  events_.push_back({"OBSTACLE_SEEN", std::move(details)});
 }
 
 void ObstacleService::RemovePhotos(const std::vector<std::string>& names) {
@@ -231,15 +223,17 @@ void ObstacleService::Tick(double now) {
     pruned_at_ = now;
     RemovePhotos(list_.Prune(now));
   }
-  if (dirty_ && now - saved_at_ >= config_.save_gap) {
+  const double since = now - saved_at_;
+  if ((dirty_ && since >= config_.save_gap) || (touched_ && since >= config_.touch_gap)) {
     saved_at_ = now;
     Flush();
   }
 }
 
 void ObstacleService::Flush() {
-  if (!dirty_) return;
+  if (!dirty_ && !touched_) return;
   dirty_ = false;
+  touched_ = false;
   if (config_.dir.empty()) return;
   std::string error;
   if (!mowbite_hold::WriteFileSafely((std::filesystem::path(config_.dir) / kListFile).string(), list_.Text(),
@@ -248,12 +242,12 @@ void ObstacleService::Flush() {
   }
 }
 
-std::optional<Outcome> ObstacleService::Call(const std::string& method, const Json& params) {
+Outcome ObstacleService::Call(const std::string& method, const Json& params) {
   if (!params.is_object()) return Refused("The parameters are no object");
   if (method == "vision.obstacles.list") return List(params);
   if (method == "vision.obstacles.image") return Piece(params);
   if (method == "vision.obstacles.clear") return Clear(params);
-  return std::nullopt;
+  return {false, Json(), mowbite_bridge::kMethodNotFound, "No method " + method};
 }
 
 Outcome ObstacleService::List(const Json& params) const {
@@ -264,14 +258,12 @@ Outcome ObstacleService::List(const Json& params) const {
     since = it->get<double>();
   }
   const ListLimits& limits = list_.limits();
-  Json sight = {{"ok", sight_.ok}, {"reason", sight_.ok ? Json() : Json(sight_.reason)}};
-  Json limit = {{"entries", limits.entries}, {"bytes", limits.bytes}, {"days", limits.days}};
-  Json result = {{"mode", ModeName(mode_)},
+  Json result = {{"mode", mowbite_api::ObstacleModes().at(static_cast<size_t>(mode_))},
                  {"photos", photos_},
-                 {"sight", sight},
-                 {"limit", limit},
+                 {"sight", {{"ok", sight_.ok}, {"reason", sight_.ok ? Json() : Json(sight_.reason)}}},
+                 {"limit", {{"entries", limits.entries}, {"bytes", limits.bytes}, {"days", limits.days}}},
                  {"obstacles", list_.ToJson(since)}};
-  return {true, result, 0, ""};
+  return {true, std::move(result), 0, ""};
 }
 
 Outcome ObstacleService::Piece(const Json& params) const {

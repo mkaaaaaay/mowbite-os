@@ -4,13 +4,13 @@
 One message per image at rate, taken delay s before it is sent (header.stamp and the pose are those of the moment the
 image was taken), source as given, in base_link. The view is the sector around view_x, view_y from -half_fov_deg to
 half_fov_deg and from range_min to range_max. The true pose comes from the state file of fake_tron, carried to the
-moment of the image with its speeds; without one the sensor has no sight (NO_FRAMES).
+moment of the image with its speeds; without one the sensor has no sight (NO_SIGNAL).
 
 The scene (JSON, parameter scene; without one nothing is there):
   {"obstacles": [{"kind": "PERSON", "class_name": "person", "score": 0.9, "x": 3.0, "y": 0.5, "radius": 0.25,
                   "height": 1.7, "from_s": 5, "until_s": 60, "path": [[0, 3, 0.5], [10, 3, -0.5]],
                   "score_drop": [4]}],
-   "sight": [{"from_s": 20, "until_s": 25, "reason": "DARK"}]}
+   "sight": [{"from_s": 20, "until_s": 25, "reason": "TOO_DARK"}]}
 x, y are map coordinates (m); path [[t, x, y], ...] moves the thing linearly between its points and holds it at the
 ends (x, y are then not needed); from_s and until_s (s since the start of the node) bound when it is there; with
 score_drop [n] every n-th image with sight misses it. kind UNKNOWN reports no class_name and score 1. In a span of
@@ -251,12 +251,10 @@ def main():
             self.photos_wanted = False
             self.last_photo = -math.inf
 
-            reliable = QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE,
-                                  durability=DurabilityPolicy.VOLATILE)
             wanted_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                                     reliability=ReliabilityPolicy.RELIABLE)
-            self.pub = self.create_publisher(Obstacles, "hw/obstacles", reliable)
-            self.photo_pub = self.create_publisher(ObstacleImage, "hw/obstacle_images", reliable)
+            self.pub = self.create_publisher(Obstacles, "hw/obstacles", 10)
+            self.photo_pub = self.create_publisher(ObstacleImage, "hw/obstacle_images", 10)
             self.create_subscription(Bool, "obstacles/photos_wanted", self.on_photos_wanted, wanted_qos)
             self.jpeg = array.array("B", plain_jpeg())
             self.create_timer(1.0 / self.rate, self.tick)
@@ -280,11 +278,11 @@ def main():
             msg.view_range_min, msg.view_range_max = float(self.view.range_min), float(self.view.range_max)
             pose = carry(read_json(self.state_path), taken)
             if flags.get("obstacles_dark"):
-                msg.reason, msg.detail = Obstacles.REASON_DARK, "flag obstacles_dark"
-            elif sight_reason(self.scene["sight"], t):
-                msg.reason, msg.detail = sight_reason(self.scene["sight"], t), "scene"
+                msg.reason, msg.detail = Obstacles.REASON_TOO_DARK, "flag obstacles_dark"
+            elif reason := sight_reason(self.scene["sight"], t):
+                msg.reason, msg.detail = reason, "scene"
             elif pose is None:
-                msg.reason, msg.detail = Obstacles.REASON_NO_FRAMES, "no true pose"
+                msg.reason, msg.detail = Obstacles.REASON_NO_SIGNAL, "no true pose"
             else:
                 msg.sight = True
                 self.images += 1

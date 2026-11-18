@@ -8,6 +8,6 @@
     {"kind": "UNKNOWN", "x": 6.0, "y": 0.0, "radius": 0.3, "height": 0.4, "from_s": 25}
   ],
   "sight": [
-    {"from_s": 30, "until_s": 35, "reason": "DARK"}
+    {"from_s": 30, "until_s": 35, "reason": "TOO_DARK"}
   ]
 }

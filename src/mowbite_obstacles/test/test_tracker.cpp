@@ -165,20 +165,20 @@ TEST_F(TrackerTest, WithoutSightNothingIsSeenFree) {
   for (double t = 1.4; t < 5.0; t += 0.2) {
     Frame frame = At(t);
     frame.sight = false;
-    frame.reason = "DARK";
+    frame.reason = "TOO_DARK";
     tracker.OnFrame(frame, t);
   }
   EXPECT_EQ(tracker.tracks().size(), 1u);
   const Status status = tracker.StatusAt(5.0);
   EXPECT_FALSE(status.sight);
-  EXPECT_EQ(status.reason, "DARK");
+  EXPECT_EQ(status.reason, "TOO_DARK");
   EXPECT_EQ(status.source, "stereo");
 }
 
 TEST_F(TrackerTest, ASensorWithoutFramesHasNoSight) {
   const Status status = tracker.StatusAt(0.5);
   EXPECT_FALSE(status.sight);
-  EXPECT_EQ(status.reason, "NO_FRAMES");
+  EXPECT_EQ(status.reason, "NO_SIGNAL");
   Feed(1.6);
   EXPECT_TRUE(tracker.StatusAt(1.7).sight);
   EXPECT_FALSE(tracker.StatusAt(2.7).sight);
