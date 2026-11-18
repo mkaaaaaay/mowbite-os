@@ -136,6 +136,8 @@ TEST_F(ServiceTest, ThePhotoOfTheFrameComesWithTheEventAndStays) {
   auto events = service->TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].second["image"], true);
+  EXPECT_EQ(events[0].second["severity"], "info");
+  EXPECT_EQ(events[0].second["resume"], "auto");
   const Json entry = Call("vision.obstacles.list")["obstacles"][0];
   ASSERT_TRUE(entry["image"].is_object());
   EXPECT_EQ(entry["image"]["name"], "o1.jpg");

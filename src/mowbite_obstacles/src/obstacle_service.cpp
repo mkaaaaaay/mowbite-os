@@ -319,6 +319,11 @@ Outcome ObstacleService::Clear(const Json& params) {
 }
 
 std::vector<std::pair<std::string, Json>> ObstacleService::TakeEvents() {
+  // Every event of the obstacles is a notice.
+  for (auto& [type, details] : events_) {
+    details["severity"] = "info";
+    details["resume"] = "auto";
+  }
   return std::exchange(events_, {});
 }
 

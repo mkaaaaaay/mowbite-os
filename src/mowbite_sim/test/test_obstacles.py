@@ -176,17 +176,17 @@ class TestObstacles(unittest.TestCase):
         with self.lock:
             return len(self.events)
 
-    def wait_event(self, kind, after, timeout=15.0, **having):
+    def wait_event(self, event_type, after, timeout=15.0, **having):
         end = time.time() + timeout
         while time.time() < end:
             with self.lock:
                 found = [event for event in self.events[after:]
-                         if event["type"] == kind and having.items() <= event.items()]
+                         if event["type"] == event_type and having.items() <= event.items()]
             if found:
                 return found[0]
             time.sleep(0.05)
         with self.lock:
-            self.fail(f"no {kind} with {having} in {self.events[after:]}")
+            self.fail(f"no {event_type} with {having} in {self.events[after:]}")
 
     def status_where(self, predicate, timeout=10.0):
         def match():
