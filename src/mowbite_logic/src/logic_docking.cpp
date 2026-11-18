@@ -84,21 +84,22 @@ void DockingPart::BeginDocking(CoreAccess core) {
 }
 
 void DockingPart::NextDockingTry(CoreAccess core) {
+  const auto& pose_now = core.pose();
   if (marker_docking_) return NextMarkerTry(core);
   const bool may_use_marker = Guided(core) && !try_by_position_;
-  if (!core.pose() || !core.PoseGood()) {
+  if (!pose_now || !core.PoseGood()) {
     // A marker in sight may guide the try without the map, then without the comparison.
     if (may_use_marker && DockPoseGood(core)) return ChooseGuide(core);
     WaitForDockingGps(core);
     return;
   }
   // A failed try is counted at once where the mower does not drive out first.
-  if (docking_failure_ && !docking_.OnLine(core.pose()->x, core.pose()->y, core.pose()->heading)) {
+  if (docking_failure_ && !docking_.OnLine(pose_now->x, pose_now->y, pose_now->heading)) {
     CountDockingFailure(core, *docking_failure_);
     return;
   }
   docking_checked_ = false;
-  DockingLeg leg = docking_.FirstLeg(core.pose()->x, core.pose()->y, core.pose()->heading);
+  DockingLeg leg = docking_.FirstLeg(pose_now->x, pose_now->y, pose_now->heading);
   // At the approach point the try chooses its way.
   if (leg.kind == DockingLeg::Kind::kLine && may_use_marker) return ChooseGuide(core);
   SetDockingLeg(core, std::move(leg));
@@ -238,6 +239,7 @@ void DockingPart::OnDockingLegEnded(CoreAccess core, LegEnd end, const Reason& r
 }
 
 void DockingPart::DockingWithoutPlanner(CoreAccess core, const Reason& silent) {
+  const auto& pose_now = core.pose();
   Reason failed =
       Reason("approach_failed", "The way to the docking station failed: " + silent.message).With("cause", silent.code);
   if (!core.config().dock.direct) {
@@ -245,7 +247,7 @@ void DockingPart::DockingWithoutPlanner(CoreAccess core, const Reason& silent) {
     return;
   }
   // The way is checked from where the mower stands, so only with a good position.
-  if (!core.pose() || !core.PoseGood()) {
+  if (!pose_now || !core.PoseGood()) {
     WaitForDockingGps(core);
     return;
   }
@@ -255,14 +257,14 @@ void DockingPart::DockingWithoutPlanner(CoreAccess core, const Reason& silent) {
                             ? core.config().dock.direct_margin + core.config().max_position_accuracy
                             : 0.0;
   const Point2 to = docking_.ApproachPoint();
-  const DirectRouteCheck check = CheckDirectRoute({core.pose()->x, core.pose()->y}, to, turning_radius_, margin,
+  const DirectRouteCheck check = CheckDirectRoute({pose_now->x, pose_now->y}, to, turning_radius_, margin,
                                                   core.drivable(), core.obstacles());
   if (!check.free) {
     failed.message += "; the straight way is not free: " + check.why;
     DockingTryFailed(core, failed.With("direct_blocked", true));
     return;
   }
-  const double distance = std::hypot(to.x - core.pose()->x, to.y - core.pose()->y);
+  const double distance = std::hypot(to.x - pose_now->x, to.y - pose_now->y);
   const std::string text = "No way from the planner (" + silent.message + "): straight to the point in front of the " +
                            "docking station, " + Metres(distance) + " m";
   core.AddEvent("DOCKING_DIRECT", {{"cause", silent.code},
@@ -272,7 +274,7 @@ void DockingPart::DockingWithoutPlanner(CoreAccess core, const Reason& silent) {
                               {"resume", "auto"}});
   core.Notify("Docking: " + text);
   docking_direct_cause_ = silent.code;
-  if (auto leg = docking_.Direct(core.pose()->x, core.pose()->y)) {
+  if (auto leg = docking_.Direct(pose_now->x, pose_now->y)) {
     docking_leg_due_ = std::move(*leg);
   } else {
     docking_leg_due_ = docking_.Line();
@@ -424,6 +426,7 @@ void DockingPart::WaitForDockingGps(CoreAccess core) {
 }
 
 void DockingPart::TickDocking(CoreAccess core, double now_s) {
+  const auto& mower = core.pose();
   // Poses of the marker age also while a leg in the map drives.
   marker_clock_ = std::max(marker_clock_, now_s);
   if (docking_charge_) {
@@ -447,12 +450,12 @@ void DockingPart::TickDocking(CoreAccess core, double now_s) {
   char text[128];
   std::snprintf(text, sizeof(text), "Docking failed: no good position for %.0f s", core.config().gps_timeout);
   Reason why;
-  if (!core.pose()) {
+  if (!mower) {
     why = Reason("NO_POSITION", std::string(text) + ": no position from the localization");
-  } else if (!core.pose()->orientation_valid) {
+  } else if (!mower->orientation_valid) {
     why = Reason("NO_HEADING", std::string(text) + ": the heading is not known");
   } else {
-    why = core.AccuracyReason(core.pose()->position_accuracy, core.config().max_position_accuracy);
+    why = core.AccuracyReason(mower->position_accuracy, core.config().max_position_accuracy);
     why.message = std::string(text) + ": " + why.message;
   }
   CountDockingFailure(core, why, true);

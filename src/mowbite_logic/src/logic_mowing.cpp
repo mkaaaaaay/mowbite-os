@@ -139,6 +139,7 @@ void MowingPart::Unpause(CoreAccess core, int why) {
 }
 
 JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
+  const auto& pose_now = core.pose();
   JobStep step;
   if (core.state() != State::kMowing || pause_ != 0 || core.emergency() || leg_ != Leg::kNone) return step;
   if (!job_.HasPlan()) {
@@ -164,7 +165,7 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
   }
   const JobPose* goal = job_.CurrentPose();
   if (!goal) return step;
-  if (!core.pose()) {
+  if (!pose_now) {
     Pause(core, kPauseGps, Reason("NO_POSITION", "No position from the localization"));
     return step;
   }
@@ -174,7 +175,7 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
     if (const JobPath* path = SkippedPathHere(core)) return SkippedPiece(core, *path);
   }
   if (!approached_ &&
-      std::hypot(goal->x - core.pose()->x, goal->y - core.pose()->y) > core.config().approach_distance) {
+      std::hypot(goal->x - pose_now->x, goal->y - pose_now->y) > core.config().approach_distance) {
     leg_ = Leg::kApproach;
     step.kind = JobStep::Kind::kApproach;
     step.goal = *goal;
@@ -242,6 +243,7 @@ void MowingPart::OnJobProgress(CoreFacts core, size_t index) {
 }
 
 void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Reason& reason) {
+  const auto& mower = core.pose();
   if (core.state() != State::kMowing || !LegDrives()) return;
   const bool follow = leg_ == Leg::kFollow;
   const bool approach = leg_ == Leg::kApproach;
@@ -273,10 +275,10 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
     case LegEnd::kCanceled: approached_ = false; break;
     case LegEnd::kGps:
       // The follower's text carries no numbers: the event gets the accuracy and the limit like a refused start.
-      if (reason.code == "POSITION_ACCURACY" && core.pose() &&
-          !(core.pose()->position_accuracy <= core.config().max_position_accuracy)) {
+      if (reason.code == "POSITION_ACCURACY" && mower &&
+          !(mower->position_accuracy <= core.config().max_position_accuracy)) {
         Pause(core, kPauseGps,
-              core.AccuracyReason(core.pose()->position_accuracy, core.config().max_position_accuracy));
+              core.AccuracyReason(mower->position_accuracy, core.config().max_position_accuracy));
       } else {
         Pause(core, kPauseGps, reason);
       }
@@ -303,7 +305,8 @@ bool MowingPart::LegDrives() const {
 }
 
 const JobPath* MowingPart::SkippedPathHere(CoreFacts core) const {
-  if (!skipped_ || !core.pose() || !job_.HasPlan()) return nullptr;
+  const auto& mower = core.pose();
+  if (!skipped_ || !mower || !job_.HasPlan()) return nullptr;
   const JobProgress& now = job_.progress();
   if (now.area != skipped_->area || now.fingerprint != skipped_->fingerprint || now.path != skipped_->path + 1 ||
       now.index != 0) {
@@ -312,7 +315,7 @@ const JobPath* MowingPart::SkippedPathHere(CoreFacts core) const {
   const JobPath* path = job_.Path(skipped_->path);
   if (!path || skipped_->index < 0 || static_cast<size_t>(skipped_->index) + 1 >= path->poses.size()) return nullptr;
   const JobPose& at = path->poses[static_cast<size_t>(skipped_->index)];
-  return std::hypot(at.x - core.pose()->x, at.y - core.pose()->y) <= core.config().approach_distance ? path : nullptr;
+  return std::hypot(at.x - mower->x, at.y - mower->y) <= core.config().approach_distance ? path : nullptr;
 }
 
 JobStep MowingPart::SkippedPiece(CoreAccess core, const JobPath& path) {

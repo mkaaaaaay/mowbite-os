@@ -89,12 +89,14 @@ void DockingPart::DockByPosition(CoreAccess core) {
 }
 
 std::string DockingPart::MarkerMapCheck(CoreAccess core, bool gate) {
+  const auto& mower = core.pose();
+  const auto& station = core.dock();
   const auto& marker = marker_.pose();
-  if (!core.dock() || !core.PoseGood() || !marker) return "";
-  const PoseSnapshot& map = *core.pose();  // NOLINT(bugprone-unchecked-optional-access): good means there is one
+  if (!station || !core.PoseGood() || !marker) return "";
+  const PoseSnapshot& map = *mower;  // NOLINT(bugprone-unchecked-optional-access): good means there is one
   const DockPose by_marker = StationByMarker(map.x, map.y, map.heading, *marker);
   // The position of the map errs by its accuracy on top of the limit of the reference check.
-  std::string problem = MarkerMapProblem(by_marker, *core.dock(),
+  std::string problem = MarkerMapProblem(by_marker, *station,
                                          core.config().dock_reference_limit + map.position_accuracy,
                                          gate ? kMarkerMapHeading : 0.0);
   if (problem.empty() || !docking_test_) return problem;
@@ -353,13 +355,14 @@ void DockingPart::MarkerFailed(CoreAccess core, const std::string& cause, const 
 }
 
 Reason DockingPart::GateProblem(CoreAccess core) {
+  const auto& mower = core.pose();
   const auto failed = [](const std::string& text) {
     return text.empty() ? Reason() : Reason("dock_failed", "Docking failed: " + text);
   };
   if (!marker_docking_) {
-    if (!core.pose()) return failed("at the gate there was no position");
-    return failed(docking_.CheckGate(docking_.Across(core.pose()->x, core.pose()->y), core.pose()->heading,
-                                     core.pose()->position_accuracy, core.DockAccuracyLimit()));
+    if (!mower) return failed("at the gate there was no position");
+    return failed(docking_.CheckGate(docking_.Across(mower->x, mower->y), mower->heading,
+                                     mower->position_accuracy, core.DockAccuracyLimit()));
   }
   if (!DockPoseGood(core)) return failed("at the gate the marker gave no good pose");
   // The scale and the map first: a marker of the wrong size or at the wrong place guides nothing, whatever else fails.

@@ -969,14 +969,16 @@ void LogicCore::SetGpsSettings(double max_position_accuracy, double gps_wait_tim
 }
 
 void LogicCore::OnTick(double now_s) {
+  auto& active = schedule_.run();
+  const auto& answered = release_.release_answered_s();
   // Any end of the emergency drops the request, so one still pending is an emergency that stayed.
-  if (release_.release_answered_s() && now_s - *release_.release_answered_s() > kReleaseSourceS) {
+  if (answered && now_s - *answered > kReleaseSourceS) {
     RefuseReset(Reason("STILL_ACTIVE", "The emergency stays: " + EmergencyReasonNames(reason_))
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
   WatchAnnouncement();
-  if (schedule_.run() && schedule_.run()->phase == RunPhase::kAnnouncing &&
-      now_s >= schedule_.run()->announce_until) {
+  if (active && active->phase == RunPhase::kAnnouncing &&
+      now_s >= active->announce_until) {
     EndAnnouncement(now_s);
   }
   if (state_ == State::kDocking) TickDocking(now_s);

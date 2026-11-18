@@ -98,8 +98,9 @@ Reason LogicCore::ContinueProblem() const {
 }
 
 void LogicCore::ResumedByUser() {
+  auto& active = schedule_.run();
   // The user took over: deadlines that came are dropped, those to come stay.
-  if (schedule_.run() && schedule_.run()->end_passed) schedule_.run()->end_due.reset();
+  if (active && active->end_passed) active->end_due.reset();
   home_.Resumed();
   ActOnHome(Reason());
 }

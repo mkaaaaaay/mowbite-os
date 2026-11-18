@@ -21,6 +21,7 @@ std::optional<CalibrationStatus> CalibrationPart::CalibrationStatusNow(CoreFacts
 }
 
 std::vector<Reason> CalibrationPart::CalibrationProblems(CoreFacts core, double now_s) const {
+  const auto& pose_now = core.pose();
   std::vector<Reason> problems;
   // One reason of each name; the first one found tells best.
   const auto add = [&problems](const Reason& why) {
@@ -34,17 +35,17 @@ std::vector<Reason> CalibrationPart::CalibrationProblems(CoreFacts core, double 
   add(core.HoldProblem());
   add(core.Unsafe());
   if (core.DockContact()) add(Reason("ON_DOCK", "The mower is on the docking station: calibrate on the lawn"));
-  if (!core.pose()) {
+  if (!pose_now) {
     add(Reason("NO_POSITION", "No position from the localization"));
   } else {
     const double limit =
         std::min(core.config().calibration.max_position_accuracy, core.config().max_position_accuracy);
-    if (!(core.pose()->position_accuracy <= limit)) {
-      Reason why = core.AccuracyReason(core.pose()->position_accuracy, limit);
+    if (!(pose_now->position_accuracy <= limit)) {
+      Reason why = core.AccuracyReason(pose_now->position_accuracy, limit);
       why.message += " for a calibration";
       add(why);
     }
-    if (!core.pose()->orientation_valid) add(Reason("NO_HEADING", "The heading is not aligned yet"));
+    if (!pose_now->orientation_valid) add(Reason("NO_HEADING", "The heading is not aligned yet"));
   }
   if (!core.hw().battery_ok) {
     add(Reason("BATTERY_LOW", "No battery level from the driver"));

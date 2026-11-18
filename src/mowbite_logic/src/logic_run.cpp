@@ -90,9 +90,10 @@ Reason LogicCore::ScheduleProblem(const StartRequest& request, const ScheduleRun
 }
 
 void LogicCore::EndAnnouncement(double now_s) {
-  if (!schedule_.run()) return;
-  StartRequest request = SchedulePart::RunRequest(schedule_.run()->request);
-  const Reason why = ScheduleProblem(request, schedule_.run()->request, now_s);
+  auto& active = schedule_.run();
+  if (!active) return;
+  StartRequest request = SchedulePart::RunRequest(active->request);
+  const Reason why = ScheduleProblem(request, active->request, now_s);
   if (!why.empty()) {
     RefuseStart(why);
     RunEnds("REFUSED", why.code);
@@ -109,22 +110,26 @@ std::optional<double> LogicCore::PlanAngle() const {
 }
 
 bool LogicCore::SunsetWanted() const {
-  if (!schedule_.run()) return home_.sunset_on();
-  return !schedule_.run()->request.dark_allowed || schedule_.run()->request.until_sunset;
+  auto& active = schedule_.run();
+  if (!active) return home_.sunset_on();
+  return !active->request.dark_allowed || active->request.until_sunset;
 }
 
 Reason LogicCore::DeadlineDue(double now_s) {
-  if (home_.sunset_due() && now_s >= *home_.sunset_due()) return DarkWhy(now_s);
-  if (!schedule_.run() || !schedule_.run()->end_due || now_s < *schedule_.run()->end_due) return {};
-  schedule_.run()->end_passed = true;
+  auto& active = schedule_.run();
+  const auto& due = home_.sunset_due();
+  if (due && now_s >= *due) return DarkWhy(now_s);
+  if (!active || !active->end_due || now_s < *active->end_due) return {};
+  active->end_passed = true;
   return Reason("SCHEDULE", "the time of the plan is over").With("detail", "end");
 }
 
 Reason LogicCore::DropTasks(const std::string& run_id, const std::vector<std::string>& area_ids) {
-  if (!schedule_.run() || schedule_.run()->request.run_id != run_id) {
+  auto& active = schedule_.run();
+  if (!active || active->request.run_id != run_id) {
     return Reason("NOT_ALLOWED", "No run " + run_id + " of the schedule: a run by hand is not the schedule's");
   }
-  if (state_ != State::kMowing || schedule_.run()->phase != RunPhase::kMowing) return WrongState();
+  if (state_ != State::kMowing || active->phase != RunPhase::kMowing) return WrongState();
   mowing_.job().PassOver(area_ids.empty() ? mowing_.job().TaskIds(mowing_.job().progress().tasks) : area_ids);
   if (!mowing_.job().AreaLeft()) {
     Reason why = SchedulePause();
