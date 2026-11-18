@@ -287,8 +287,8 @@ class TestObstacleStop(unittest.TestCase):
         p = self.probe
         x, y, stood, _ = self.stop_at_ball()
         # A person steps in right before the nose, still in view, and goes again with the ball. Nearer than about 0.44 m
-        # the sensor cannot see the place free at all.
-        cx, cy = point(stood, FRONT + 0.48 + 0.25)
+        # the sensor cannot see the place free at all; the track counts its spread nearer, so it stands at 0.53 m.
+        cx, cy = point(stood, FRONT + 0.53 + 0.25)
         place(ball(x, y), thing("PERSON", "person", cx, cy, 0.25, 1.7))
         self.assertTrue(p.wait(lambda: any(t.kind == "PERSON" and t.zone == 2 and t.in_view and 0 < t.ahead < NEAR_AHEAD
                                            for t in p.obstacles.tracks), 5), p.obstacles.tracks)
