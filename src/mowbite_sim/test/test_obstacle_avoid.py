@@ -288,9 +288,10 @@ class TestObstacleAvoid(unittest.TestCase):
         aside = lambda t: abs(-(t["x"] - x) * s + (t["y"] - y) * c)  # noqa: E731
         self.assertTrue(p.wait(lambda: aside(p.truth()) > AROUND + 0.4, 900), "the lanes never got past the ball")
         with p.lock:
-            track = list(p.track[index:])
-        left = unmowed(track, x, y, avoided["keep_out_r"])
-        nearest = min(clearance(t, x, y, BALL_RADIUS) for t in track)
+            whole = list(p.track)
+        # The lanes before the ball count as mowed too.
+        left = unmowed(whole, x, y, avoided["keep_out_r"])
+        nearest = min(clearance(t, x, y, BALL_RADIUS) for t in whole[index:])
         print(f"amid the lanes: {left:.2f} m² unmowed outside the circle of {avoided['keep_out_r']:.2f} m, "
               f"{avoided['left_out']:.1f} m of lanes left out, nearest {nearest:.2f} m")
         self.assertGreater(nearest, CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
