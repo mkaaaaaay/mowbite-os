@@ -322,9 +322,9 @@ class TestObstacleAvoid(unittest.TestCase):
         # No circle left from the balls: the mower mows lanes, no way around.
         if p.robot.current_state != "MOWING":
             p.act("mower_logic:idle/start_mowing")
-        circles = lambda: [e for e in p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]  # noqa
-                           if e["keep_out_r"] is not None]
-        self.assertTrue(p.wait(lambda: not circles() and p.robot.current_state == "MOWING", 120), "no mowing")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 120), "no mowing")
+        entries = p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]
+        self.assertEqual([e for e in entries if e["keep_out_r"] is not None], [], "a circle stays")
         start = p.straight_run(5.0)
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, FRONT + 0.25 + 2.0)
