@@ -710,6 +710,40 @@ Around `mowbite_camera`:
 - `position` in `hw/cameras` (`front`, `rear`, `left`, `right`; empty when unknown or not fixed) says where the camera
   looks, not where it sits; the app's switch between cameras goes by it.
 
+## 9. Obstacle sensors (optional)
+
+A sensor that sees obstacles on the ground ahead: a camera with object detection and depth on the Tron, later
+ultrasound or LiDAR elsewhere. The platform says where things are; what they mean (tracks, confirmation, zones, the
+sight of the sensors, the list and the photos for the app) is in `mowbite_obstacles` of the OS, the same for every
+sensor. Today it shows only: `obstacle_mode` takes off and show, nothing drives by it.
+
+- Name each sensor in `obstacle_sources` of `hw/capabilities` (a camera by its id of `hw/cameras`). Without a name the
+  OS offers no `vision.obstacles.*` and keeps no list.
+- Each sensor sends `hw/obstacles` (`mowbite_msgs/Obstacles`) at a fixed rate of at least 4 Hz, also when it finds
+  nothing: `header.stamp` the time the frame was taken by the host clock (the OS takes the pose of that moment),
+  `sight` false with a reason while it cannot see (dark, blinded, covered, too hot, no frames, not set up), and the
+  sector it sees on the ground from its mount and lens. A place outside the sector never counts as seen free, so the
+  sector has to be honest: from where the lowest ray of the image meets the ground, not from the bumper.
+- Each obstacle in `base_link` on the ground: the middle of its footprint, its radius, its height (NaN unknown) and
+  the covariance of x and y, which grows along the view with the distance for stereo depth. `kind` is PERSON, ANIMAL,
+  OBJECT or UNKNOWN (geometry only); map the classes of the model to these in the file of the platform, an unknown
+  class to OBJECT, and leave out what is no obstacle (the station, a drain cover, leaves). `cut_bottom` when the box
+  touches the lower edge of the image, `position_from` and `agrees` when the position comes from the ground plane,
+  from depth or both.
+- `mowbite_obstacles::ground` (library without ROS) puts a box on the ground: rays of its lower edge, corners and upper
+  edge from your lens model, the mount in six degrees of freedom, the ground at `-wheel_radius`; with stereo depth it
+  fuses both and says whether they agree; `ViewOf` gives the sector. Measure the mount: one degree of pitch moves a
+  point 2 m ahead by about 0.3 m.
+- Photos only while `obstacles/photos_wanted` (latched) is true: then at most one `hw/obstacle_images` a second, the
+  whole image of a frame with finds as JPEG under 100 KB, with the stamp and source of that frame; the boxes are in
+  its pixels. While it is false, no image leaves the process of the sensor.
+- The OS keeps the list and the photos in `<data_dir>/obstacles` (200 entries, 20 MB, 14 days by default:
+  `list_entries`, `list_max_mb`, `list_days` of `mowbite_obstacles`); nothing of it goes into incidents, logs or MQTT
+  topics. The zones and the confirmation are parameters of `mowbite_obstacles` as well; leave them until the sensor
+  is measured on the mower.
+- In the simulation `fake_obstacles` reports the things of a scene file (`config/obstacles_scene.example.json`) from
+  the true pose of the fake board; `test_obstacles.py` drives the node through the app interface.
+
 ## Check list
 
 - [ ] Driver package: protocol code with gtests, build without warnings
@@ -741,4 +775,6 @@ Around `mowbite_camera`:
 - [ ] Lights, if any: device rights, `output` on only after a look on the mower
 - [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits
       measured; `mowbite_camera` started with them, its ports reachable from the app, each protocol watched once
+- [ ] Obstacle sensors, if any: named in `obstacle_sources`, `hw/obstacles` at a fixed rate with sight and an honest
+      sector, the mount measured, classes mapped in the file of the platform, photos only while wanted
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s
