@@ -157,6 +157,7 @@ class ObstaclesNode : public rclcpp::Node {
     c.stop_object_margin = declare_parameter("stop_object_margin", c.stop_object_margin);
     c.slow_ahead = declare_parameter("slow_ahead", c.slow_ahead);
     c.zone_sigma = declare_parameter("zone_sigma", c.zone_sigma);
+    c.view_margin = declare_parameter("view_margin", c.view_margin);
     c.unknown_stops = declare_parameter("unknown_stops", c.unknown_stops);
     return c;
   }

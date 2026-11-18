@@ -268,7 +268,8 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
       continue;
     }
     const double dx = track.x - pose.x, dy = track.y - pose.y;
-    track.in_view = Inside(frame.view, c * dx + s * dy, -s * dx + c * dy, track.radius);
+    const double spare = config_.view_margin + 2.0 * LargerSigma(track.cov_xx, track.cov_xy, track.cov_yy);
+    track.in_view = Inside(frame.view, c * dx + s * dy, -s * dx + c * dy, track.radius + spare);
     if (!track.in_view) {
       track.free_since = -1.0;
       ++it;

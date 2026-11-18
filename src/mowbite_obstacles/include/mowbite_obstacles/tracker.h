@@ -91,6 +91,9 @@ struct TrackerConfig {
   // while it lies in no stop zone: a place out of view is never free.
   double free_seen = 1.0;
   double track_timeout = 30.0;
+  // A miss counts only where the track lies inside the view with view_margin (m) and twice its spread to spare: a thing
+  // the edge of the view cuts is not seen free.
+  double view_margin = 0.05;
   // An unconfirmed track ends after this long without a find (s).
   double candidate_timeout = 2.0;
   // A frame needs a pose within this of its stamp (s); poses kept this long.

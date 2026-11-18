@@ -360,4 +360,15 @@ TEST(Kinds, NamesGoBothWays) {
 }
 
 }  // namespace
+TEST_F(TrackerTest, AThingTheEdgeOfTheViewCutsIsNotSeenFree) {
+  // At 37 deg from the camera its disc lies in the view, with the margin and its spread it reaches past 43 deg.
+  const double d = 1.5, angle = 37.0 * kDeg;
+  Find dog = Thing(Kind::kAnimal, 0.466 + d * std::cos(angle), d * std::sin(angle));
+  Feed(1.0, {dog});
+  Feed(1.2, {dog});
+  for (double t = 1.4; t < 5.0; t += 0.2) EXPECT_TRUE(Feed(t).ended.empty()) << t;
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  EXPECT_FALSE(tracker.tracks().begin()->second.in_view);
+}
+
 }  // namespace mowbite_obstacles
