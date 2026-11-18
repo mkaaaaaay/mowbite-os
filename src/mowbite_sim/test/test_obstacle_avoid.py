@@ -52,8 +52,10 @@ BLADE_RADIUS = float(tron_geometry("mower_width")) / 2
 BALL_RADIUS = 0.1
 BALL_HEIGHT = 0.2
 BALL_GAP = 1.6
-# Between the body and the ball the clearance of the logic, less what the follower may stray (m).
+# Between the body and the ball the clearance of the logic on the way around and on a lane passing it straight, less
+# what the follower may stray (m).
 CLEARANCE = 0.30
+PASS_CLEARANCE = 0.10
 STRAY = 0.06
 # Around a ball amid the lanes at most this much of the lawn outside its circle stays unmowed (m²): the stretch of each
 # lane the body cannot drive while it would touch the circle, less what the way around cuts.
@@ -143,6 +145,17 @@ def unmowed(track, x, y, keep_out, picture=None):
     if picture is not None:
         picture.extend("".join(row[::2]) for row in rows[::2])
     return left * CELL * CELL
+
+
+def around(track, x, y, yaw):
+    """The poses of track until base_link got 1 m past x, y along yaw: the way around a ball ahead."""
+    c, s = math.cos(yaw), math.sin(yaw)
+    out = []
+    for t in track:
+        out.append(t)
+        if (t["x"] - x) * c + (t["y"] - y) * s > 1.0:
+            break
+    return out
 
 
 def place(*things):
@@ -269,15 +282,17 @@ class TestObstacleAvoid(unittest.TestCase):
         self.assertEqual(p.robot.current_state, "MOWING")
         with p.lock:
             track = list(p.track[index:])
+        way = min(clearance(t, x, y, BALL_RADIUS) for t in around(track, x, y, start["yaw"]))
         nearest = min(clearance(t, x, y, BALL_RADIUS) for t in track)
-        self.assertGreater(nearest, CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
+        self.assertGreater(way, CLEARANCE - STRAY, f"the body came {way:.2f} m near the ball on the way around")
+        self.assertGreater(nearest, PASS_CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
         moved = sum(math.hypot(b["x"] - a["x"], b["y"] - a["y"]) for a, b in zip(track, track[1:]))
         self.assertGreater(moved, 5.0, "it hardly moved after going around")
         entries = p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]
         entry = next(e for e in entries if e["id"] == avoided["obstacle_id"])
         self.assertEqual(entry["action"], "avoided", entry)
         self.assertEqual(entry["keep_out_r"], avoided["keep_out_r"], entry)
-        print(f"ball: nearest {nearest:.2f} m, {avoided['left_out']:.1f} m left out")
+        print(f"ball: around {way:.2f} m, nearest {nearest:.2f} m, {avoided['left_out']:.1f} m left out")
         place()
 
     def mow_anew(self):
@@ -303,6 +318,7 @@ class TestObstacleAvoid(unittest.TestCase):
         done = p.event(since, "JOB_COMPLETE", 1500)
         place()
         self.assertIsNotNone(done, "the job did not complete")
+        self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 30), "mowing did not end")
         with p.lock:
             whole = list(p.track)
         # The lanes before the ball count as mowed too.
@@ -311,10 +327,12 @@ class TestObstacleAvoid(unittest.TestCase):
         cutting = sum(1 for t in whole if t.get("cutter"))
         print(f"blade on in {cutting} of {len(whole)} poses, lanes along {math.degrees(start['yaw']):.0f} deg")
         print("\n".join(picture))
+        way = min(clearance(t, x, y, BALL_RADIUS) for t in around(whole[index:], x, y, start["yaw"]))
         nearest = min(clearance(t, x, y, BALL_RADIUS) for t in whole[index:])
         print(f"amid the lanes: {left:.2f} m² unmowed outside the circle of {avoided['keep_out_r']:.2f} m, "
-              f"{avoided['left_out']:.1f} m of lanes left out, nearest {nearest:.2f} m")
-        self.assertGreater(nearest, CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
+              f"{avoided['left_out']:.1f} m of lanes left out, around {way:.2f} m, nearest {nearest:.2f} m")
+        self.assertGreater(way, CLEARANCE - STRAY, f"the body came {way:.2f} m near the ball on the way around")
+        self.assertGreater(nearest, PASS_CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
         self.assertLessEqual(left, UNMOWED_MAX)
 
     def test_04_a_person_in_the_way_is_waited_for(self):
