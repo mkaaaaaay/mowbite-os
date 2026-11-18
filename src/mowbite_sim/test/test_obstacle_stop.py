@@ -3,7 +3,7 @@ the test moves, mowbite_obstacles tracks them, the logic holds the mower and the
 simulated Tron reports the camera stereo and obstacle_mode_max 2, obstacle_mode is stop. Checked on the true pose of
 fake_tron: an object stops the mower with the blade off before it and it goes on once the place is seen free; a person
 slows it, stops it farther off and lets it go on after it walked away; an animal beside the mower out of view holds it
-until the user continues; without sight nothing stops it.
+until the user continues; after a thing right at the nose it waits 30 s; without sight nothing stops it.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_obstacle_stop.py
 """
@@ -270,7 +270,32 @@ class TestObstacleStop(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
         place()
 
-    def test_05_without_sight_nothing_stops_it(self):
+    def test_05_after_a_thing_right_at_the_nose_it_waits_thirty_seconds(self):
+        p = self.probe
+        start = p.straight_run(4.5)
+        self.assertIsNotNone(start, "no straight run")
+        x, y = point(start, FRONT + 0.1 + 1.6)
+        since = len(p.events)
+        place(thing("OBJECT", "ball", x, y, 0.1, 0.2))
+        self.paused_for(since, "OBJECT")
+        time.sleep(1.0)
+        still, poses = p.standing()
+        self.assertTrue(still, poses)
+        # A cat walks in right before the nose, still in view, and goes again with the ball.
+        cx, cy = point(poses[1], FRONT + 0.42 + 0.15, 0.4)
+        place(thing("OBJECT", "ball", x, y, 0.1, 0.2), thing("ANIMAL", "cat", cx, cy, 0.15, 0.3))
+        self.assertTrue(p.wait(lambda: any(t.kind == "ANIMAL" and t.confirmed and t.ahead < NEAR_AHEAD
+                                           for t in p.obstacles.tracks), 5), p.obstacles.tracks)
+        since = len(p.events)
+        gone = time.time()
+        place()
+        on = p.event(since, "STATE", NEAR_WAIT + SEEN_FREE + 6.0, state="MOWING")
+        self.assertIsNotNone(on, "it did not go on")
+        took = time.time() - gone
+        self.assertGreater(took, NEAR_WAIT)
+        print(f"near: on after {took:.1f} s")
+
+    def test_06_without_sight_nothing_stops_it(self):
         p = self.probe
         start = p.straight_run(4.5)
         self.assertIsNotNone(start, "no straight run")
