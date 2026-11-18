@@ -28,6 +28,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+from obstacle_scene import ball, dog, person  # noqa: E402
 from sim_common import (bridge_node, mosquitto, mqtt_connect, mqtt_rpc, package_program, sim_program,  # noqa: E402
                         stop_process, store_answer, wait_until, write_json)
 
@@ -44,11 +45,7 @@ METHODS = ["vision.obstacles.clear", "vision.obstacles.image", "vision.obstacles
 BALL = (1.4, 0.0)
 PERSON = (0.0, 3.0)
 DOG = (-3.0, 0.0)
-SCENE_THINGS = {"obstacles": [
-    {"kind": "OBJECT", "class_name": "ball", "score": 0.9, "x": BALL[0], "y": BALL[1], "radius": 0.1, "height": 0.2},
-    {"kind": "PERSON", "class_name": "person", "score": 0.9, "x": PERSON[0], "y": PERSON[1], "radius": 0.25,
-     "height": 1.7},
-    {"kind": "ANIMAL", "class_name": "dog", "score": 0.9, "x": DOG[0], "y": DOG[1], "radius": 0.2, "height": 0.5}]}
+SCENE_THINGS = {"obstacles": [ball(*BALL), person(*PERSON), dog(*DOG)]}
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 
 

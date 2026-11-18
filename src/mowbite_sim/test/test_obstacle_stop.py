@@ -7,49 +7,24 @@ until the user continues; after a person right at the nose it waits 30 s; withou
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_obstacle_stop.py
 """
-import json
 import math
 import os
-import shutil
-import signal
-import subprocess
 import sys
-import tempfile
 import time
 import unittest
 
-import rclpy
-from mowbite_msgs.msg import MapStatus, MqttPublish, ObstacleStatus, RobotPose, RobotState, RpcError, RpcResponse
-from mowbite_msgs.msg import RpcRequest
-from mowbite_msgs.srv import ReplaceMap, SetPose
-from std_msgs.msg import String
-
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, SimProbe, follower_param, sim_description, sim_files, sim_program,  # noqa: E402
-                        stop_process, tron_geometry, wrap, write_json)
+from obstacle_scene import (BALL_GAP, BALL_RADIUS, Lawn, ObstacleSim, Stage, ball, dog, person,  # noqa: E402
+                            point)
+from sim_common import follower_param, sim_description, tron_geometry  # noqa: E402
 
-WORK = tempfile.mkdtemp(prefix="mowbite_obstacle_stop_")
-STATE, FLAGS, RX, DATA = sim_files(WORK)
-CONFIG = os.path.join(WORK, "obstacle_stop.yaml")
-SCENE = os.path.join(WORK, "scene.json")
-
+STAGE = Stage("obstacle_stop", mode_max=2)
 # A square lawn of 10 m with the mower in its corner: every edge of the loop around it is long enough for a run at a
 # thing ahead.
-LAWN_MIN = (-0.41, -0.11)
-LAWN_MAX = (9.59, 9.89)
-LAWN = [LAWN_MIN, (LAWN_MAX[0], LAWN_MIN[1]), LAWN_MAX, (LAWN_MIN[0], LAWN_MAX[1])]
-GARDEN = {
-    "areas": [{"id": "lawn", "properties": {"type": "mow", "name": "Lawn", "outline_count": 1},
-               "outline": [{"x": x, "y": y} for x, y in LAWN]}],
-    "docking_stations": [],
-}
+LAWN = Lawn((-0.41, -0.11), (9.59, 9.89))
 # The front of the body ahead of base_link that the zones count from (m); speed_slow of the follower (m/s).
 FRONT = float(tron_geometry("robot_front"))
 SPEED_SLOW = float(follower_param("speed_slow"))
-# The ball of the runs: its radius and height, and how far its edge lies ahead of the front when it is placed (m).
-BALL_RADIUS = 0.1
-BALL_HEIGHT = 0.2
-BALL_GAP = 1.6
 # The hold: seen free this long before it goes on (s), longer after a thing right at the nose; the tracker ends a track
 # once its place is seen free for 1 s.
 FREE_WAIT = 10.0
@@ -57,34 +32,9 @@ NEAR_WAIT = 30.0
 NEAR_AHEAD = 0.5
 SEEN_FREE = 1.0
 
-with open(CONFIG, "w") as f:
-    f.write("tron_mcu:\n  ros__parameters:\n    safety_measurement_date: \"simulation\"\n    allow_blade: true\n"
-            "    obstacle_sources: [\"stereo\"]\n    obstacle_mode_max: 2\n"
-            "mowbite_logic:\n  ros__parameters:\n    mow_with_blade: true\n"
-            "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
-
 
 def generate_test_description():
-    write_json(SCENE, {"obstacles": []})
-    return sim_description(WORK, 18836, extra_config=CONFIG, settings={"obstacle_mode": 2})
-
-
-def room_ahead(t):
-    """m from base_link along the heading to the edge of the lawn."""
-    c, s = math.cos(t["yaw"]), math.sin(t["yaw"])
-    room = math.inf
-    for lo, hi, p, d in ((LAWN_MIN[0], LAWN_MAX[0], t["x"], c), (LAWN_MIN[1], LAWN_MAX[1], t["y"], s)):
-        if d > 1e-6:
-            room = min(room, (hi - p) / d)
-        elif d < -1e-6:
-            room = min(room, (lo - p) / d)
-    return room
-
-
-def point(t, ahead, left=0.0):
-    """The map point ahead and left of base_link."""
-    c, s = math.cos(t["yaw"]), math.sin(t["yaw"])
-    return t["x"] + ahead * c - left * s, t["y"] + ahead * s + left * c
+    return sim_description(STAGE.work, 18836, extra_config=STAGE.config, settings={"obstacle_mode": 2})
 
 
 def gap(t, x, y, radius):
@@ -92,93 +42,19 @@ def gap(t, x, y, radius):
     return (x - t["x"]) * math.cos(t["yaw"]) + (y - t["y"]) * math.sin(t["yaw"]) - FRONT - radius
 
 
-def place(*things):
-    write_json(SCENE, {"obstacles": list(things)})
+def gaps_since(probe, since_index, x, y, radius):
+    """(gap, speed between the poses) along the true track since that index, by the times of the simulated board: a
+    pose read twice is no stop and the next step no jump."""
+    with probe.lock:
+        track = list(probe.track[since_index:])
+    return [(gap(b, x, y, radius), math.hypot(b["x"] - a["x"], b["y"] - a["y"]) / (b["t"] - a["t"]))
+            for a, b in zip(track, track[1:]) if b["t"] > a["t"]]
 
 
-def thing(kind, name, x, y, radius, height):
-    return {"kind": kind, "class_name": name, "score": 0.9, "x": x, "y": y, "radius": radius, "height": height}
-
-
-def ball(x, y):
-    return thing("OBJECT", "ball", x, y, BALL_RADIUS, BALL_HEIGHT)
-
-
-class Probe(SimProbe):
-    def __init__(self):
-        super().__init__("obstacle_stop_probe", state=STATE, flags=FLAGS, log=RX)
-        self.status = None
-        self.pose = None
-        self.robot = None
-        self.obstacles = None
-        self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
-        self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
-        self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
-        self.node.create_subscription(ObstacleStatus, "obstacles/status", self._set("obstacles"), 10)
-        self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
-        self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
-        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
-        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
-        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
-        self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
-        self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
-        self.start()
-        self.spawn(self._record)
-
-    def speed(self, span=1.0):
-        """m/s of the true pose over the last span s (five poses a second)."""
-        with self.lock:
-            track = list(self.track[-int(span * 5) - 1:])
-        if len(track) < 2:
-            return 0.0
-        return math.hypot(track[-1]["x"] - track[0]["x"], track[-1]["y"] - track[0]["y"]) / (0.2 * (len(track) - 1))
-
-    def straight_run(self, room, timeout=120.0):
-        """The true pose once the mower mows straight ahead with that much lawn before it, None if it never does."""
-        end = time.time() + timeout
-        while time.time() < end:
-            with self.lock:
-                track = list(self.track[-6:])
-            turned = abs(wrap(track[-1]["yaw"] - track[0]["yaw"])) if len(track) == 6 else 1
-            if (turned < 0.03 and self.robot is not None and self.robot.current_state == "MOWING"
-                    and self.speed() > 0.25 and room_ahead(track[-1]) >= room):
-                return track[-1]
-            time.sleep(0.2)
-        return None
-
-    def gaps_since(self, since_index, x, y, radius):
-        """(gap, speed between the poses) along the true track since that index, by the times of the simulated board:
-        a pose read twice is no stop and the next step no jump."""
-        with self.lock:
-            track = list(self.track[since_index:])
-        return [(gap(b, x, y, radius), math.hypot(b["x"] - a["x"], b["y"] - a["y"]) / (b["t"] - a["t"]))
-                for a, b in zip(track, track[1:]) if b["t"] > a["t"]]
-
-
-class TestObstacleStop(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        rclpy.init()
-        cls.probe = Probe()
-        cls.probe.flags()
-        cls.fake = subprocess.Popen([sim_program("fake_obstacles"), "--ros-args", "-p", f"state:={STATE}", "-p",
-                                     f"flags:={FLAGS}", "-p", f"scene:={SCENE}"])
-
-    @classmethod
-    def tearDownClass(cls):
-        if cls.fake.poll() is None:
-            stop_process(cls.fake, signal.SIGINT)
-        cls.probe.stop()
-        rclpy.shutdown()
-        shutil.rmtree(WORK, ignore_errors=True)
-
-    def paused_for(self, since, kind, timeout=10.0):
-        state = self.probe.event(since, "STATE", timeout, state="PAUSED")
-        self.assertIsNotNone(state, [e["type"] for e in self.probe.events[since:]])
-        self.assertEqual(state["reason"], "OBSTACLE", state)
-        self.assertEqual(state["kind"], kind, state)
-        self.assertEqual(state["resume"], "auto", state)
-        return state
+class TestObstacleStop(ObstacleSim, unittest.TestCase):
+    STAGE = STAGE
+    LAWN = LAWN
+    PROBE_NAME = "obstacle_stop_probe"
 
     def stop_at_ball(self):
         """A ball ahead on a straight run, the mower stopped for it: (x, y of the ball, the true pose, the index of the
@@ -188,8 +64,8 @@ class TestObstacleStop(unittest.TestCase):
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, FRONT + BALL_RADIUS + BALL_GAP)
         since = len(p.events)
-        place(ball(x, y))
-        self.paused_for(since, "OBJECT")
+        STAGE.place(ball(x, y))
+        self.paused_for(since, "OBJECT", resume="auto")
         time.sleep(1.0)
         still, poses = p.standing()
         self.assertTrue(still, poses)
@@ -201,28 +77,14 @@ class TestObstacleStop(unittest.TestCase):
         p = self.probe
         since = len(p.events)
         changed = time.time()
-        place(*things)
+        STAGE.place(*things)
         self.assertIsNotNone(p.event(since, "STATE", wait + SEEN_FREE + 6.0, state="MOWING"), "it did not go on")
         took = time.time() - changed
         self.assertGreater(took, wait)
         return took, since
 
     def test_01_mowing_on_the_lawn(self):
-        p = self.probe
-        self.assertTrue(p.wait(lambda: p.status is not None and p.status.datum_state != MapStatus.DATUM_UNKNOWN, 30))
-        request = ReplaceMap.Request()
-        request.map = json.dumps(GARDEN)
-        answer = p.call(p.replace_map, request)
-        self.assertTrue(answer.success, answer.message)
-        self.assertTrue(p.wait(lambda: p.status.mowing_allowed, 10), "the map does not fit the datum")
-        request = SetPose.Request()
-        request.pose.orientation.w = 1.0
-        p.call(p.set_pose, request)
-        self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
-                               and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
-        self.assertTrue(p.wait(lambda: p.obstacles is not None and p.obstacles.sight, 20), "the camera sees nothing")
-        p.act("mower_logic:idle/start_mowing")
-        self.assertIsNotNone(p.event(0, "BLADES", 120, enabled=True), "the blade never ran")
+        self.mow_on_the_lawn()
 
     def test_02_an_object_ahead_stops_it_until_its_place_is_seen_free(self):
         p = self.probe
@@ -245,22 +107,22 @@ class TestObstacleStop(unittest.TestCase):
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, FRONT + 0.25 + 2.9)
         since, index = len(p.events), len(p.track)
-        place(thing("PERSON", "person", x, y, 0.25, 1.7))
-        self.addCleanup(place)
-        self.paused_for(since, "PERSON", 20)
+        STAGE.place(person(x, y))
+        self.addCleanup(STAGE.place)
+        self.paused_for(since, "PERSON", 20, resume="auto")
         time.sleep(1.5)
         still, poses = p.standing()
         self.assertTrue(still, poses)
         left = gap(poses[1], x, y, 0.25)
         self.assertGreater(left, 0.6, f"stopped {left:.2f} m before the person")
         # In the zone to go slow (2 m) at most speed_slow, after a second to brake.
-        slowed = [v for g, v in p.gaps_since(index, x, y, 0.25) if left + 0.1 < g < 1.6]
+        slowed = [v for g, v in gaps_since(p, index, x, y, 0.25) if left + 0.1 < g < 1.6]
         self.assertTrue(slowed, "no pose in the slow zone")
         self.assertLessEqual(max(slowed), SPEED_SLOW + 0.05, slowed)
         # The person walks away to the side, out of the corridor.
         px, py = point(poses[1], FRONT + 1.5, 3.0)
-        took, _ = self.goes_on_after(FREE_WAIT, thing("PERSON", "person", px, py, 0.25, 1.7))
-        place()
+        took, _ = self.goes_on_after(FREE_WAIT, person(px, py))
+        STAGE.place()
         print(f"person: {left:.2f} m left, slow zone at most {max(slowed):.2f} m/s, on after {took:.1f} s")
 
     def test_04_an_animal_beside_it_out_of_view_holds_it_until_the_user_continues(self):
@@ -269,8 +131,8 @@ class TestObstacleStop(unittest.TestCase):
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, 2.6, 1.2)
         since = len(p.events)
-        place(thing("ANIMAL", "dog", x, y, 0.2, 0.5))
-        self.paused_for(since, "ANIMAL")
+        STAGE.place(dog(x, y))
+        self.paused_for(since, "ANIMAL", resume="auto")
         # Out of view a place is never free: it waits past every wait for a free place.
         time.sleep(NEAR_WAIT + 5.0)
         self.assertEqual(p.robot.current_state, "PAUSED")
@@ -281,7 +143,7 @@ class TestObstacleStop(unittest.TestCase):
         answer = p.rpc("mowing.continue", {"client": "test"})
         self.assertEqual(answer, {"result": {"state": "MOWING", "sub_state": ""}}, answer)
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
-        place()
+        STAGE.place()
 
     def test_05_after_a_thing_right_at_the_nose_it_waits_thirty_seconds(self):
         p = self.probe
@@ -289,7 +151,7 @@ class TestObstacleStop(unittest.TestCase):
         # A person steps in right before the nose, still in view, and goes again with the ball. Nearer than about 0.44 m
         # the sensor cannot see the place free at all; the track counts its spread nearer, so it stands at 0.53 m.
         cx, cy = point(stood, FRONT + 0.53 + 0.25)
-        place(ball(x, y), thing("PERSON", "person", cx, cy, 0.25, 1.7))
+        STAGE.place(ball(x, y), person(cx, cy))
         self.assertTrue(p.wait(lambda: any(t.kind == "PERSON" and t.zone == 2 and t.in_view and 0 < t.ahead < NEAR_AHEAD
                                            for t in p.obstacles.tracks), 5), p.obstacles.tracks)
         took, _ = self.goes_on_after(NEAR_WAIT)
@@ -303,10 +165,10 @@ class TestObstacleStop(unittest.TestCase):
         p.flags(obstacles_dark=1)
         self.assertIsNotNone(p.event(since, "OBSTACLE_SIGHT", 6), "no word that the camera sees nothing")
         now = p.truth()
-        place(ball(*point(now, FRONT + BALL_RADIUS + BALL_GAP)))
+        STAGE.place(ball(*point(now, FRONT + BALL_RADIUS + BALL_GAP)))
         time.sleep(6.0)
         self.assertIsNone(p.event(since, "STATE", 0.1, state="PAUSED"))
         self.assertGreater(p.speed(), 0.1)
-        place()
+        STAGE.place()
         p.flags()
         self.assertTrue(p.wait(lambda: p.obstacles is not None and p.obstacles.sight, 10))
