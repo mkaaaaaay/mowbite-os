@@ -35,7 +35,7 @@ CONFIG = os.path.join(WORK, "obstacle_avoid.yaml")
 SCENE = os.path.join(WORK, "scene.json")
 
 LAWN_MIN = (-0.41, -0.11)
-LAWN_MAX = (9.59, 9.89)
+LAWN_MAX = (6.59, 6.89)
 LAWN = [LAWN_MIN, (LAWN_MAX[0], LAWN_MIN[1]), LAWN_MAX, (LAWN_MIN[0], LAWN_MAX[1])]
 GARDEN = {
     "areas": [{"id": "lawn", "properties": {"type": "mow", "name": "Lawn", "outline_count": 1},
