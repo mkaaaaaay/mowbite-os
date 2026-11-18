@@ -1417,6 +1417,8 @@ class Measurement:
         return result
 
     STEPS = {"M1": m1, "M2": m2, "M3": m3, "M4": m4, "M5": m5, "M6": m6, "M7": m7, "M8": m8}
+    # A limit above GROUND_WHEEL_SPEED means the raised start of the measurement image, only for M8 --fast.
+    RAISED_START_LIMITED = True
 
     def capabilities(self, seconds=10.0):
         """The driver's limit for driving from hw/capabilities, waiting for them up to `seconds`; None without them."""
@@ -1430,7 +1432,8 @@ class Measurement:
         if limit is None:
             self.finding("start", "no hw/capabilities from the driver within 10 s")
             return False
-        if limit > GROUND_WHEEL_SPEED + 1e-6 and not (steps == ["M8"] and self.args.fast):
+        raised = limit > GROUND_WHEEL_SPEED + 1e-6 and not (steps == ["M8"] and self.args.fast)
+        if self.RAISED_START_LIMITED and raised:
             print(f"\nThe driver allows {limit:.2f} m/s: the raised start is only for --steps M8 --ground --fast. Start "
                   "it again without speed_limit and max_duty for any other step.")
             self.findings.append(f"start: raised start ({limit:.2f} m/s) for {','.join(steps)}")
@@ -1677,6 +1680,8 @@ class TronMeasurement(Measurement):
     STANDSTILL_STEPS = ("T1", "T8")
     STOP_BUTTONS = (("STOP", {"stop": True}),)
     STOP_LATCHES = True
+    # tron_mcu reports the mower's own maximum; the T steps keep to AIR_WHEEL_SPEED (run).
+    RAISED_START_LIMITED = False
 
     def __init__(self, args, rec, mower, person, keys, start):
         super().__init__(args, rec, mower, person, keys)
@@ -1833,9 +1838,9 @@ class TronMeasurement(Measurement):
         self.let_go("STOP")
         self.release(step)
         self.no_motion(step, 2.0, "after the release without a new command")
-        ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), continued after the window"),
-                ("kill", signal.SIGKILL, "killed (SIGKILL), started again after the window: blade off, the height "
-                                         "motor may move")]
+        restart = "blade off, the height motor may move"
+        ways = [("freeze", signal.SIGSTOP, f"frozen (SIGSTOP), killed after the window and started again: {restart}"),
+                ("kill", signal.SIGKILL, f"killed (SIGKILL), started again after the window: {restart}")]
         for way, sig, text in ways:
             stands = []
             for n in range(self.args.repeats):
@@ -1907,9 +1912,9 @@ class TronMeasurement(Measurement):
         return stand
 
     def without_host(self, step, way, sig, label, window):
-        """Sends `sig` to tron_mcu and reads the port for `window` s; then the frozen driver continues, a killed one
-        starts again and is waited for. Returns the time of the signal and the capture. A capture that reached its
-        limit does not hold the whole window and ends the step."""
+        """Sends `sig` to tron_mcu and reads the port for `window` s; then the driver starts again and is waited for.
+        Returns the time of the signal and the capture. A capture that reached its limit does not hold the whole window
+        and ends the step."""
         capture = self.capture_path(f"{step}-{label}")
         limit = capture_limit(window)
         since = time.monotonic()
@@ -1927,12 +1932,13 @@ class TronMeasurement(Measurement):
             if reader is not None:
                 reader.close()
             if way == "freeze":
-                os.kill(pid, signal.SIGCONT)
-                self.rec.write("signal", signal="SIGCONT", pid=pid)
-            elif self.start.driver_pid is None:
+                # Stopped longer than its watch limit it would end itself once continued; it is ended here instead.
+                os.kill(pid, signal.SIGKILL)
+                self.start.processes["tron_mcu"].wait()
+                self.rec.write("signal", signal="SIGKILL", pid=pid)
+            if self.start.driver_pid is None:
                 self.start.start_driver(**self.start.overrides)
-        if way == "kill":
-            self.wait_driver_back(step, pid)
+        self.wait_driver_back(step, pid)
         if reader.full:
             self.finding(step, f"the capture {capture} reached its limit of {limit} bytes before the window ended")
             raise Abort()
@@ -2373,7 +2379,7 @@ class TronMeasurement(Measurement):
         return result
 
     def blade_host_gone(self, step):
-        ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), continued after the window"),
+        ways = [("freeze", signal.SIGSTOP, "frozen (SIGSTOP), killed after the window and started again"),
                 ("kill", signal.SIGKILL, "killed (SIGKILL), started again after the window")]
         n = min(self.args.repeats, TRON_SHORT_REPEATS)
         for way, sig, text in ways:

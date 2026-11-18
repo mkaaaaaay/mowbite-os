@@ -449,19 +449,30 @@ class TestPort(unittest.TestCase):
         self.addCleanup(driver.wait)
         self.addCleanup(driver.kill)
 
-        def signal_driver(sig):
-            os.kill(driver.pid, sig)
-            return driver.pid
+        class Start:
+            mcu_port, log_stem = self.path, os.path.join(self.work, "run")
+            processes, overrides, started = {"tron_mcu": driver}, {}, []
+
+            @property
+            def driver_pid(self):
+                return driver.pid if driver.poll() is None else None
+
+            def signal_driver(self, sig):
+                os.kill(driver.pid, sig)
+                return driver.pid
+
+            def start_driver(self, **overrides):
+                self.started.append(overrides)
         run = m.TronMeasurement.__new__(m.TronMeasurement)
-        run.findings = []
+        run.findings, run.back = [], []
         run.rec = types.SimpleNamespace(write=lambda kind, **fields: None)
         run.keys = types.SimpleNamespace(pressed=lambda: False)
         run.mower = types.SimpleNamespace(tripped=lambda: None)
-        run.start = types.SimpleNamespace(mcu_port=self.path, log_stem=os.path.join(self.work, "run"),
-                                          signal_driver=signal_driver)
+        run.start = Start()
+        run.wait_driver_back = lambda step, pid: run.back.append(pid)
         return run, driver
 
-    def test_without_host_reads_the_window_and_continues_the_driver(self):
+    def test_without_host_reads_the_window_and_restarts_a_frozen_driver(self):
         run, driver = self.stand_in()
         os.write(self.master, b"\x01" * 40)
         since, capture = run.without_host("T6", "freeze", signal.SIGSTOP, "freeze-30-1", 0.3)
@@ -469,7 +480,9 @@ class TestPort(unittest.TestCase):
         with open(capture) as f:
             self.assertEqual(f.read().split()[1], "01" * 40)
         self.assertEqual(run.findings, [])
-        self.assertNotIn(m.process_state(driver.pid), ("T", "t"))
+        self.assertEqual(driver.returncode, -signal.SIGKILL)
+        self.assertEqual(run.start.started, [{}])
+        self.assertEqual(run.back, [driver.pid])
 
     def test_a_capture_at_its_limit_ends_the_step(self):
         run, driver = self.stand_in()
@@ -478,7 +491,8 @@ class TestPort(unittest.TestCase):
             run.without_host("T6", "freeze", signal.SIGSTOP, "freeze-30-1", 0.3)
         self.assertEqual(len(run.findings), 1)
         self.assertIn("reached its limit of 60 bytes", run.findings[0])
-        self.assertNotIn(m.process_state(driver.pid), ("T", "t"))
+        self.assertEqual(driver.returncode, -signal.SIGKILL)
+        self.assertEqual(run.start.started, [{}])
 
 
 class TestStartParameters(unittest.TestCase):
