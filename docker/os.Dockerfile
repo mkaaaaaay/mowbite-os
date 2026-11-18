@@ -158,7 +158,7 @@ ARG BUILD_JOBS=2
 
 # The MowBite Planner at a fixed commit of its branch os-pin: its two ROS 2 packages and the two of MowBite OS
 # (os/: the node and its service) with its licence text, the source removed after.
-ARG PLANNER_COMMIT=5c567236033974967c673b9448b29c016ce97cf6
+ARG PLANNER_COMMIT=88b6928ba269a5e2a1359fba3ab6909ffb2ef1b3
 RUN --mount=type=bind,from=planer,target=/src/planer \
     git init -q /tmp/planner && cd /tmp/planner \
  && git -c safe.directory='*' fetch -q --depth 1 /src/planer "$PLANNER_COMMIT" \
