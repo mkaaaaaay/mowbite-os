@@ -49,11 +49,13 @@ struct ObstacleConfig {
   double stale = 1.0;
   // obstacle_mode avoid: objects alone that held the mower avoid_wait s and moved no more than avoid_still (m) since
   // become circles kept out of: their radius, avoid_sigma times their spread and avoid_clearance between them and the
-  // body. A circle goes once its track ends in view (seen free), after avoid_keep s or with the job.
+  // body on the way around, avoid_pass_clearance on lanes that pass them straight. A circle goes once its track ends in
+  // view (seen free), after avoid_keep s or with the job.
   double avoid_wait = 3.0;
   double avoid_still = 0.2;
   double avoid_sigma = 2.0;
   double avoid_clearance = 0.30;
+  double avoid_pass_clearance = 0.10;
   double avoid_keep = 1800.0;
   // m/s at most on the way around them, with the blade on.
   double avoid_speed = 0.3;
@@ -66,14 +68,15 @@ struct AvoidCircle {
   uint32_t follows = 0;
   double x = 0.0;
   double y = 0.0;
-  // m, the thing with its spread and the clearance.
+  // m, the thing with its spread and the clearance on the way around, and with the one of a lane passing it.
   double r = 0.0;
+  double pass_r = 0.0;
   // s, when it was made.
   double since = 0.0;
 };
 
-// The polygon around a circle for the planner and the follower: corners outside it, its edges touching it.
-Ring KeepOutRing(const AvoidCircle& circle);
+// The polygon around a circle of radius r (pass_r for the inner one): corners outside it, its edges touching it.
+Ring KeepOutRing(const AvoidCircle& circle, bool inner = false);
 
 // What the mower did about a track, for its entry in vision.obstacles.list.
 struct ObstacleNote {

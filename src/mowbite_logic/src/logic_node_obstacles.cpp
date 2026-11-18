@@ -82,9 +82,9 @@ LogicNode::FollowPath::Goal LogicNode::Gated(const FollowPath::Goal& goal) const
   return gated;
 }
 
-std::vector<geometry_msgs::msg::Polygon> LogicNode::CirclePolygons() const {
+std::vector<geometry_msgs::msg::Polygon> LogicNode::CirclePolygons(bool inner) const {
   std::vector<geometry_msgs::msg::Polygon> rings;
-  for (const auto& circle : core_.View().Circles()) rings.push_back(ToPolygon(KeepOutRing(circle)));
+  for (const auto& circle : core_.View().Circles()) rings.push_back(ToPolygon(KeepOutRing(circle, inner)));
   return rings;
 }
 
@@ -130,7 +130,11 @@ void LogicNode::CutJobPlan(const JobStep& step) {
   request->from_pose = static_cast<uint32_t>(step.start_index);
   for (const auto& ring : drivable) request->drivable_areas.push_back(ToPolygon(ring));
   for (const auto& ring : obstacles) request->obstacles.push_back(ToPolygon(ring));
-  for (const auto& circle : step.circles) request->temporary_obstacles.push_back(ToPolygon(KeepOutRing(circle)));
+  // The way around keeps out of the outer circles, a lane passing straight only of the inner ones.
+  for (const auto& circle : step.circles) {
+    request->temporary_obstacles.push_back(ToPolygon(KeepOutRing(circle)));
+    request->temporary_passing.push_back(ToPolygon(KeepOutRing(circle, true)));
+  }
   request->max_outside = transit_max_outside_;
   job_cut_.active = true;
   job_cut_.seq = ++drive_seq_;

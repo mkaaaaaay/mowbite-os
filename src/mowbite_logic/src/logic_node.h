@@ -154,8 +154,8 @@ class LogicNode : public rclcpp::Node {
   // only_area: that mow area alone; max_speed: m/s at most, 0 for the follower's.
   Reason PlanWay(Purpose purpose, double x, double y, double heading, const std::string& only_area = "",
                  double max_speed = 0.0);
-  // The circles kept out of while mowing, as polygons.
-  std::vector<geometry_msgs::msg::Polygon> CirclePolygons() const;
+  // The circles kept out of while mowing, as polygons: on the way around, or the inner ones of lanes passing them.
+  std::vector<geometry_msgs::msg::Polygon> CirclePolygons(bool inner = false) const;
   void PumpDocking();
   void SendDockingLeg(const DockingLeg& leg);
   // Docking by the dock marker (logic_node_dock.cpp).

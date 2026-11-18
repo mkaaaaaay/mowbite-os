@@ -83,13 +83,14 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PoseSnapshot, x, y, heading, position_accurac
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationConfig, max_position_accuracy, min_battery, status_timeout, timeout)
 // With defaults: driving around objects came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleConfig, free_wait, near_wait, near_ahead, stale, avoid_wait,
-                                                avoid_still, avoid_sigma, avoid_clearance, avoid_keep, avoid_speed)
+                                                avoid_still, avoid_sigma, avoid_clearance, avoid_pass_clearance,
+                                                avoid_keep, avoid_speed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleTrackSample, id, kind, confirmed, in_view, ahead, zone, x, y,
                                                 radius, sigma)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleSample, sight, tracks)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleNote, track_id, action, keep_out_r, left_out, area_id,
                                                 area_name)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AvoidCircle, track_id, follows, x, y, r, since)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AvoidCircle, track_id, follows, x, y, r, pass_r, since)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobPiece, path, first, last)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CutAnswer, ok, code, message, pieces)
 // With defaults: marker and obstacle came later, journals from before stay readable.
@@ -154,7 +155,7 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 592);
+static_assert(sizeof(LogicConfig) == 600);
 static_assert(sizeof(MarkerConfig) == 64);
 static_assert(sizeof(DockMarkerSample) == 48);
 static_assert(sizeof(DockPoseSample) == 56);
@@ -170,12 +171,12 @@ static_assert(sizeof(ReferenceCheck) == 8);
 static_assert(sizeof(Notice) == 32);
 static_assert(sizeof(Checkpoint) == 32);
 static_assert(sizeof(RunChanged) == 104);
-static_assert(sizeof(ObstacleConfig) == 80);
+static_assert(sizeof(ObstacleConfig) == 88);
 static_assert(sizeof(ObstacleTrackSample) == 96);
 static_assert(sizeof(ObstacleSample) == 32);
 static_assert(sizeof(ObstacleNote) == 120);
 static_assert(sizeof(ScheduleRun) == 112);
-static_assert(sizeof(AvoidCircle) == 40);
+static_assert(sizeof(AvoidCircle) == 48);
 static_assert(sizeof(JobPiece) == 24);
 static_assert(sizeof(CutAnswer) == 96);
 

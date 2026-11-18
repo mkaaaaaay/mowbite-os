@@ -197,8 +197,9 @@ TEST(ObstaclePart, AnObjectThatStandsThreeSecondsIsDrivenAround) {
   ASSERT_EQ(due.size(), 1u);
   EXPECT_EQ(due[0].track_id, 1u);
   EXPECT_DOUBLE_EQ(due[0].x, 5);
-  // Its radius, twice its spread and 0.3 m between it and the body.
+  // Its radius, twice its spread and 0.3 m between it and the body on the way around, 0.1 m on a lane passing it.
   EXPECT_NEAR(due[0].r, 0.1 + 2 * 0.05 + 0.3, 1e-9);
+  EXPECT_NEAR(due[0].pass_r, 0.1 + 2 * 0.05 + 0.1, 1e-9);
 }
 
 TEST(ObstaclePart, APersonOrAnimalIsNeverDrivenAround) {
@@ -312,14 +313,17 @@ TEST(ObstaclePart, WithoutAWayAroundTheHoldWaitsLikeStop) {
 }
 
 TEST(ObstaclePart, TheKeepOutRingHoldsTheCircle) {
-  const AvoidCircle circle{1, 1, 2.0, -1.0, 0.5, 0.0};
-  const Ring ring = KeepOutRing(circle);
-  ASSERT_GE(ring.size(), 16u);
-  for (size_t i = 0; i < ring.size(); ++i) {
-    const Point2& a = ring[i];
-    const Point2& b = ring[(i + 1) % ring.size()];
-    // The middle of each edge touches the circle, the corners lie outside.
-    EXPECT_NEAR(std::hypot((a.x + b.x) / 2 - 2.0, (a.y + b.y) / 2 + 1.0), 0.5, 1e-9);
-    EXPECT_GT(std::hypot(a.x - 2.0, a.y + 1.0), 0.5);
+  const AvoidCircle circle{1, 1, 2.0, -1.0, 0.5, 0.3, 0.0};
+  for (const bool inner : {false, true}) {
+    const double r = inner ? 0.3 : 0.5;
+    const Ring ring = KeepOutRing(circle, inner);
+    ASSERT_GE(ring.size(), 16u);
+    for (size_t i = 0; i < ring.size(); ++i) {
+      const Point2& a = ring[i];
+      const Point2& b = ring[(i + 1) % ring.size()];
+      // The middle of each edge touches the circle, the corners lie outside.
+      EXPECT_NEAR(std::hypot((a.x + b.x) / 2 - 2.0, (a.y + b.y) / 2 + 1.0), r, 1e-9);
+      EXPECT_GT(std::hypot(a.x - 2.0, a.y + 1.0), r);
+    }
   }
 }

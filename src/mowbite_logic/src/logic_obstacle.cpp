@@ -28,10 +28,10 @@ constexpr int kKeepOutCorners = 24;
 
 }  // namespace
 
-Ring KeepOutRing(const AvoidCircle& circle) {
+Ring KeepOutRing(const AvoidCircle& circle, bool inner) {
   Ring ring;
   const double step = 2.0 * M_PI / kKeepOutCorners;
-  const double reach = circle.r / std::cos(step / 2.0);
+  const double reach = (inner ? circle.pass_r : circle.r) / std::cos(step / 2.0);
   for (int i = 0; i < kKeepOutCorners; ++i) {
     ring.push_back({circle.x + reach * std::cos(i * step), circle.y + reach * std::sin(i * step)});
   }
@@ -209,8 +209,9 @@ std::vector<AvoidCircle> ObstaclePart::AvoidDue(double now_s) const {
     if (track->kind != "OBJECT") return {};
     const auto standing = standing_.find(track->id);
     if (standing == standing_.end() || now_s - standing->second.since < config_.avoid_wait) return {};
-    const double r = track->radius + config_.avoid_sigma * track->sigma + config_.avoid_clearance;
-    circles.push_back({track->id, track->id, track->x, track->y, r, now_s});
+    const double core = track->radius + config_.avoid_sigma * track->sigma;
+    circles.push_back({track->id, track->id, track->x, track->y, core + config_.avoid_clearance,
+                       core + config_.avoid_pass_clearance, now_s});
   }
   return circles;
 }

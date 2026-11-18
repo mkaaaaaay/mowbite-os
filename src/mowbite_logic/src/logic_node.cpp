@@ -991,7 +991,9 @@ Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading, c
   drive_.sent = MonotonicSeconds();
   drive_.allowed = plan->drivable_areas;
   drive_.obstacles = plan->obstacles;
-  drive_.obstacles.insert(drive_.obstacles.end(), plan->temporary_obstacles.begin(), plan->temporary_obstacles.end());
+  // The follower stops where base_link enters the inner circles: lanes pass them closer than a way around.
+  const auto inner = CirclePolygons(true);
+  drive_.obstacles.insert(drive_.obstacles.end(), inner.begin(), inner.end());
   const uint64_t seq = drive_.seq;
   drive_.request_id =
       transit_client_
@@ -1035,7 +1037,7 @@ void LogicNode::FollowJobPath(const JobPath& path, size_t start_index) {
   }
   for (const auto& ring : drivable) goal.allowed_areas.push_back(ToPolygon(ring));
   for (const auto& ring : obstacles) goal.obstacles.push_back(ToPolygon(ring));
-  const auto circles = CirclePolygons();
+  const auto circles = CirclePolygons(true);
   goal.obstacles.insert(goal.obstacles.end(), circles.begin(), circles.end());
   drive_.seq = ++drive_seq_;
   drive_.active = true;
