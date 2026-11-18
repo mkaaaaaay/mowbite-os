@@ -57,8 +57,9 @@ install(TARGETS mowbite_setup_core mowbite_setup_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  # Under ASan the tests of the steps that move take more than a minute.
   ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_motion.cpp
-                  test/test_layer.cpp test/test_summary.cpp)
+                  test/test_layer.cpp test/test_summary.cpp TIMEOUT 300)
   target_link_libraries(mowbite_setup_test mowbite_setup_core)
 endif()
 
