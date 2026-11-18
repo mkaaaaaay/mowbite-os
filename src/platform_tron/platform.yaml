@@ -79,6 +79,8 @@ tron_mcu:
     # The highest obstacle_mode the camera is proven for on the Tron (hw/capabilities): 1 shows obstacles only; 2 lets
     # the mower stop for them, after reach and delay per class were measured on the mower (FP30, G44).
     obstacle_mode_max: 1
+    # The obstacle sensors (hw/capabilities): the stereo camera by its camera_id of tron_stereo.
+    obstacle_sources: ["stereo"]
 
 tron_gnss:
   ros__parameters:
@@ -288,6 +290,7 @@ tron_stereo:
     # Tron) or mount (x, y, z in m and yaw, pitch, roll in rad of the left eye in base_link, measured on this Tron, in
     # <data_dir>/tron.yaml) it reports NOT_SET_UP. obstacle_rate, range_max, score_threshold: the defaults of the node.
     obstacles: true
+    camera_id: stereo
     calibration_path: /userdata/mowbite-vision/stereo-calibration.txt
     npu_core: 2
     # Classes of the model by kind; any other class is an object. The classes of best_large_0208.

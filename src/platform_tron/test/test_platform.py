@@ -8,6 +8,7 @@ import os
 import sys
 
 import pytest
+import yaml
 from ament_index_python.packages import get_package_share_directory
 
 BRINGUP = get_package_share_directory("mowbite_bringup")
@@ -166,3 +167,12 @@ def test_the_file_of_the_mower_comes_last(launched, tmp_path):
     assert str(device) not in driver_files()
     device.write_text("tron_mcu:\n  ros__parameters:\n    wheel_distance: 0.4\n")
     assert driver_files()[:4] == [layers.STACK, PLATFORM_FILE, PLATFORM_FILE, str(device)]
+
+
+# The driver names the stereo camera as the obstacle sensor by the id the camera reports itself under.
+def test_the_obstacle_source_is_the_stereo_camera():
+    with open(PLATFORM_FILE) as f:
+        values = yaml.safe_load(f)
+    stereo = values["tron_stereo"]["ros__parameters"]
+    assert stereo["obstacles"] is True
+    assert values["tron_mcu"]["ros__parameters"]["obstacle_sources"] == [stereo["camera_id"]]
