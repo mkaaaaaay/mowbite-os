@@ -49,8 +49,8 @@ struct ObstacleConfig {
   double stale = 1.0;
   // obstacle_mode avoid: objects alone that held the mower avoid_wait s and moved no more than avoid_still (m) since
   // become circles kept out of: their radius, avoid_sigma times their spread and avoid_clearance between them and the
-  // body on the way around, avoid_pass_clearance on lanes that pass them straight. A circle goes once its track ends in
-  // view (seen free), after avoid_keep s or with the job.
+  // body on the way around; lanes that pass them straight keep avoid_pass_clearance from their radius, the spread
+  // within it. A circle goes once its track ends in view (seen free), after avoid_keep s or with the job.
   double avoid_wait = 3.0;
   double avoid_still = 0.2;
   double avoid_sigma = 2.0;

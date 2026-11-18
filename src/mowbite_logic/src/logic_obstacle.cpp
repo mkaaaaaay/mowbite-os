@@ -209,9 +209,10 @@ std::vector<AvoidCircle> ObstaclePart::AvoidDue(double now_s) const {
     if (track->kind != "OBJECT") return {};
     const auto standing = standing_.find(track->id);
     if (standing == standing_.end() || now_s - standing->second.since < config_.avoid_wait) return {};
-    const double core = track->radius + config_.avoid_sigma * track->sigma;
-    circles.push_back({track->id, track->id, track->x, track->y, core + config_.avoid_clearance,
-                       core + config_.avoid_pass_clearance, now_s});
+    // The way around keeps the clearance beyond the spread, a lane passing it the pass clearance with the spread in.
+    const double around = track->radius + config_.avoid_sigma * track->sigma + config_.avoid_clearance;
+    const double pass = track->radius + config_.avoid_pass_clearance;
+    circles.push_back({track->id, track->id, track->x, track->y, around, std::min(pass, around), now_s});
   }
   return circles;
 }

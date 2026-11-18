@@ -197,9 +197,10 @@ TEST(ObstaclePart, AnObjectThatStandsThreeSecondsIsDrivenAround) {
   ASSERT_EQ(due.size(), 1u);
   EXPECT_EQ(due[0].track_id, 1u);
   EXPECT_DOUBLE_EQ(due[0].x, 5);
-  // Its radius, twice its spread and 0.3 m between it and the body on the way around, 0.1 m on a lane passing it.
+  // Its radius, twice its spread and 0.3 m between it and the body on the way around; its radius and 0.1 m, the spread
+  // within, on a lane passing it.
   EXPECT_NEAR(due[0].r, 0.1 + 2 * 0.05 + 0.3, 1e-9);
-  EXPECT_NEAR(due[0].pass_r, 0.1 + 2 * 0.05 + 0.1, 1e-9);
+  EXPECT_NEAR(due[0].pass_r, 0.1 + 0.1, 1e-9);
 }
 
 TEST(ObstaclePart, APersonOrAnimalIsNeverDrivenAround) {
