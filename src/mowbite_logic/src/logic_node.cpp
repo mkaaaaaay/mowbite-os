@@ -287,6 +287,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
           blade_height_max_mm_ = msg->blade_height_max_mm;
           rain_sensor_ = msg->rain_sensor;
           TellRainWithoutSensor();
+          obstacle_mode_max_ = msg->obstacle_mode_max;
+          ApplyObstacleModeLocked();
         }
         Step();
       });
@@ -343,6 +345,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   blade_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { UpdateBlade(); });
   SetUpRuns();
   SetUpDocking();
+  SetUpObstacles();
   // What the core has for the node waits for the first callback; the actions go out at once.
   PublishActions();
   PublishIdleIfChanged();
@@ -793,7 +796,7 @@ void LogicNode::SendFollow(const FollowPath::Goal& goal, const std::string& what
   };
   drive_.follower_sign = MonotonicSeconds();
   drive_.follower_index = goal.start_index;
-  follow_client_->async_send_goal(goal, options);
+  follow_client_->async_send_goal(Gated(goal), options);
 }
 
 // G22: a follower that stops answering ends its path here, without waiting for its result, so that the logic does
@@ -1803,6 +1806,7 @@ void LogicNode::ApplyLogicParams() {
       static_cast<int>(logic_params_.Get("rain_mode")), logic_params_.Get("rain_check_seconds"),
       logic_params_.Get("motor_hot_temperature"), logic_params_.Get("motor_cold_temperature"));
   core_.Call<&LogicCore::SetSunsetSettings>(logic_params_.Get("dock_at_sunset") != 0);
+  ApplyObstacleModeLocked();
   TellRainWithoutSensor();
 }
 
@@ -2483,6 +2487,7 @@ void LogicNode::Record(const std::vector<Effect>& effects) {
     publish_pub_->publish(msg);
   }
   PublishRuns(effects);
+  PublishObstacleNotes(effects);
   if (actions_changed) PublishActions();
   PublishIdleIfChanged();
   PublishHoldIfChanged();

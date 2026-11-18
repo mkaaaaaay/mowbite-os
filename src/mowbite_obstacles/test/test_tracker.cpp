@@ -155,8 +155,44 @@ TEST_F(TrackerTest, AThingTooNearToSeeIsNotSeenFree) {
   for (double t = 1.4; t < 5.0; t += 0.2) Feed(t);
   ASSERT_EQ(tracker.tracks().size(), 1u);
   EXPECT_FALSE(tracker.tracks().begin()->second.in_view);
+  // Right at the nose it lies in the stop zone: out of view it never runs out of time there.
   EXPECT_TRUE(tracker.Tick(20.0).empty());
+  EXPECT_TRUE(tracker.Tick(31.3).empty());
+  // Once the mower left it behind, it does.
+  Stand(-2.0, 0.0, 0.0);
+  pose.stamp = 31.4;
+  tracker.OnPose(pose);
+  EXPECT_EQ(tracker.Tick(31.4).size(), 1u);
+}
+
+TEST_F(TrackerTest, AThingOutOfViewAndOutOfTheZonesRunsOutOfTime) {
+  Feed(1.0, {Thing(Kind::kObject, 3.5, 0.0)});
+  Feed(1.2, {Thing(Kind::kObject, 3.5, 0.0)});
+  // Turned away: the thing lies behind the view, farther than any zone.
+  Stand(0.0, 0.0, M_PI);
+  for (double t = 1.4; t < 3.0; t += 0.2) Feed(t);
+  ASSERT_EQ(tracker.tracks().size(), 1u);
   EXPECT_EQ(tracker.Tick(31.3).size(), 1u);
+}
+
+TEST_F(TrackerTest, EachTrackCarriesItsZone) {
+  Find ball = Thing(Kind::kObject, 0.605 + 0.1 + 0.5, 0.0);
+  Find dog = Thing(Kind::kAnimal, 0.605 + 0.1 + 1.5, 0.0);
+  ball.cov_xx = ball.cov_yy = dog.cov_xx = dog.cov_yy = 0.0;
+  dog.y = 0.6;
+  for (const double t : {1.0, 1.2}) {
+    pose.stamp = t;
+    tracker.OnPose(pose);
+    tracker.OnFrame(At(t, {ball, dog}), t);
+  }
+  const Status status = tracker.StatusAt(1.3);
+  ASSERT_EQ(status.tracks.size(), 2u);
+  for (const TrackView& view : status.tracks) {
+    EXPECT_EQ(view.zone, view.track->kind == Kind::kObject ? Zone::kStop : Zone::kSlow);
+  }
+  EXPECT_TRUE(status.stop);
+  EXPECT_EQ(status.stop_kind, Kind::kObject);
+  EXPECT_TRUE(status.slow);
 }
 
 TEST_F(TrackerTest, WithoutSightNothingIsSeenFree) {
@@ -230,14 +266,14 @@ TEST_F(TrackerTest, AnObjectFartherThanItsZoneDoesNotStop) {
 }
 
 TEST_F(TrackerTest, TheSpreadOfAThingCountsNearer) {
-  Find ball = Thing(Kind::kObject, 0.605 + 0.1 + 1.2, 0.0);
+  Find ball = Thing(Kind::kObject, 0.605 + 0.1 + 1.0, 0.0);
   ball.cov_xx = 0.09;
   ball.cov_yy = 0.0;
   EXPECT_TRUE(Confirmed(tracker, ball).stop);
 }
 
 TEST_F(TrackerTest, APersonStopsFartherAndSlowsFartherStill) {
-  Find person = Thing(Kind::kPerson, 0.605 + 0.1 + 1.3, 0.5);
+  Find person = Thing(Kind::kPerson, 0.605 + 0.1 + 0.9, 0.5);
   person.cov_xx = person.cov_yy = 0.0;
   Status status = Confirmed(tracker, person);
   EXPECT_TRUE(status.stop);
@@ -246,7 +282,7 @@ TEST_F(TrackerTest, APersonStopsFartherAndSlowsFartherStill) {
   Tracker far;
   far.SetSources({"stereo"});
   far.SetBody({0.605, 0.12, 0.235});
-  person.x = 0.605 + 0.1 + 2.5;
+  person.x = 0.605 + 0.1 + 1.8;
   status = Confirmed(far, person);
   EXPECT_FALSE(status.stop);
   EXPECT_TRUE(status.slow);

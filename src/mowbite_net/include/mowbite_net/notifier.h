@@ -18,6 +18,9 @@ using json = nlohmann::ordered_json;
 
 // Ten minutes without getting 0.5 m further, not charging.
 constexpr double kStandstillAfter = 600.0;
+// A pause for an obstacle is told sooner: after this for an object, after kObstacleLivingAfter for a person or animal.
+constexpr double kObstacleObjectAfter = 60.0;
+constexpr double kObstacleLivingAfter = 300.0;
 constexpr double kStandstillMove = 0.5;
 // A failed spin-up of the blade this long before an emergency goes into its text.
 constexpr double kSpinupBefore = 15.0;
@@ -120,6 +123,7 @@ class Notifier {
   bool emergency_told_ = false;
   std::optional<double> spinup_at_;
   std::string paused_reason_;  // of the last STATE PAUSED
+  std::string paused_kind_;    // its kind with OBSTACLE
   // Standstill: where and since when the mower stands.
   std::optional<double> still_since_;
   bool still_told_ = false;

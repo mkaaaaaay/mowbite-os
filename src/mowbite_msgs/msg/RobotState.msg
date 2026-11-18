@@ -17,6 +17,10 @@ int32 current_path_index
 # While mowing: the place of the area in the areas of the job and their number; otherwise -1.
 int32 task_index
 int32 task_count
+# In PAUSED the code of the reason that holds the mower (an emergency, a fault, the user, an obstacle, then GPS) and
+# its kind with OBSTACLE; else empty.
+string pause_reason
+string pause_kind
 
 # The pose of the mower for the app.
 float64 pose_x

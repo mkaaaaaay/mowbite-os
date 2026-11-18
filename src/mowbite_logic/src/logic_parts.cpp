@@ -210,6 +210,7 @@ Reason LogicCore::StartDocking() {
 }
 
 std::optional<DockingLeg> LogicCore::TakeDockingLeg() {
+  ApplyObstacleHold();
   return docking_part_.TakeDockingLeg(CoreAccess(*this));
 }
 
@@ -298,6 +299,8 @@ void LogicCore::EndDocking(const Reason& why) {
 }
 
 JobStep LogicCore::NextJobStep(double now_s) {
+  // No leg starts while an obstacle holds the mower.
+  ApplyObstacleHold();
   return mowing_.NextJobStep(CoreAccess(*this), now_s);
 }
 
@@ -331,6 +334,46 @@ void LogicCore::Unpause(int why) {
 
 bool LogicCore::LegDrives() const {
   return mowing_.LegDrives();
+}
+
+void LogicCore::OnObstacleStatus(const ObstacleSample& sample, double now_s) {
+  obstacle_part_.OnStatus(sample, now_s, ObstacleDriving());
+  ApplyObstacleHold();
+}
+
+void LogicCore::SetObstacleMode(int setting, int mode_max) {
+  obstacle_part_.SetMode(setting, mode_max);
+  ApplyObstacleHold();
+}
+
+bool LogicCore::GateGo() const {
+  return !obstacle_part_.Holding();
+}
+
+bool LogicCore::GateSlow() const {
+  return obstacle_part_.Slow();
+}
+
+bool LogicCore::GateWanted() const {
+  return obstacle_part_.Armed() &&
+         (state_ == State::kMowing || (state_ == State::kDocking && docking_part_.TowardsStation()));
+}
+
+bool LogicCore::ObstacleDriving() const {
+  return (state_ == State::kMowing && mowing_.LegDrives()) ||
+         (state_ == State::kDocking && docking_part_.TowardsStation() && docking_part_.MapLegActive());
+}
+
+void LogicCore::ApplyObstacleHold() {
+  for (ObstacleNote& note : obstacle_part_.TakeNotes()) effects_.push_back(std::move(note));
+  const bool hold = obstacle_part_.Holding();
+  if (state_ == State::kMowing) {
+    const bool paused = (mowing_.pause() & kPauseObstacle) != 0;
+    if (hold && !paused) Pause(kPauseObstacle, obstacle_part_.Why());
+    if (!hold && paused) Unpause(kPauseObstacle);
+  } else if (state_ == State::kDocking) {
+    docking_part_.ObstacleHold(CoreAccess(*this), hold, obstacle_part_.Why());
+  }
 }
 
 }  // namespace mowbite_logic

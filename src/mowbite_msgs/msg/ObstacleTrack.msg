@@ -19,3 +19,8 @@ float32 age
 # line (m, left positive), at the pose of this status.
 float32 ahead
 float32 aside
+# The zone of the mower it lies in, from confirmed tracks only: none, slow (a person or animal ahead), stop.
+uint8 ZONE_NONE=0
+uint8 ZONE_SLOW=1
+uint8 ZONE_STOP=2
+uint8 zone

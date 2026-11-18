@@ -184,6 +184,31 @@ TEST(Notifier, NoStandstillWhileChargingRecordingOrPausedByHand) {
   EXPECT_TRUE(n.Take().empty());
 }
 
+TEST(Notifier, AnObstacleIsToldAfterAMinuteAPersonAfterFive) {
+  Notifier n = Make();
+  n.OnEvent({{"type", "STATE"}, {"state", "PAUSED"}, {"reason", "OBSTACLE"}, {"kind", "OBJECT"}, {"resume", "auto"}},
+            0);
+  n.OnState(At(0, "PAUSED"));
+  n.OnState(At(59, "PAUSED"));
+  EXPECT_TRUE(n.Take().empty());
+  n.OnState(At(60, "PAUSED"));
+  std::vector<Push> out = n.Take();
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].kind, "standstill");
+  EXPECT_EQ(out[0].message,
+            "Robi has been standing still for 1 min and isn't charging. Paused: Obstacle in the way.");
+
+  Notifier living = Make();
+  living.OnEvent({{"type", "STATE"}, {"state", "PAUSED"}, {"reason", "OBSTACLE"}, {"kind", "PERSON"},
+                  {"resume", "auto"}},
+                 0);
+  living.OnState(At(0, "PAUSED"));
+  living.OnState(At(299, "PAUSED"));
+  EXPECT_TRUE(living.Take().empty());
+  living.OnState(At(300, "PAUSED"));
+  EXPECT_EQ(living.Take().size(), 1u);
+}
+
 TEST(Notifier, PausedForAReason) {
   Notifier n = Make(All("de"));
   n.OnEvent({{"type", "STATE"}, {"state", "PAUSED"}, {"reason", "RAIN"}, {"resume", "user"}}, 0);

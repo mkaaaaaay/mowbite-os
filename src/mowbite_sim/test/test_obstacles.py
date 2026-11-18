@@ -97,6 +97,7 @@ class TestObstacles(unittest.TestCase):
         capabilities = HardwareCapabilities()
         capabilities.platform = "sim"
         capabilities.obstacle_sources = ["stereo"]
+        capabilities.obstacle_mode_max = 1
         cls.capabilities_pub.publish(capabilities)
         cls.obstacles = program(package_program("mowbite_obstacles", "mowbite_obstacles_node"), data_dir=DATA_DIR)
         cls.fake = program(sim_program("fake_obstacles"), state=STATE, flags=FLAGS, scene=SCENE)

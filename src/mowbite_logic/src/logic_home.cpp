@@ -64,9 +64,9 @@ void LogicCore::ActOnHome(const Reason& dark) {
   const std::vector<HomeReason> due = home_.watch().Due();
   if (due.empty() && dark.empty()) return;
   const Reason first = due.empty() ? dark : HomeWhy(due.front());
-  // A pause that waits for the user never goes home: the user may stand at the mower (G11).
-  const bool waits_for_user = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
-  if (!waits_for_user && HomeReachable()) {
+  // A pause that waits for the user or for an obstacle never goes home: someone may stand at the mower (G11, G45).
+  const bool keeps_place = (mowing_.pause() & kPauseKeepsPlace) != 0;
+  if (!keeps_place && HomeReachable()) {
     Reason why = first;
     why.message = "Going home: " + why.message;
     EndJob(false, true, why);

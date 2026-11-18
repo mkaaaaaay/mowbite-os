@@ -87,7 +87,8 @@ struct TrackerConfig {
   // How fast a thing of this kind may move (m/s); its track widens by that between finds.
   double living_speed = 1.5;
   double object_speed = 0.05;
-  // A confirmed track ends once its place is in view this long without a find (s), or once nothing found it this long.
+  // A confirmed track ends once its place is in view this long without a find (s), or once nothing found it this long
+  // while it lies in no stop zone: a place out of view is never free.
   double free_seen = 1.0;
   double track_timeout = 30.0;
   // An unconfirmed track ends after this long without a find (s).
@@ -101,12 +102,12 @@ struct TrackerConfig {
   // stop_living_margin on each side, or anywhere within stop_living_around of the body; for objects within
   // stop_object_ahead in a corridor of the body plus stop_object_margin; slow for living things within slow_ahead in
   // their corridor. A track counts zone_sigma times its spread nearer.
-  double stop_living_ahead = 1.5;
+  double stop_living_ahead = 1.0;
   double stop_living_margin = 0.5;
   double stop_living_around = 1.0;
-  double stop_object_ahead = 1.0;
+  double stop_object_ahead = 0.8;
   double stop_object_margin = 0.15;
-  double slow_ahead = 3.0;
+  double slow_ahead = 2.0;
   double zone_sigma = 1.0;
   // Tracks of UNKNOWN (geometry only) stop as objects; off until false stops in the grass are measured.
   bool unknown_stops = false;
@@ -158,8 +159,12 @@ struct FrameResult {
   std::vector<uint32_t> ended;
 };
 
+enum class Zone { kNone, kSlow, kStop };
+
 struct TrackView {
   const Track* track = nullptr;
+  // The zone of a confirmed track; kNone for a candidate.
+  Zone zone = Zone::kNone;
   // Edge of the track from the nose along the heading (m, negative behind it), and from the middle line (left +).
   double ahead = 0.0;
   double aside = 0.0;
@@ -206,6 +211,8 @@ class Tracker {
   };
 
   bool PoseAt(double stamp, Pose* pose) const;
+  // The track as seen from the pose, with its zone.
+  TrackView ViewFrom(const Track& track, const Pose& pose) const;
   double MinScore(Kind kind) const;
   void Update(Track& track, const Find& find, const Frame& frame, double fx, double fy, double cxx, double cxy,
               double cyy);

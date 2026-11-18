@@ -117,11 +117,34 @@ TEST_F(ServiceTest, ShowListsAConfirmedThingAndTellsOnce) {
   EXPECT_DOUBLE_EQ(list["obstacles"][0]["last_t"].get<double>(), kT + 0.4);
 }
 
-TEST_F(ServiceTest, AModeAboveShowIsShowForNow) {
+TEST_F(ServiceTest, TheModeIsAtMostThatOfThePlatform) {
   service->SetMode(3);
   EXPECT_EQ(service->mode(), Mode::kShow);
+  service->SetModeMax(2);
+  EXPECT_EQ(service->mode(), Mode::kStop);
+  const Json list = Call("vision.obstacles.list");
+  EXPECT_EQ(list["mode"], "stop");
+  EXPECT_EQ(list["mode_max"], "stop");
+  service->SetModeMax(0);
+  EXPECT_EQ(service->mode(), Mode::kOff);
+  service->SetModeMax(1);
   service->SetMode(0);
   EXPECT_EQ(service->mode(), Mode::kOff);
+}
+
+TEST_F(ServiceTest, AnEntryKeepsTheMostTheMowerDidAboutIt) {
+  service->SetMode(1);
+  Feed(kT, {Ball()});
+  Feed(kT + 0.2, {Ball()});
+  const uint32_t track = tracker.tracks().begin()->first;
+  service->OnAction(track, "would_stop");
+  EXPECT_EQ(Call("vision.obstacles.list")["obstacles"][0]["action"], "would_stop");
+  service->OnAction(track, "slowed");
+  service->OnAction(track, "no_such_action");
+  service->OnAction(track + 99, "stopped");
+  EXPECT_EQ(Call("vision.obstacles.list")["obstacles"][0]["action"], "would_stop");
+  service->OnAction(track, "stopped");
+  EXPECT_EQ(Call("vision.obstacles.list")["obstacles"][0]["action"], "stopped");
 }
 
 TEST_F(ServiceTest, ThePhotoOfTheFrameComesWithTheEventAndStays) {

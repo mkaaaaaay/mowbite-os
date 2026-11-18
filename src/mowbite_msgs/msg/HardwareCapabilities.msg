@@ -24,6 +24,9 @@ bool charge_stop
 bool rain_sensor
 # Sources of hw/obstacles, e.g. the camera id "stereo"; empty where the platform has no obstacle sensor.
 string[] obstacle_sources
+# Highest obstacle_mode the obstacle sensors are proven for on this platform: 1 shows them, 2 may stop the mower,
+# 3 may drive around them. 0 without obstacle sources.
+uint8 obstacle_mode_max
 bool separate_bumpers
 bool wheel_ticks
 # Nodes that provide imu/data and gps/absolute_pose.

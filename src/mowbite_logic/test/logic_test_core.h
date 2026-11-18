@@ -66,6 +66,9 @@ class TestCore : public LogicCore {
   std::optional<std::string> TakeCheckpoint() {
     return Last<Checkpoint>([](const Checkpoint& checkpoint) { return checkpoint.text; });
   }
+  std::vector<ObstacleNote> TakeObstacleNotes() {
+    return Take<ObstacleNote>();
+  }
   std::vector<RunChanged> TakeRuns() {
     return Take<RunChanged>();
   }

@@ -15,6 +15,7 @@
 #include "mowbite_logic/home_watch.h"
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
+#include "mowbite_logic/obstacle_part.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/undocking.h"
 
@@ -134,6 +135,8 @@ struct LogicConfig {
   // DOCKED only with the charge confirmed on the contacts, CHARGING_LOST in IDLE on the station (G19).
   ChargeConfig charge;
   CalibrationConfig calibration;
+  // The hold for obstacles (obstacle_mode stop).
+  ObstacleConfig obstacle;
   // Seed of the job, session and event ids; the node draws it, the journal keeps it.
   uint64_t id_seed = 0;
 };
@@ -213,6 +216,9 @@ struct RobotStateData {
   // While mowing: the place of the area in the areas of the job and their number; else -1.
   int task_index = -1;
   int task_count = -1;
+  // In PAUSED: the code of the reason that holds the mower (PauseReason) and its kind with OBSTACLE; else empty.
+  std::string pause_reason;
+  std::string pause_kind;
 };
 
 // What a sensor value means, numbered as in mowbite_msgs/SensorSpec.
@@ -308,7 +314,7 @@ struct RunChanged {
 // The index of a type is its number in the journal: new ones only at the end.
 using Effect = std::variant<DriveCancel, StopRequest, CalibrationCancel, ChargeOff, ChargeOn, ReferenceCheck,
                             UndockPath, UndockOutcome, CalibrationGoal, MapEdit, Event, ReasonChange, ActionsChanged,
-                            Notice, Checkpoint, RunChanged>;
+                            Notice, Checkpoint, RunChanged, ObstacleNote>;
 
 // When the node carries an effect out in its step: what halts first, then (after os-session.json) what acts, among
 // it what starts a motion, and last what is written or published.
@@ -428,11 +434,15 @@ constexpr double kTeleopQuietS = 1.0;
 
 // The state of the logic; PAUSED is MOWING with a pause.
 enum class State { kIdle, kAreaRecording, kDriving, kMowing, kUndocking, kDocking, kCalibrating, kSetup };
-// Why mowing pauses; manual, emergency and fault wait for continue, GPS goes on by itself.
+// Why mowing pauses; manual, emergency and fault wait for continue, GPS and an obstacle go on by themselves.
 constexpr int kPauseManual = 1 << 0;
 constexpr int kPauseEmergency = 1 << 1;
 constexpr int kPauseGps = 1 << 2;
 constexpr int kPauseFault = 1 << 3;
+constexpr int kPauseObstacle = 1 << 4;
+constexpr int kPauseWaitsForUser = kPauseManual | kPauseEmergency | kPauseFault;
+// Pauses that never go home: the user or a person or animal may stand at the mower (G11, G45).
+constexpr int kPauseKeepsPlace = kPauseWaitsForUser | kPauseObstacle;
 enum class Leg { kNone, kPlanning, kApproach, kFollow, kSkippedPath };
 // What the reference check on the station is for.
 enum class DockCheck { kNone, kMowing, kDrive };

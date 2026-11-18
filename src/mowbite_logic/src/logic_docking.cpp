@@ -68,6 +68,7 @@ void DockingPart::BeginDocking(CoreAccess core) {
   docking_hold_ = false;
   docking_failure_.reset();
   docking_gps_wait_ = false;
+  docking_obstacle_wait_ = false;
   docking_gps_since_.reset();
   docking_gps_good_since_.reset();
   docking_charge_.reset();
@@ -433,6 +434,7 @@ void DockingPart::TickDocking(CoreAccess core, double now_s) {
     OnChargeResult(core, docking_charge_->OnTick(now_s));
     return;
   }
+  if (docking_obstacle_wait_) return;
   if (marker_docking_) return TickMarkerDocking(core, now_s);
   if (!docking_gps_wait_) return;
   if (!docking_gps_since_) docking_gps_since_ = now_s;
@@ -461,6 +463,27 @@ void DockingPart::TickDocking(CoreAccess core, double now_s) {
   CountDockingFailure(core, why, true);
 }
 
+bool DockingPart::TowardsStation() const {
+  const auto towards = [](DockingLeg::Kind kind) {
+    return kind == DockingLeg::Kind::kApproach || kind == DockingLeg::Kind::kDirect;
+  };
+  return (docking_leg_ && towards(*docking_leg_)) || (docking_leg_due_ && towards(docking_leg_due_->kind));
+}
+
+void DockingPart::ObstacleHold(CoreAccess core, bool hold, const Reason& why) {
+  if (hold == docking_obstacle_wait_ || core.state() != State::kDocking) return;
+  if (hold) {
+    if (!TowardsStation()) return;
+    CancelDockingLeg(core, why);
+    docking_obstacle_wait_ = true;
+    core.Notify("Docking waits: " + why.message);
+    return;
+  }
+  docking_obstacle_wait_ = false;
+  core.Notify("Docking goes on: the way is free again");
+  NextDockingTry(core);
+}
+
 void DockingPart::CancelDockingLeg(CoreAccess core, const Reason& why) {
   docking_leg_due_.reset();
   if (!docking_leg_) return;
@@ -487,6 +510,7 @@ void DockingPart::EndDocking(CoreAccess core, const Reason& why) {
   CancelDockingLeg(core, why);
   docking_failure_.reset();
   docking_gps_wait_ = false;
+  docking_obstacle_wait_ = false;
   docking_charge_.reset();
   docking_out_after_charge_off_.reset();
   AllowChargeAgain(core);

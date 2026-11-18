@@ -133,9 +133,9 @@ Reason LogicCore::DropTasks(const std::string& run_id, const std::vector<std::st
   mowing_.job().PassOver(area_ids.empty() ? mowing_.job().TaskIds(mowing_.job().progress().tasks) : area_ids);
   if (!mowing_.job().AreaLeft()) {
     Reason why = SchedulePause();
-    // Like a reason of HomeWatch: never from a pause that waits for the user (G11); without a way home idle there.
-    const bool waits_for_user = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
-    const bool home = !waits_for_user && HomeReachable();
+    // Like a reason of HomeWatch: never from a pause that keeps its place (G11); without a way home idle there.
+    const bool keeps_place = (mowing_.pause() & kPauseKeepsPlace) != 0;
+    const bool home = !keeps_place && HomeReachable();
     why.message = (home ? "Going home: " : "Mowing ends: ") + why.message;
     Notify("Schedule: " + why.message);
     EndJob(false, home, why);

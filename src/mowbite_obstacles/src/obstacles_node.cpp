@@ -6,6 +6,7 @@
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
+#include <mowbite_msgs/msg/obstacle_action.hpp>
 #include <mowbite_msgs/msg/obstacle_image.hpp>
 #include <mowbite_msgs/msg/obstacle_status.hpp>
 #include <mowbite_msgs/msg/obstacles.hpp>
@@ -84,7 +85,7 @@ Frame ToFrame(const mowbite_msgs::msg::Obstacles& msg) {
 
 // The obstacles the sensors of the platform report on hw/obstacles: tracks in the map with the sight of each sensor
 // and the zones ahead on obstacles/status, and the list with photos for the app (vision.obstacles.*) where the
-// platform has such a sensor. Nothing here drives the mower.
+// platform has such a sensor. The logic holds the mower by obstacles/status; nothing here drives it.
 class ObstaclesNode : public rclcpp::Node {
  public:
   explicit ObstaclesNode(const rclcpp::NodeOptions& options)
@@ -108,7 +109,14 @@ class ObstaclesNode : public rclcpp::Node {
     FollowImages();
     capabilities_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1),
-        [this](const mowbite_msgs::msg::HardwareCapabilities& msg) { OnCapabilities(msg.obstacle_sources); });
+        [this](const mowbite_msgs::msg::HardwareCapabilities& msg) {
+          service_->SetModeMax(msg.obstacle_mode_max);
+          OnCapabilities(msg.obstacle_sources);
+        });
+    action_sub_ = create_subscription<mowbite_msgs::msg::ObstacleAction>(
+        "obstacles/action", 10, [this](const mowbite_msgs::msg::ObstacleAction& msg) {
+          service_->OnAction(msg.track_id, msg.action);
+        });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose& msg) {
           tracker_.OnPose({Seconds(msg.header.stamp), msg.x, msg.y, msg.heading, msg.position_accuracy});
@@ -266,6 +274,9 @@ class ObstaclesNode : public rclcpp::Node {
       out.age = static_cast<float>(now - track.last_seen);
       out.ahead = static_cast<float>(view.ahead);
       out.aside = static_cast<float>(view.aside);
+      out.zone = view.zone == Zone::kStop   ? mowbite_msgs::msg::ObstacleTrack::ZONE_STOP
+                 : view.zone == Zone::kSlow ? mowbite_msgs::msg::ObstacleTrack::ZONE_SLOW
+                                            : mowbite_msgs::msg::ObstacleTrack::ZONE_NONE;
       msg.tracks.push_back(out);
     }
     status_pub_->publish(msg);
@@ -332,6 +343,7 @@ class ObstaclesNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::ObstacleAction>::SharedPtr action_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::Obstacles>::SharedPtr obstacles_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ObstacleImage>::SharedPtr images_sub_;

@@ -22,12 +22,15 @@
 #include <mowbite_msgs/msg/clock_status.hpp>
 #include <mowbite_msgs/msg/dock_marker.hpp>
 #include <mowbite_msgs/msg/drive_command.hpp>
+#include <mowbite_msgs/msg/drive_gate.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
+#include <mowbite_msgs/msg/obstacle_action.hpp>
+#include <mowbite_msgs/msg/obstacle_status.hpp>
 #include <mowbite_msgs/msg/outline.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
@@ -230,6 +233,16 @@ class LogicNode : public rclcpp::Node {
                    mowbite_msgs::srv::DropTasks::Response& response);
   void PublishRuns(const std::vector<Effect>& effects);
   bool ScheduleBlocksHoldLocked(int64_t wall) const;
+
+  // The hold for obstacles (logic_node_obstacles.cpp): obstacles/status into the core, logic/drive_gate for the
+  // follower, obstacles/action for the list.
+  void SetUpObstacles();
+  void OnObstacleStatus(const mowbite_msgs::msg::ObstacleStatus& msg);
+  void PublishGateLocked();
+  void PublishObstacleNotes(const std::vector<Effect>& effects);
+  void ApplyObstacleModeLocked();
+  // The goal with gate set where the core wants it. Called with the mutex held.
+  FollowPath::Goal Gated(const FollowPath::Goal& goal) const;
 
   // The drive to a pose: its number tells late answers apart, the request waits for its answer until the follower
   // has taken the path.
@@ -456,6 +469,12 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::StartRun>::SharedPtr start_run_srv_;
   rclcpp::Service<mowbite_msgs::srv::DropTasks>::SharedPtr drop_tasks_srv_;
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr next_start_sub_;
+  // obstacle_mode_max of hw/capabilities, 0 until they came; the topics of the hold for obstacles.
+  int obstacle_mode_max_ = 0;
+  rclcpp::Subscription<mowbite_msgs::msg::ObstacleStatus>::SharedPtr obstacle_sub_;
+  rclcpp::Publisher<mowbite_msgs::msg::DriveGate>::SharedPtr gate_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::ObstacleAction>::SharedPtr obstacle_action_pub_;
+  rclcpp::TimerBase::SharedPtr gate_timer_;
   // Docking by the dock marker: the requests and when the last went out, the measurements, the pose in the station
   // frame and the commands of the follower there.
   rclcpp::Publisher<std_msgs::msg::Empty>::SharedPtr marker_request_pub_;

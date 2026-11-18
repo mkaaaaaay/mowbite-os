@@ -31,6 +31,8 @@ struct RobotStateView {
   long long current_path_index = -1;
   long long task_index = -1;
   long long task_count = -1;
+  std::string pause_reason;
+  std::string pause_kind;
   bool emergency = false;
   long long emergency_reason = 0;
   bool is_charging = false;

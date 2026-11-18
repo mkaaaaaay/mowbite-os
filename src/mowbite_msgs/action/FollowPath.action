@@ -42,6 +42,8 @@ float32 max_cross_track
 uint8 FRAME_MAP=0
 uint8 FRAME_DOCK=1
 uint8 frame
+# Moves only while logic/drive_gate says go and is fresh, at most speed_slow while it says slow; else it stands.
+bool gate
 ---
 uint8 REASON_DONE=0
 uint8 REASON_CANCELED=1

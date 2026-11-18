@@ -294,8 +294,10 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
 std::vector<uint32_t> Tracker::Tick(double now) {
   std::vector<uint32_t> ended;
   for (auto it = tracks_.begin(); it != tracks_.end();) {
-    const double limit = it->second.confirmed ? config_.track_timeout : config_.candidate_timeout;
-    if (now - it->second.last_seen > limit) {
+    const Track& track = it->second;
+    const double limit = track.confirmed ? config_.track_timeout : config_.candidate_timeout;
+    const bool stops = track.confirmed && !poses_.empty() && ViewFrom(track, poses_.back()).zone == Zone::kStop;
+    if (now - track.last_seen > limit && !stops) {
       ended.push_back(it->first);
       it = tracks_.erase(it);
     } else {
@@ -303,6 +305,38 @@ std::vector<uint32_t> Tracker::Tick(double now) {
     }
   }
   return ended;
+}
+
+TrackView Tracker::ViewFrom(const Track& track, const Pose& pose) const {
+  const double c = std::cos(pose.heading), s = std::sin(pose.heading);
+  const double dx = track.x - pose.x, dy = track.y - pose.y;
+  const double bx = c * dx + s * dy, by = -s * dx + c * dy;
+  TrackView view;
+  view.track = &track;
+  view.sigma = LargerSigma(track.cov_xx, track.cov_xy, track.cov_yy);
+  const double reach = track.radius + config_.zone_sigma * view.sigma;
+  view.ahead = bx - reach - body_.front;
+  view.aside = by;
+  if (!track.confirmed) return view;
+  // How far the thing stays off the body sideways, and whether any of it is level with the body or ahead.
+  const double beside = std::abs(by) - reach - body_.half_width;
+  const bool not_behind = bx + reach >= -body_.rear;
+  if (Living(track.kind)) {
+    const double off_x = std::max({-body_.rear - bx, 0.0, bx - body_.front});
+    const double off_y = std::max(std::abs(by) - body_.half_width, 0.0);
+    const bool around = std::hypot(off_x, off_y) - reach < config_.stop_living_around;
+    const bool corridor = not_behind && beside <= config_.stop_living_margin;
+    if (around || (corridor && view.ahead <= config_.stop_living_ahead)) {
+      view.zone = Zone::kStop;
+    } else if (corridor && view.ahead <= config_.slow_ahead) {
+      view.zone = Zone::kSlow;
+    }
+  } else if (track.kind == Kind::kObject || config_.unknown_stops) {
+    if (not_behind && beside <= config_.stop_object_margin && view.ahead <= config_.stop_object_ahead) {
+      view.zone = Zone::kStop;
+    }
+  }
+  return view;
 }
 
 const Track* Tracker::TrackOf(uint32_t id) const {
@@ -322,35 +356,12 @@ Status Tracker::StatusAt(double now) const {
     break;
   }
   if (poses_.empty()) return status;
-  const Pose& pose = poses_.back();
-  const double c = std::cos(pose.heading), s = std::sin(pose.heading);
   double stop_ahead = std::numeric_limits<double>::infinity();
   for (const auto& [id, track] : tracks_) {
-    const double dx = track.x - pose.x, dy = track.y - pose.y;
-    const double bx = c * dx + s * dy, by = -s * dx + c * dy;
-    TrackView view;
-    view.track = &track;
-    view.sigma = LargerSigma(track.cov_xx, track.cov_xy, track.cov_yy);
-    const double reach = track.radius + config_.zone_sigma * view.sigma;
-    view.ahead = bx - reach - body_.front;
-    view.aside = by;
+    const TrackView view = ViewFrom(track, poses_.back());
     status.tracks.push_back(view);
-    if (!track.confirmed) continue;
-    // How far the thing stays off the body sideways, and whether any of it is level with the body or ahead.
-    const double beside = std::abs(by) - reach - body_.half_width;
-    const bool not_behind = bx + reach >= -body_.rear;
-    bool stop = false;
-    if (Living(track.kind)) {
-      const double off_x = std::max({-body_.rear - bx, 0.0, bx - body_.front});
-      const double off_y = std::max(std::abs(by) - body_.half_width, 0.0);
-      const bool around = std::hypot(off_x, off_y) - reach < config_.stop_living_around;
-      const bool corridor = not_behind && beside <= config_.stop_living_margin;
-      stop = around || (corridor && view.ahead <= config_.stop_living_ahead);
-      if (corridor && view.ahead <= config_.slow_ahead) status.slow = true;
-    } else if (track.kind == Kind::kObject || config_.unknown_stops) {
-      stop = not_behind && beside <= config_.stop_object_margin && view.ahead <= config_.stop_object_ahead;
-    }
-    if (stop && view.ahead < stop_ahead) {
+    if (view.zone == Zone::kSlow) status.slow = true;
+    if (view.zone == Zone::kStop && view.ahead < stop_ahead) {
       stop_ahead = view.ahead;
       status.stop = true;
       status.stop_id = id;

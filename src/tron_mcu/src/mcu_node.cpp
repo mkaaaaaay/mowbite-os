@@ -163,6 +163,8 @@ class McuNode : public rclcpp::Node {
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
     // The sensors that send hw/obstacles, as their ids there; empty while none does.
     obstacle_sources_ = declare_parameter("obstacle_sources", std::vector<std::string>{});
+    // The highest obstacle_mode they are proven for here (1 show, 2 stop, 3 avoid).
+    obstacle_mode_max_ = declare_parameter("obstacle_mode_max", 1);
     safety_measurement_date_ = read_only_ ? "" : declare_parameter("safety_measurement_date", "");
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this Tron yet: remote control only");
@@ -647,6 +649,8 @@ class McuNode : public rclcpp::Node {
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
     msg.obstacle_sources = obstacle_sources_;
+    msg.obstacle_mode_max =
+        obstacle_sources_.empty() ? 0 : static_cast<uint8_t>(std::clamp<int64_t>(obstacle_mode_max_, 0, 3));
     capabilities_pub_->publish(msg);
   }
 
@@ -966,6 +970,7 @@ class McuNode : public rclcpp::Node {
   std::optional<double> end_at_s_;
   std::string safety_measurement_date_;
   std::vector<std::string> obstacle_sources_;
+  int64_t obstacle_mode_max_ = 1;
   bool blade_on_logged_ = false;
   uint32_t logged_reason_ = 0;
   // BlockOf the last hw/status, under mutex_.

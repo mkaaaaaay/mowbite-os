@@ -100,6 +100,12 @@ GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Ge
 // the pose. A limit <= 0 is no such rule.
 bool TurnFixFresh(double fix_age, double pose_age, double limit);
 
+// logic/drive_gate for a path with gate: it moves only while the last gate said go and is at most timeout s old
+// (age below 0: none came yet). A path without gate always may.
+bool GateOpen(bool gate, double age, bool go, double timeout);
+// The command at most max_linear fast forwards or backwards, scaled down whole so the curve stays.
+void CapLinear(double max_linear, double* linear, double* angular);
+
 }  // namespace mowbite_follower
 
 #endif  // MOWBITE_FOLLOWER_GUARD_H

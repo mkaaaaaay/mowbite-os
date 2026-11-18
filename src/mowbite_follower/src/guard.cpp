@@ -118,4 +118,15 @@ bool TurnFixFresh(double fix_age, double pose_age, double limit) {
   return !(limit > 0) || fix_age + pose_age <= limit;
 }
 
+bool GateOpen(bool gate, double age, bool go, double timeout) {
+  return !gate || (go && age >= 0 && age <= timeout);
+}
+
+void CapLinear(double max_linear, double* linear, double* angular) {
+  if (!(std::abs(*linear) > max_linear) || !(max_linear >= 0)) return;
+  const double scale = max_linear / std::abs(*linear);
+  *linear *= scale;
+  *angular *= scale;
+}
+
 }  // namespace mowbite_follower

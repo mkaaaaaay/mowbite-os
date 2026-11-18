@@ -78,6 +78,11 @@ LogicConfig LoadLogicConfig(rclcpp::Node& node) {
   if (!(config.dock.direct_margin > 0) || !std::isfinite(config.dock.direct_margin)) {
     throw std::invalid_argument("direct_margin needs to be above 0");
   }
+  // The hold for obstacles: how long the stop zone has to be seen free, the logic's.
+  config.obstacle.free_wait = param("obstacle_free_wait", config.obstacle.free_wait);
+  config.obstacle.near_wait = param("obstacle_near_wait", config.obstacle.near_wait);
+  config.obstacle.near_ahead = param("obstacle_near_ahead", config.obstacle.near_ahead);
+  config.obstacle.stale = param("obstacle_stale", config.obstacle.stale);
   // Docking by the dock marker: marker_range and marker_blind_distance are the platform's (/**), the rest the logic's.
   config.marker.range = param("marker_range", config.marker.range);
   config.marker.blind_distance = param("marker_blind_distance", config.marker.blind_distance);

@@ -71,6 +71,9 @@ tron_mcu:
     # a heartbeat in s (-1 unknown), and the date of the measurement. Without the date only remote control.
     failsafe_without_host: -1.0
     safety_measurement_date: ""
+    # The highest obstacle_mode the camera is proven for on the Tron (hw/capabilities): 1 shows obstacles only; 2 lets
+    # the mower stop for them, after reach and delay per class were measured on the mower (FP30, G44).
+    obstacle_mode_max: 1
 
 tron_gnss:
   ros__parameters:

@@ -1300,3 +1300,108 @@ TEST(LogicMowing, AManualPauseWithAGoodPositionChangesNoActions) {
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_FALSE(core.TakeActionsChanged());
 }
+
+namespace {
+
+ObstacleSample InTheWay(const char* kind = "OBJECT", bool in_view = true, double ahead = 0.7) {
+  return {true, {{7, kind, true, in_view, ahead, 2}}};
+}
+
+const ObstacleSample kFree{true, {}};
+
+}  // namespace
+
+TEST(LogicObstacles, AThingInTheWayPausesWithTheBladeOffAndItGoesOnOnceSeenFree) {
+  TestCore core = Following();
+  core.SetObstacleMode(2, 2);
+  EXPECT_TRUE(core.GateWanted());
+  EXPECT_TRUE(core.GateGo());
+  core.OnJobProgress(2);
+  core.OnObstacleStatus(InTheWay("ANIMAL"), 100);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_FALSE(core.GateGo());
+  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_TRUE(core.TakeStopRequest());
+  auto events = core.TakeEvents();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0].details["state"], "PAUSED");
+  EXPECT_EQ(events[0].details["reason"], "OBSTACLE");
+  EXPECT_EQ(events[0].details["kind"], "ANIMAL");
+  EXPECT_EQ(events[0].details["resume"], "auto");
+  EXPECT_EQ(core.RobotState().pause_reason, "OBSTACLE");
+  EXPECT_EQ(core.RobotState().pause_kind, "ANIMAL");
+  const auto notes = core.TakeObstacleNotes();
+  ASSERT_EQ(notes.size(), 1u);
+  EXPECT_EQ(notes[0].track_id, 7u);
+  EXPECT_EQ(notes[0].action, "stopped");
+  core.OnLegEnded(LegEnd::kCanceled, 3, Reason("CANCELED", ""));
+  // No leg starts during the hold, also not after the tick.
+  core.OnTick(101);
+  EXPECT_EQ(core.NextJobStep(101).kind, JobStep::Kind::kNone);
+  for (double t = 100.1; t < 110.05; t += 0.1) core.OnObstacleStatus(kFree, t);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core.OnObstacleStatus(kFree, 110.2);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_TRUE(core.GateGo());
+  core.OnPose(PoseAt(2.5, 2));
+  const JobStep step = core.NextJobStep(110.2);
+  ASSERT_EQ(step.kind, JobStep::Kind::kFollow);
+  EXPECT_EQ(step.start_index, 3u);
+}
+
+TEST(LogicObstacles, ShowOnlyNotesAndNoPlatformProofMeansShow) {
+  TestCore core = Following();
+  core.SetObstacleMode(1, 2);
+  EXPECT_FALSE(core.GateWanted());
+  core.OnObstacleStatus(InTheWay(), 0);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  const auto notes = core.TakeObstacleNotes();
+  ASSERT_EQ(notes.size(), 1u);
+  EXPECT_EQ(notes[0].action, "would_stop");
+  core.SetObstacleMode(2, 1);
+  core.OnObstacleStatus(InTheWay(), 0.1);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_TRUE(core.GateGo());
+}
+
+TEST(LogicObstacles, ContinueGoesPastWhatNoSensorSeesOnly) {
+  TestCore core = Following();
+  core.SetObstacleMode(2, 2);
+  core.OnObstacleStatus(InTheWay("OBJECT", true), 0);
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(Enabled(core, "mower_logic:mowing", "pause"));
+  EXPECT_TRUE(Enabled(core, "mower_logic:mowing", "continue"));
+  core.TakeEvents();
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kRejected);
+  const auto refused = core.TakeEvents();
+  ASSERT_EQ(refused.size(), 1u);
+  EXPECT_EQ(refused[0].type, "MOWING_REFUSED");
+  EXPECT_EQ(refused[0].details["reason"], "OBSTACLE");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  // Right at the nose, under the view: the user looked and lets it go on.
+  core.OnObstacleStatus(InTheWay("OBJECT", false, 0.1), 0.1);
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  core.OnObstacleStatus(InTheWay("OBJECT", false, 0.1), 0.2);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+}
+
+TEST(LogicObstacles, ManualPauseAndObstacleTakeTurns) {
+  TestCore core = Following();
+  core.SetObstacleMode(2, 2);
+  EXPECT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  core.OnObstacleStatus(InTheWay(), 0);
+  core.TakeEvents();
+  // The user wanted the pause: robot_state names it, not the obstacle.
+  EXPECT_EQ(core.RobotState().pause_reason, "MANUAL");
+  EXPECT_EQ(core.RobotState().pause_kind, "");
+  for (double t = 0.1; t < 10.3; t += 0.1) core.OnObstacleStatus(kFree, t);
+  // The obstacle is gone, the pause of the user stays.
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(core.TakeEvents().empty());
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_EQ(core.RobotState().pause_reason, "");
+}

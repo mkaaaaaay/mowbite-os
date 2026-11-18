@@ -76,6 +76,13 @@ Entry* ObstacleList::Mutable(uint32_t id) {
   return const_cast<Entry*>(Get(id));
 }
 
+bool ObstacleList::SetAction(uint32_t id, const std::string& action) {
+  Entry* entry = Mutable(id);
+  if (!entry || entry->action == action) return false;
+  entry->action = action;
+  return true;
+}
+
 bool ObstacleList::SetPhoto(uint32_t id, const Photo& photo) {
   Entry* entry = Mutable(id);
   if (!entry || entry->photo) return false;

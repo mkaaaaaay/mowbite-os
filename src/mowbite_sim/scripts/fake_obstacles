@@ -14,7 +14,8 @@ The scene (JSON, parameter scene; without one nothing is there):
 x, y are map coordinates (m); path [[t, x, y], ...] moves the thing linearly between its points and holds it at the
 ends (x, y are then not needed); from_s and until_s (s since the start of the node) bound when it is there; with
 score_drop [n] every n-th image with sight misses it. kind UNKNOWN reports no class_name and score 1. In a span of
-sight the sensor sees nothing, with that reason.
+sight the sensor sees nothing, with that reason. A changed scene file is read again at the next image (a test moves
+things with it); times stay those since the start of the node.
 
 A thing is reported when its disc lies wholly inside the view. Error model: per image a spread of position_sigma[0]
 + position_sigma[1] * d (m, d from the view point) along the line of sight and a quarter of it across, from seed.
@@ -27,6 +28,7 @@ While obstacles/photos_wanted is true, an image with finds also goes to hw/obsta
 import array
 import json
 import math
+import os
 import random
 import time
 from collections import namedtuple
@@ -244,8 +246,11 @@ def main():
                              self.declare_parameter("range_max", 4.0).value)
             self.sigma = list(self.declare_parameter("position_sigma", [0.03, 0.02]).value)
             self.rng = random.Random(self.declare_parameter("seed", 5).value)
-            self.scene = load_scene(self.declare_parameter("scene", "").value,
-                                    message_constants(Obstacle, "KIND_"), message_constants(Obstacles, "REASON_"))
+            self.scene_path = self.declare_parameter("scene", "").value
+            self.kinds = message_constants(Obstacle, "KIND_")
+            self.reasons = message_constants(Obstacles, "REASON_")
+            self.scene_mtime = self.scene_stamp()
+            self.scene = load_scene(self.scene_path, self.kinds, self.reasons)
             self.start = time.monotonic()
             self.images = 0
             self.photos_wanted = False
@@ -262,11 +267,28 @@ def main():
         def on_photos_wanted(self, msg):
             self.photos_wanted = msg.data
 
+        def scene_stamp(self):
+            try:
+                return os.stat(self.scene_path).st_mtime_ns if self.scene_path else None
+            except OSError:
+                return None
+
+        def reload_scene(self):
+            stamp = self.scene_stamp()
+            if stamp is None or stamp == self.scene_mtime:
+                return
+            try:
+                self.scene = load_scene(self.scene_path, self.kinds, self.reasons)
+                self.scene_mtime = stamp
+            except ValueError as e:
+                self.get_logger().warning(f"scene kept: {e}")
+
         def tick(self):
             now = time.monotonic()
             flags = read_json(self.flags_path)
             if flags.get("obstacles_off"):
                 return
+            self.reload_scene()
             taken = now - self.delay
             t = taken - self.start
             msg = Obstacles()

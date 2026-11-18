@@ -414,6 +414,11 @@ const std::vector<Field>& RobotState() {
       Integer("current_path_index", "While mowing the index of the pose in the path, otherwise -1"),
       Integer("task_index", "While mowing the place of the area in the list of the job from 0, otherwise -1"),
       Integer("task_count", "While mowing the number of areas in the list of the job, otherwise -1"),
+      Text("pause_reason",
+           "In PAUSED the reason of STATE that holds the mower: an emergency, a fault, the user (MANUAL), an obstacle "
+           "(OBSTACLE), then the position; otherwise empty"),
+      Text("pause_kind", "With pause_reason OBSTACLE the kind that held it (PERSON, ANIMAL, OBJECT, UNKNOWN), "
+                         "otherwise empty"),
       Switch("emergency", "1 while an emergency stops motion and blade"),
       Integer("emergency_reason", "The bits of the emergency (x-emergency-bits), 0 without one"),
       Switch("is_charging", "1 while the mower charges on the docking station"),
@@ -1130,6 +1135,9 @@ const std::vector<Method>& Methods() {
               {Client(), Number("since", "s", "Only the entries last seen after this unix time; all without", false)}),
        Object("result", "The list",
               {Text("mode", "obstacle_mode now", true, ObstacleModes()),
+               Text("mode_max",
+                    "The highest obstacle_mode proven on this platform; a higher setting acts as this one", true,
+                    ObstacleModes()),
                Bool("photos", "obstacle_photos now: whether new entries get a photo"),
                Object("sight", "Whether the sensors see now",
                       {Bool("ok", "All of them see"),
@@ -1327,7 +1335,7 @@ const std::vector<std::string>& ObstacleKinds() {
 }
 
 const std::vector<std::string>& ObstacleActions() {
-  static const std::vector<std::string> actions = {"seen", "slowed", "stopped", "avoided"};
+  static const std::vector<std::string> actions = {"seen", "slowed", "would_stop", "stopped", "avoided"};
   return actions;
 }
 
@@ -1354,9 +1362,10 @@ const std::vector<SettingEntry>& LogicSettings() {
        "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform"},
       {"journal_enabled", true, 0, 1, 1, "",
        "Whether the OS keeps a journal of its processes for incidents; a change counts from the next start"},
-      {"obstacle_mode", true, 0, 1, 0, "",
-       "What obstacles the sensors see do: off, or show them in the list and on the map without any effect on "
-       "driving; stop and avoid follow",
+      {"obstacle_mode", true, 0, 3, 0, "",
+       "What obstacles the sensors see do: off; show them in the list and on the map without any effect on driving; "
+       "stop: the mower stands with the blade off while one is in the way; avoid acts as stop for now. Above "
+       "mode_max of vision.obstacles.list it acts as that",
        ObstacleModes()},
       {"obstacle_photos", true, 0, 1, 1, "",
        "Whether a new entry of the obstacles gets a photo of the whole image, kept on the mower only"},

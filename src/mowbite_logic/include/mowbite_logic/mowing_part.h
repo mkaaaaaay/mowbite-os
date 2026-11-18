@@ -1,6 +1,7 @@
 #ifndef MOWBITE_LOGIC_MOWING_PART_H
 #define MOWBITE_LOGIC_MOWING_PART_H
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -58,6 +59,9 @@ class MowingPart {
   int pause() const {
     return pause_;
   }
+  // The reason of the pause that holds the mower now for robot_state: an emergency, a fault, the user, an obstacle,
+  // then GPS; empty without a pause.
+  const Reason& PauseReason() const;
   Leg leg() const {
     return leg_;
   }
@@ -93,7 +97,8 @@ class MowingPart {
   StartRequest start_request_;
   std::string session_id_;
   int pause_ = 0;
-  Reason pause_reason_;
+  // The reason each kind of pause came with, by its bit.
+  std::array<Reason, 5> pause_reasons_;
   Leg leg_ = Leg::kNone;
   bool approached_ = false;
   // Questions of the job in a row the planner gave no answer for.

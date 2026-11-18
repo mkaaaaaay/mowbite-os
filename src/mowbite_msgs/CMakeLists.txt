@@ -46,6 +46,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObstacleImage.msg"
   "msg/ObstacleTrack.msg"
   "msg/ObstacleStatus.msg"
+  "msg/ObstacleAction.msg"
+  "msg/DriveGate.msg"
   "msg/Camera.msg"
   "msg/DockMarker.msg"
   "msg/ClockStatus.msg"

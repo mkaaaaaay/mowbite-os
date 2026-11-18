@@ -12,9 +12,8 @@
 
 namespace mowbite_obstacles {
 
-// obstacle_mode, its value the index in mowbite_api::ObstacleModes(). Only off and show are taken until stop and
-// avoid are built.
-enum class Mode { kOff = 0, kShow = 1 };
+// obstacle_mode, its value the index in mowbite_api::ObstacleModes().
+enum class Mode { kOff = 0, kShow = 1, kStop = 2, kAvoid = 3 };
 
 struct Outcome {
   bool ok = false;
@@ -58,7 +57,9 @@ class ObstacleService {
 
   // Reads the list of the folder, removes photos it does not name, and keeps the limits.
   void Load(double now);
+  // The setting and the highest mode of the platform (hw/capabilities); the mode is the lower one.
   void SetMode(int mode);
+  void SetModeMax(int mode_max);
   void SetPhotos(bool on);
   Mode mode() const { return mode_; }
   // Whether the sensors are to send images: photos on and the obstacles shown.
@@ -70,6 +71,8 @@ class ObstacleService {
   void OnFrame(const Tracker& tracker, const FrameResult& frame, double now);
   void OnEnded(const std::vector<uint32_t>& tracks);
   void OnImage(const Tracker& tracker, Image image);
+  // What the mower did about a track (obstacles/action), for its entry.
+  void OnAction(uint32_t track, const std::string& action);
   // Events that waited for a photo, writing the list, the limits.
   void Tick(double now);
   // Writes the list now if it changed.
@@ -98,6 +101,8 @@ class ObstacleService {
   std::function<void(const std::string&)> warn_;
   ObstacleList list_;
   Mode mode_ = Mode::kOff;
+  int setting_ = 0;
+  int mode_max_ = 1;
   bool photos_ = false;
   struct Sight {
     bool ok = true;

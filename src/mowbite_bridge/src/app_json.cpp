@@ -41,6 +41,8 @@ std::string RobotStateText(const RobotStateView& s) {
                    {"current_path_index", s.current_path_index},
                    {"task_index", s.task_index},
                    {"task_count", s.task_count},
+                   {"pause_reason", s.pause_reason},
+                   {"pause_kind", s.pause_kind},
                    {"emergency", Switch(s.emergency)},
                    {"emergency_reason", s.emergency_reason},
                    {"is_charging", Switch(s.is_charging)},

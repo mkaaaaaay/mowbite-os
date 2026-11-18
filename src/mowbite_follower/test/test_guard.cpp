@@ -4,8 +4,10 @@
 
 #include "mowbite_follower/guard.h"
 
+using mowbite_follower::CapLinear;
 using mowbite_follower::CheckGuard;
 using mowbite_follower::DistanceToRing;
+using mowbite_follower::GateOpen;
 using mowbite_follower::Geofence;
 using mowbite_follower::GuardConfig;
 using mowbite_follower::GuardInput;
@@ -179,4 +181,35 @@ TEST(Guard, TheFixOfATurnCountsWithTheAgeOfThePose) {
   EXPECT_FALSE(TurnFixFresh(0.0, 1e9, 0.5));
   EXPECT_FALSE(TurnFixFresh(std::nan(""), 0.0, 0.5));
   EXPECT_TRUE(TurnFixFresh(999, 1e9, 0));
+}
+
+TEST(Gate, APathWithGateMovesOnlyOnAFreshGo) {
+  EXPECT_TRUE(GateOpen(false, -1.0, false, 0.5));
+  EXPECT_TRUE(GateOpen(true, 0.1, true, 0.5));
+  EXPECT_TRUE(GateOpen(true, 0.5, true, 0.5));
+  // The logic holds the mower, its gate stopped coming (it hangs), or none came yet.
+  EXPECT_FALSE(GateOpen(true, 0.1, false, 0.5));
+  EXPECT_FALSE(GateOpen(true, 0.51, true, 0.5));
+  EXPECT_FALSE(GateOpen(true, -1.0, true, 0.5));
+}
+
+TEST(Gate, SlowKeepsTheCurve) {
+  double linear = 0.55, angular = 0.2;
+  CapLinear(0.3, &linear, &angular);
+  EXPECT_NEAR(linear, 0.3, 1e-12);
+  EXPECT_NEAR(angular, 0.2 * 0.3 / 0.55, 1e-12);
+  linear = -0.4;
+  angular = -0.1;
+  CapLinear(0.3, &linear, &angular);
+  EXPECT_NEAR(linear, -0.3, 1e-12);
+  EXPECT_NEAR(angular, -0.075, 1e-12);
+  // Slower already, or turning on the spot: as it is.
+  linear = 0.2;
+  angular = 0.5;
+  CapLinear(0.3, &linear, &angular);
+  EXPECT_EQ(linear, 0.2);
+  EXPECT_EQ(angular, 0.5);
+  linear = 0.0;
+  CapLinear(0.3, &linear, &angular);
+  EXPECT_EQ(angular, 0.5);
 }

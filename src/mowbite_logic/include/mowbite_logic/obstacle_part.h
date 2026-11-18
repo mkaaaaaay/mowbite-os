@@ -1,0 +1,113 @@
+#ifndef MOWBITE_LOGIC_OBSTACLE_PART_H
+#define MOWBITE_LOGIC_OBSTACLE_PART_H
+
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "mowbite_logic/reasons.h"
+
+namespace mowbite_logic {
+
+// One track of obstacles/status as the logic weighs it.
+struct ObstacleTrackSample {
+  uint32_t id = 0;
+  // PERSON, ANIMAL, OBJECT or UNKNOWN.
+  std::string kind;
+  bool confirmed = false;
+  // Its place lies in the view of a sensor with sight now.
+  bool in_view = false;
+  // Its edge from the nose of the mower along the heading (m).
+  double ahead = 0.0;
+  // ZONE_* of ObstacleTrack.msg: 0 none, 1 slow, 2 stop.
+  int zone = 0;
+};
+
+// obstacles/status: whether every sensor sees, and the tracks.
+struct ObstacleSample {
+  bool sight = true;
+  std::vector<ObstacleTrackSample> tracks;
+};
+
+struct ObstacleConfig {
+  // s the stop zone has to be seen free before the mower goes on; near_wait when a thing in it came nearer to the nose
+  // than near_ahead (m), where the sensor sees only what stands higher.
+  double free_wait = 10.0;
+  double near_wait = 30.0;
+  double near_ahead = 0.5;
+  // An obstacles/status older than this (s) counts as one without sight: it starts no hold and frees none.
+  double stale = 1.0;
+};
+
+// What the mower did about a track, for its entry in vision.obstacles.list.
+struct ObstacleNote {
+  uint32_t track_id = 0;
+  // slowed, would_stop, stopped.
+  std::string action;
+};
+
+// The hold for obstacles (FP30 stop): with obstacle_mode stop on a platform proven for it, the mower stands while a
+// confirmed track lies in the stop zone, and goes on once that zone is seen free for free_wait (near_wait after a thing
+// right at the nose). A place out of view or without sight is never free; a status that stops coming starts nothing.
+// obstacle_mode show only notes where the mower would have stopped. The core applies the hold to MOWING and to the map
+// legs of DOCKING (logic_obstacle.cpp).
+class ObstaclePart {
+ public:
+  explicit ObstaclePart(const ObstacleConfig& config = {}) : config_(config) {}
+
+  // obstacle_mode and the highest mode of the platform; avoid acts as stop until the mower drives around obstacles.
+  void SetMode(int setting, int mode_max);
+  int mode() const;
+  bool Armed() const {
+    return mode() >= 2;
+  }
+  // A status of mowbite_obstacles; driving: the mower drives by itself now (a leg of the job or of docking in the map),
+  // for the notes.
+  void OnStatus(const ObstacleSample& sample, double now_s, bool driving);
+  // A status older than stale frees nothing.
+  void Tick(double now_s);
+  // The mower is to stand for an obstacle.
+  bool Holding() const {
+    return hold_;
+  }
+  // A person or animal lies ahead in the zone to go slow.
+  bool Slow() const {
+    return Armed() && fresh_ && slow_;
+  }
+  // OBSTACLE with kind (the most of what held it: PERSON, ANIMAL, then OBJECT, UNKNOWN).
+  Reason Why() const;
+  // mowing.continue in a hold: the things that held it and lie out of view now count no more until a sensor sees them
+  // again, and the hold ends. False, and nothing changes, while one of them is in view.
+  bool Waive();
+  std::vector<ObstacleNote> TakeNotes();
+
+ private:
+  // The tracks that hold the mower: confirmed in the stop zone, unless waived and out of view.
+  std::vector<const ObstacleTrackSample*> Holders(const ObstacleSample& sample) const;
+  void Note(uint32_t id, const std::string& action);
+
+  ObstacleConfig config_;
+  int setting_ = 0;
+  int mode_max_ = 0;
+  ObstacleSample last_;
+  std::optional<double> last_at_;
+  bool fresh_ = false;
+  bool slow_ = false;
+  bool hold_ = false;
+  // The worst kind that held it, and whether a thing came within near_ahead, in this hold.
+  std::string kind_;
+  bool near_ = false;
+  // Since when the zone is seen free in this hold.
+  std::optional<double> free_since_;
+  std::set<uint32_t> waived_;
+  // Tracks already noted, by action.
+  std::set<std::pair<uint32_t, std::string>> noted_;
+  std::vector<ObstacleNote> notes_;
+};
+
+}  // namespace mowbite_logic
+
+#endif  // MOWBITE_LOGIC_OBSTACLE_PART_H

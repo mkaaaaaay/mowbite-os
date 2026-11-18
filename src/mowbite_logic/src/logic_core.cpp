@@ -85,7 +85,8 @@ LogicCore::LogicCore(const LogicConfig& config)
       ids_(config.id_seed),
       recording_(RecorderConfigOf(config)),
       docking_part_(config.charge),
-      home_(HomeRules()) {
+      home_(HomeRules()),
+      obstacle_part_(config.obstacle) {
   // Without telemetry the mower counts as stopped until the driver reports.
   emergency_ = true;
   effects_.push_back(ActionsChanged{});
@@ -106,7 +107,8 @@ const char* EffectName(const Effect& effect) {
   static constexpr const char* kNames[] = {"DriveCancel",     "StopRequest",    "CalibrationCancel", "ChargeOff",
                                            "ChargeOn",        "ReferenceCheck", "UndockPath",        "UndockOutcome",
                                            "CalibrationGoal", "MapEdit",        "Event",             "ReasonChange",
-                                           "ActionsChanged",  "Notice",         "Checkpoint",        "RunChanged"};
+                                           "ActionsChanged",  "Notice",         "Checkpoint",        "RunChanged",
+                                           "ObstacleNote"};
   static_assert(std::size(kNames) == std::variant_size_v<Effect>, "a name for every effect");
   return kNames[effect.index()];
 }
@@ -117,7 +119,8 @@ EffectPhase PhaseOf(const Effect& effect) {
         using T = std::decay_t<decltype(value)>;
         if constexpr (kOneOf<T, DriveCancel, StopRequest, CalibrationCancel>) {
           return EffectPhase::kHalt;
-        } else if constexpr (kOneOf<T, Event, ReasonChange, ActionsChanged, Notice, Checkpoint, RunChanged>) {
+        } else if constexpr (kOneOf<T, Event, ReasonChange, ActionsChanged, Notice, Checkpoint, RunChanged,
+                                     ObstacleNote>) {
           return EffectPhase::kRecord;
         } else {
           static_assert(
@@ -411,23 +414,27 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
   }
   if (name.rfind("mowing.", 0) == 0) {
     if (state_ != State::kMowing) return WrongState();
-    const int waiting = kPauseManual | kPauseEmergency | kPauseFault;
+    const int waiting = kPauseWaitsForUser;
     if (name == "mowing.pause") {
       if (mowing_.pause() & kPauseManual) return WrongState();
       Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
       return {};
     }
     if (name == "mowing.continue") {
-      if ((mowing_.pause() & waiting) == 0) return WrongState();
+      if ((mowing_.pause() & (waiting | kPauseObstacle)) == 0) return WrongState();
       // The EMERGENCY event told already: no MOWING_REFUSED.
       if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
       Reason why = Held() ? HoldProblem() : ContinueProblem();
+      // The user lets the mower go past what it cannot see; what a sensor sees in the stop zone keeps it.
+      if (why.empty() && (mowing_.pause() & kPauseObstacle) && !obstacle_part_.Waive()) {
+        why = Reason("OBSTACLE", "An obstacle in view is in the way");
+      }
       if (!why.empty()) {
         RefuseStart(why);
         return why;
       }
       // Without GPS it still waits for a good position.
-      Unpause(waiting);
+      Unpause(waiting | kPauseObstacle);
       ResumedByUser();
       return {};
     }
@@ -665,6 +672,9 @@ RobotStateData LogicCore::RobotState() const {
     s.current_path_index = mowing_.job().progress().index;
     s.task_index = mowing_.job().TaskIndex();
     s.task_count = mowing_.job().TaskCount();
+    const Reason& paused = mowing_.PauseReason();
+    s.pause_reason = paused.code;
+    if (paused.fields.contains("kind")) s.pause_kind = paused.fields["kind"].get<std::string>();
   }
   if (state_ == State::kAreaRecording) s.sub_state = recording_.recorder().SubState();
   if (state_ == State::kDriving) s.sub_state = "DRIVING";
@@ -705,10 +715,11 @@ std::vector<ActionGroup> LogicCore::Actions() const {
                       idle && !emergency_ && recording_.map_writable() && HoldProblem().empty()},
                      {"reset_job", "Discard unfinished job", idle && mowing_.job().Unfinished()}}});
   // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
-  const bool waits = (mowing_.pause() & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
+  const bool waits = (mowing_.pause() & kPauseWaitsForUser) != 0;
+  const bool obstacle = (mowing_.pause() & kPauseObstacle) != 0;
   groups.push_back({kMowingPrefix,
                     {{"pause", "Pause", mowing && !waits},
-                     {"continue", "Resume", mowing && waits && !emergency_ && !Held()},
+                     {"continue", "Resume", mowing && (waits || obstacle) && !emergency_ && !Held()},
                      {"abort_mowing", "End mowing", mowing},
                      {"skip_area", "Next area", mowing},
                      {"skip_path", "Next path", mowing}}});
@@ -977,6 +988,8 @@ void LogicCore::OnTick(double now_s) {
                     .With("bits", mowbite_api::EmergencyNameList(reason_)));
   }
   WatchAnnouncement();
+  obstacle_part_.Tick(now_s);
+  ApplyObstacleHold();
   if (active && active->phase == RunPhase::kAnnouncing &&
       now_s >= active->announce_until) {
     EndAnnouncement(now_s);

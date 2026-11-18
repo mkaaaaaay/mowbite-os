@@ -1,5 +1,5 @@
 # obstacles/status at 10 Hz: what the sensors of the platform see around the mower. Older than 1 s counts as without
-# sight. Shown only for now; nothing drives by it.
+# sight. With obstacle_mode stop the logic holds the mower for tracks in the stop zone.
 std_msgs/Header header
 
 # Every sensor of obstacle_sources sees; else reason (of Obstacles.msg, NO_SIGNAL for a sensor without messages) and

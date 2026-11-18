@@ -715,7 +715,8 @@ Around `mowbite_camera`:
 A sensor that sees obstacles on the ground ahead: a camera with object detection and depth on the Tron, later
 ultrasound or LiDAR elsewhere. The platform says where things are; what they mean (tracks, confirmation, zones, the
 sight of the sensors, the list and the photos for the app) is in `mowbite_obstacles` of the OS, the same for every
-sensor. Today it shows only: `obstacle_mode` takes off and show, nothing drives by it.
+sensor. `obstacle_mode` show lists them without any effect on driving and notes where the mower would have stopped;
+stop holds the mower (see the last points). The sensor stays an extra: the bumper and the lift stay the emergency stop.
 
 - Name each sensor in `obstacle_sources` of `hw/capabilities` (a camera by its id of `hw/cameras`). Without a name the
   OS offers no `vision.obstacles.*` and keeps no list.
@@ -741,8 +742,18 @@ sensor. Today it shows only: `obstacle_mode` takes off and show, nothing drives 
   `list_entries`, `list_max_mb`, `list_days` of `mowbite_obstacles`); nothing of it goes into incidents, logs or MQTT
   topics. The zones and the confirmation are parameters of `mowbite_obstacles` as well; leave them until the sensor
   is measured on the mower.
+- `obstacle_mode_max` of the driver (in `hw/capabilities`, 1 by default) is the highest mode the sensor is proven for
+  on this platform; a higher setting acts as it. Raise it to 2 only after reach and delay per class were measured on
+  the mower (person, animal, object, also lying and crouching) and the stops in the grass of show were counted.
+- With stop the logic pauses MOWING with the reason OBSTACLE (blade off) and holds a leg of docking towards the
+  station while a confirmed thing lies in the stop zone, and goes on by itself once the zone is seen free for
+  `obstacle_free_wait` (10 s; `obstacle_near_wait` 30 s after a thing within `obstacle_near_ahead` 0.5 m of the nose).
+  A place out of view or without sight is never free; then the user can continue past what no sensor sees. Without
+  sight nothing stops. Paths of these legs carry `gate`: the follower stands without a fresh `logic/drive_gate`
+  (`gate_timeout` 0.5 s) and goes at most `speed_slow` while a person or animal is in the slow zone.
 - In the simulation `fake_obstacles` reports the things of a scene file (`config/obstacles_scene.example.json`) from
-  the true pose of the fake board; `test_obstacles.py` drives the node through the app interface.
+  the true pose of the fake board, and reads the file again when it changes; `test_obstacles.py` drives the node
+  through the app interface, `test_obstacle_stop.py` the hold in the whole stack.
 
 ## Check list
 
@@ -776,5 +787,6 @@ sensor. Today it shows only: `obstacle_mode` takes off and show, nothing drives 
 - [ ] Cameras, if any: own process, publisher list tested, hw/cameras entry, vendor files only on the mower, limits
       measured; `mowbite_camera` started with them, its ports reachable from the app, each protocol watched once
 - [ ] Obstacle sensors, if any: named in `obstacle_sources`, `hw/obstacles` at a fixed rate with sight and an honest
-      sector, the mount measured, classes mapped in the file of the platform, photos only while wanted
+      sector, the mount measured, classes mapped in the file of the platform, photos only while wanted;
+      `obstacle_mode_max` 2 only after the measurement on the mower
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s

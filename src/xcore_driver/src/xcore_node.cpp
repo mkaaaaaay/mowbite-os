@@ -159,6 +159,8 @@ class XcoreNode : public rclcpp::Node {
     platform_ = declare_parameter("platform", "openmower_v2");
     // The sensors that send hw/obstacles, as their ids there; empty while none does.
     obstacle_sources_ = declare_parameter("obstacle_sources", std::vector<std::string>{});
+    // The highest obstacle_mode they are proven for here (1 show, 2 stop, 3 avoid).
+    obstacle_mode_max_ = declare_parameter("obstacle_mode_max", 1);
     xcore::IoConfig io;
     io.interface = declare_parameter("interface", "eth0");
     const std::string bind_ip = declare_parameter("bind_ip", "172.16.78.1");
@@ -744,6 +746,8 @@ class XcoreNode : public rclcpp::Node {
     msg.safety_measurement_date = safety_measurement_date_;
     msg.blade_allowed = allow_blade_;
     msg.obstacle_sources = obstacle_sources_;
+    msg.obstacle_mode_max =
+        obstacle_sources_.empty() ? 0 : static_cast<uint8_t>(std::clamp<int64_t>(obstacle_mode_max_, 0, 3));
     capabilities_pub_->publish(msg);
   }
 
@@ -968,6 +972,7 @@ class XcoreNode : public rclcpp::Node {
   double silence_max_s_ = 0;
   std::string safety_measurement_date_;
   std::vector<std::string> obstacle_sources_;
+  int64_t obstacle_mode_max_ = 1;
   bool allow_blade_ = false;
   // Only the output thread.
   bool blade_on_logged_ = false;

@@ -1558,3 +1558,33 @@ TEST(Docking, AnEmergencyWithTheContactEndsDockingFirst) {
     EXPECT_EQ(line.find("Docking: contact with the docking station"), std::string::npos) << line;
   }
 }
+
+TEST(Docking, AnObstacleOnTheWayToTheStationHoldsTheTryUntilItIsSeenFree) {
+  TestCore core = Approaching();
+  core.SetObstacleMode(2, 2);
+  EXPECT_TRUE(core.GateWanted());
+  const ObstacleSample person{true, {{3, "PERSON", true, true, 0.8, 2}}};
+  core.OnObstacleStatus(person, 0);
+  EXPECT_TRUE(core.Docking());
+  EXPECT_TRUE(core.TakeDriveCancel());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_FALSE(core.TakeDockingLeg());
+  // Neither the tick nor a lost leg makes it go on or count a try.
+  core.OnTick(5);
+  core.OnDockingLegEnded(LegEnd::kCanceled, Reason("OBSTACLE", ""));
+  EXPECT_FALSE(core.TakeDockingLeg());
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING_RETRY"));
+  for (double t = 0.1; t < 10.05; t += 0.1) core.OnObstacleStatus({true, {}}, t);
+  EXPECT_FALSE(core.TakeDockingLeg());
+  core.OnObstacleStatus({true, {}}, 10.2);
+  Take(core, DockingLeg::Kind::kApproach);
+}
+
+TEST(Docking, AnObstacleDoesNotStopTheLineOntoTheStation) {
+  TestCore core = AtTheGate();
+  core.SetObstacleMode(2, 2);
+  EXPECT_FALSE(core.GateWanted());
+  core.OnObstacleStatus({true, {{3, "OBJECT", true, true, 0.2, 2}}}, 0);
+  EXPECT_FALSE(core.TakeDriveCancel());
+  EXPECT_TRUE(core.Docking());
+}

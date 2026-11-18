@@ -65,6 +65,15 @@ class DockingPart {
     return (docking_leg_ && docking_leg_frame_ == LegFrame::kMap) ||
            (docking_leg_due_ && docking_leg_due_->frame == LegFrame::kMap);
   }
+  // A leg over the drivable areas to the point in front of the station (approach, direct) on its way or due: the legs
+  // the hold for obstacles stops.
+  bool TowardsStation() const;
+  // The hold for obstacles: such a leg stops and docking waits, without a timeout; once the hold ends the try goes on
+  // from where the mower stands. Legs onto the station and out of it go on.
+  void ObstacleHold(CoreAccess core, bool hold, const Reason& why);
+  bool obstacle_wait() const {
+    return docking_obstacle_wait_;
+  }
 
  private:
   // Docking with the current settings onto the station of the map, the line within marker_range where Guided; in
@@ -131,6 +140,7 @@ class DockingPart {
   bool docking_hold_ = false;
   std::optional<Reason> docking_failure_;
   bool docking_gps_wait_ = false;
+  bool docking_obstacle_wait_ = false;
   std::optional<double> docking_gps_since_;
   std::optional<double> docking_gps_good_since_;
   // The check of the charge on the contacts and whether it ran in this try; the way out kept until charging is off;

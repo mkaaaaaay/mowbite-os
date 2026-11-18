@@ -41,7 +41,7 @@ struct Entry {
   std::string class_name;
   double confidence = 0.0;
   std::string camera_id;
-  // seen, slowed, stopped or avoided.
+  // One of mowbite_api::ObstacleActions().
   std::string action = "seen";
   std::optional<Photo> photo;
 };
@@ -78,6 +78,8 @@ class ObstacleList {
 
   const Entry* Get(uint32_t id) const;
   bool SetPhoto(uint32_t id, const Photo& photo);
+  // What the mower did about it; false when nothing changed.
+  bool SetAction(uint32_t id, const std::string& action);
   void DropPhoto(uint32_t id);
   // The entry with this photo name, 0 without one.
   uint32_t ByPhoto(const std::string& name) const;

@@ -929,3 +929,18 @@ TEST(Sunset, EachRunTellsTheUnsafeClockOnce) {
   Hold(core, Healthy(), 11, 20);
   EXPECT_EQ(Lines(core.TakeNotices(), "No going home at sunset yet"), 1);
 }
+
+TEST(GoingHome, NeverFromAHoldForAnObstacle) {
+  HardwareSnapshot wet = Healthy();
+  wet.rain = true;
+  TestCore core = Mowing();
+  core.SetHomeSettings(1, 20, 70, 40);
+  core.SetObstacleMode(2, 2);
+  core.OnObstacleStatus({true, {{1, "PERSON", true, false, 0.3, 2}}}, 0);
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  core.TakeEvents();
+  // A person may stand at the mower (G45): it keeps its place as in a pause for the user.
+  Hold(core, wet, 0, 120);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
+}

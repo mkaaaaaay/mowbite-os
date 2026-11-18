@@ -134,6 +134,8 @@ RobotStateView View(const msg::RobotState& m) {
   v.current_path_index = m.current_path_index;
   v.task_index = m.task_index;
   v.task_count = m.task_count;
+  v.pause_reason = m.pause_reason;
+  v.pause_kind = m.pause_kind;
   v.emergency = m.emergency;
   v.emergency_reason = m.emergency_reason;
   v.is_charging = m.is_charging;

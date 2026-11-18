@@ -110,6 +110,9 @@ void MowingPart::ApplySkips(CoreAccess core) {
 void MowingPart::Pause(CoreAccess core, int why, const Reason& reason) {
   if (core.state() != State::kMowing) return;
   const bool was_paused = pause_ != 0;
+  for (size_t bit = 0; bit < pause_reasons_.size(); ++bit) {
+    if ((why & (1 << bit)) && !(pause_ & (1 << bit))) pause_reasons_[bit] = reason;
+  }
   pause_ |= why;
   if (why == kPauseGps) gps_good_since_.reset();
   if (LegDrives()) {
@@ -118,7 +121,6 @@ void MowingPart::Pause(CoreAccess core, int why, const Reason& reason) {
   }
   spinup_since_.reset();
   if (was_paused) return;
-  pause_reason_ = reason;
   core.Notify("Mowing paused: " + reason.message);
   json details = {{"state", "PAUSED"}};
   PutReason(&details, "STATE", reason);
@@ -127,12 +129,20 @@ void MowingPart::Pause(CoreAccess core, int why, const Reason& reason) {
   core.CheckpointNow();
 }
 
+const Reason& MowingPart::PauseReason() const {
+  static const Reason kNone;
+  // Bits of kPauseEmergency, kPauseFault, kPauseManual, kPauseObstacle, kPauseGps.
+  for (const size_t bit : {1u, 3u, 0u, 4u, 2u}) {
+    if (pause_ & (1 << bit)) return pause_reasons_[bit];
+  }
+  return kNone;
+}
+
 void MowingPart::Unpause(CoreAccess core, int why) {
   if (pause_ == 0) return;
   pause_ &= ~why;
   core.effects().SetDue<ActionsChanged>(true);
   if (pause_ != 0) return;
-  pause_reason_ = Reason();
   // From where it stopped: the start of the path may be behind it now.
   approached_ = false;
   core.AddEvent("STATE", {{"state", "MOWING"}});
@@ -228,9 +238,9 @@ void MowingPart::JobWithoutPlanner(CoreAccess core, const Reason& silent, const 
            std::to_string(planner_silent_) + " of " + std::to_string(kPlannerRetries));
     return;
   }
-  // Like a reason of HomeWatch: never from a pause that waits for the user, who may stand at the mower (G11).
-  const bool waits_for_user = (pause_ & (kPauseManual | kPauseEmergency | kPauseFault)) != 0;
-  if (!waits_for_user && core.HomeReachable()) {
+  // Like a reason of HomeWatch: never from a pause that keeps its place (G11, G45).
+  const bool keeps_place = (pause_ & kPauseKeepsPlace) != 0;
+  if (!keeps_place && core.HomeReachable()) {
     core.EndJob(false, true, Reason(silent.code, "Going home: the planner does not answer"));
     return;
   }
@@ -353,7 +363,6 @@ void MowingPart::Leave(CoreAccess core) {
   if (LegDrives()) core.CancelDrive(Reason("STOPPED", "Mowing ended"));
   leg_ = Leg::kNone;
   pause_ = 0;
-  pause_reason_ = Reason();
   skip_path_ = skip_area_ = drive_on_ = false;
   skipped_.reset();
   spinup_since_.reset();

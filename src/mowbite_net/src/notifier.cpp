@@ -141,10 +141,12 @@ void Notifier::OnStateEvent(const json& event) {
   const std::string state = Text(event, "state");
   if (state != "PAUSED") {
     paused_reason_.clear();
+    paused_kind_.clear();
     return;
   }
   const std::string reason = Text(event, "reason");
   paused_reason_ = reason;
+  paused_kind_ = Text(event, "kind");
   if (Text(event, "resume") != "user") return;
   const std::string& lang = rules_.lang;
   const Vars why = {{"n", Name()}, {"reason", ReasonName(lang, "STATE", reason, Text(event, "message"))}};
@@ -241,7 +243,11 @@ void Notifier::Standstill(const StateView& state) {
     still_y_ = state.y;
     still_pose_ = true;
   }
-  if (still_told_ || open_ || state.mono - *still_since_ < kStandstillAfter) return;
+  double after = kStandstillAfter;
+  if (state.state == "PAUSED" && paused_reason_ == "OBSTACLE") {
+    after = paused_kind_ == "PERSON" || paused_kind_ == "ANIMAL" ? kObstacleLivingAfter : kObstacleObjectAfter;
+  }
+  if (still_told_ || open_ || state.mono - *still_since_ < after) return;
   std::string message = Say(lang, "standstill.new", {{"n", Name()}, {"min", Minutes(state.mono - *still_since_)}});
   if (state.state == "PAUSED") {
     message += Say(lang, "standstill.paused", {{"reason", ReasonName(lang, "STATE", paused_reason_)}});

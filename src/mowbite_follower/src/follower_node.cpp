@@ -7,6 +7,7 @@
 #include <mowbite_hold/lock.h>
 #include <mowbite_msgs/action/follow_path.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
+#include <mowbite_msgs/msg/drive_gate.hpp>
 #include <mowbite_msgs/msg/gps_limits.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -94,6 +95,7 @@ class FollowerNode : public rclcpp::Node {
     c.turn_hold_deadband = declare_parameter("turn_hold_deadband", c.turn_hold_deadband);
     c.wheel_min_speed = declare_parameter("wheel_min_speed", c.wheel_min_speed);
     turn_fix_timeout_ = declare_parameter("turn_fix_timeout", 0.5);
+    gate_timeout_ = declare_parameter("gate_timeout", 0.5);
     c.max_start_distance = declare_parameter("max_start_distance", c.max_start_distance);
     c.goal_tolerance = declare_parameter("goal_tolerance", c.goal_tolerance);
     // Angles in degrees.
@@ -184,6 +186,13 @@ class FollowerNode : public rclcpp::Node {
           if (dt > 0 && dt <= kWheelGap) wheel_angle_ += msg->twist.angular.z * dt;
           wheel_stamp_ = stamp;
           wheel_time_ = MonotonicSeconds();
+        });
+    gate_sub_ = create_subscription<mowbite_msgs::msg::DriveGate>(
+        "logic/drive_gate", 10, [this](const mowbite_msgs::msg::DriveGate::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          gate_time_ = MonotonicSeconds();
+          gate_go_ = msg->go;
+          gate_slow_ = msg->slow;
         });
     // max_position_accuracy of the parameter files holds until the logic tells its own (params.set).
     limits_sub_ = create_subscription<mowbite_msgs::msg::GpsLimits>(
@@ -276,11 +285,14 @@ class FollowerNode : public rclcpp::Node {
     config.end_tolerance = goal->end_tolerance > 0 ? goal->end_tolerance : 0.0;
     max_off_path_ = goal->max_cross_track;
     dock_frame_ = goal->frame == FollowPath::Goal::FRAME_DOCK;
+    gate_ = goal->gate;
+    speed_slow_ = config.speed.speed_slow;
     follower_ = std::make_unique<PathFollower>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
     if (problem.empty()) problem = follower_->Start(poses, kinds, goal->start_index);
     active_ = handle;
+    gated_ = false;
     last_step_ = MonotonicSeconds();
     last_feedback_ = 0;
     wheel_step_.reset();
@@ -289,9 +301,10 @@ class FollowerNode : public rclcpp::Node {
       Finish(FollowPath::Result::REASON_INVALID, "invalid path: " + problem, goal->start_index);
       return;
     }
-    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s%s, at most %.2f m/s", poses.size(), goal->start_index,
-                dock_frame_ ? " in the station frame" : "", goal->reverse ? " backwards" : "",
-                goal->straight ? " straight without steering" : "", config.speed.max_linear);
+    RCLCPP_INFO(get_logger(), "Following %zu poses from %u%s%s%s%s, at most %.2f m/s", poses.size(),
+                goal->start_index, dock_frame_ ? " in the station frame" : "", goal->reverse ? " backwards" : "",
+                goal->straight ? " straight without steering" : "", gate_ ? " by the gate of the logic" : "",
+                config.speed.max_linear);
   }
 
   void OnTimer() {
@@ -332,6 +345,18 @@ class FollowerNode : public rclcpp::Node {
       Finish(static_cast<uint8_t>(guard.reason), guard.message, follower_->index());
       return;
     }
+    // Without a fresh go of the logic the mower stands and the path waits; what the wheels turned meanwhile is not its.
+    if (!GateOpen(gate_, gate_time_ ? now - *gate_time_ : -1.0, gate_go_, gate_timeout_)) {
+      if (!gated_) RCLCPP_WARN(get_logger(), "Standing: %s", gate_time_ && now - *gate_time_ <= gate_timeout_
+                                                                  ? "the logic holds the mower"
+                                                                  : "no gate from the logic");
+      gated_ = true;
+      wheel_step_.reset();
+      CmdPublisher().publish(geometry_msgs::msg::Twist());
+      return;
+    }
+    if (gated_) RCLCPP_INFO(get_logger(), "Going on: the gate of the logic is open");
+    gated_ = false;
     // What the wheels turned since the last step, no number while they do not report.
     const bool wheels = wheel_time_ && now - *wheel_time_ <= kWheelGap;
     const double wheel_turn = wheels && wheel_step_ ? wheel_angle_ - *wheel_step_ : std::nan("");
@@ -353,6 +378,7 @@ class FollowerNode : public rclcpp::Node {
     geometry_msgs::msg::Twist twist;
     twist.linear.x = cmd.linear;
     twist.angular.z = cmd.angular;
+    if (gate_ && gate_slow_) CapLinear(speed_slow_, &twist.linear.x, &twist.angular.z);
     CmdPublisher().publish(twist);
     if (now - last_feedback_ >= 0.5) {
       last_feedback_ = now;
@@ -493,6 +519,15 @@ class FollowerNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::GpsLimits>::SharedPtr limits_sub_;
+  // logic/drive_gate: when the last came (monotonic), what it said; the path follows it with gate_; gated_: it stands.
+  rclcpp::Subscription<mowbite_msgs::msg::DriveGate>::SharedPtr gate_sub_;
+  double gate_timeout_ = 0.5;
+  std::optional<double> gate_time_;
+  bool gate_go_ = false;
+  bool gate_slow_ = false;
+  bool gate_ = false;
+  bool gated_ = false;
+  double speed_slow_ = 0;
   rclcpp_action::Server<FollowPath>::SharedPtr server_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;

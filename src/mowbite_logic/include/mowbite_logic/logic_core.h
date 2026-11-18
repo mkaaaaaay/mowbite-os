@@ -23,6 +23,7 @@
 #include "mowbite_logic/marker_dock.h"
 #include "mowbite_logic/mowing_job.h"
 #include "mowbite_logic/mowing_part.h"
+#include "mowbite_logic/obstacle_part.h"
 #include "mowbite_logic/reasons.h"
 #include "mowbite_logic/recording_part.h"
 #include "mowbite_logic/release_part.h"
@@ -349,6 +350,18 @@ class LogicCore {
   // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency;
   // in SETUP the blade stays off for the step, which sees it.
   void OnBladeRefused(const std::string& message, int emergency_reason = 0);
+  // obstacles/status of mowbite_obstacles (ObstaclePart): with obstacle_mode stop MOWING pauses with the reason
+  // OBSTACLE and a leg of DOCKING towards the station waits while a thing lies in the stop zone; both go on by
+  // themselves once the zone is seen free, and no leg of either starts meanwhile. now_s is a monotonic clock.
+  void OnObstacleStatus(const ObstacleSample& sample, double now_s);
+  // obstacle_mode, and obstacle_mode_max of hw/capabilities.
+  void SetObstacleMode(int setting, int mode_max);
+  // logic/drive_gate for paths with gate: go while no obstacle holds the mower, slow for a person or animal ahead.
+  bool GateGo() const;
+  bool GateSlow() const;
+  // A path given to the follower now has to follow logic/drive_gate: the hold is armed, and it is a leg of MOWING or
+  // of DOCKING towards the station.
+  bool GateWanted() const;
 
   RobotStateData RobotState() const;
   std::vector<ActionGroup> Actions() const;
@@ -472,6 +485,10 @@ class LogicCore {
   // Continues the open job, or begins the one mowing.start asked for.
   void StartMowing();
   void Pause(int why, const Reason& reason);
+  // The hold of ObstaclePart on MOWING (kPauseObstacle) and DOCKING; notes for obstacles/action.
+  void ApplyObstacleHold();
+  // The mower drives by itself now: a leg of the job or of docking towards the station.
+  bool ObstacleDriving() const;
   // Stops a drive or a leg on its way; a drive ends with the first reason given.
   void CancelDrive(const Reason& reason);
   void Unpause(int why);
@@ -530,6 +547,7 @@ class LogicCore {
   json shape_outside_ = json::array();
   GoingHomePart home_;
   SchedulePart schedule_;
+  ObstaclePart obstacle_part_;
   // The clock and the datum the sunset needs.
   bool clock_safe_ = false;
   std::string clock_reason_ = "no_report";

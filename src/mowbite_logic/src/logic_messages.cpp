@@ -120,6 +120,8 @@ mowbite_msgs::msg::RobotState ToMessage(const RobotStateData& state) {
   msg.current_path_index = state.current_path_index;
   msg.task_index = state.task_index;
   msg.task_count = state.task_count;
+  msg.pause_reason = state.pause_reason;
+  msg.pause_kind = state.pause_kind;
   msg.battery_percentage = state.battery_percentage;
   msg.emergency = state.emergency;
   msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);

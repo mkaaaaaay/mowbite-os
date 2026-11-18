@@ -81,7 +81,11 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot, telemetry_ok, emergency, em
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PoseSnapshot, x, y, heading, position_accuracy, orientation_accuracy,
                                    orientation_valid)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationConfig, max_position_accuracy, min_battery, status_timeout, timeout)
-// With defaults: marker came later, journals from before stay readable.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleConfig, free_wait, near_wait, near_ahead, stale)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleTrackSample, id, kind, confirmed, in_view, ahead, zone)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleSample, sight, tracks)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ObstacleNote, track_id, action)
+// With defaults: marker and obstacle came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_voltage, battery_full_voltage,
                                                 battery_low_window, dock_charge_voltage, max_position_accuracy,
                                                 recorder, mow_with_blade, mower_spinup_rpm, mower_spinup_timeout,
@@ -91,7 +95,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_volta
                                                 motor_cold_temperature, rain_mode, rain_check_seconds,
                                                 approach_distance, checkpoint_period, dock_contact_x,
                                                 dock_max_position_accuracy, dock_accuracy_per_m, dock_reference_limit,
-                                                undock, dock, marker, charge, calibration, id_seed)
+                                                undock, dock, marker, charge, calibration, obstacle, id_seed)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationStatus, problems, heading, lane_length, strip_length, strip_width,
                                    running)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationGoal, heading, lane_length)
@@ -142,7 +146,7 @@ static_assert(sizeof(JobProgress) == 160);
 static_assert(sizeof(HardwareSnapshot) == 72);
 static_assert(sizeof(PoseSnapshot) == 40);
 static_assert(sizeof(CalibrationConfig) == 32);
-static_assert(sizeof(LogicConfig) == 512);
+static_assert(sizeof(LogicConfig) == 544);
 static_assert(sizeof(MarkerConfig) == 64);
 static_assert(sizeof(DockMarkerSample) == 48);
 static_assert(sizeof(DockPoseSample) == 56);
@@ -158,6 +162,10 @@ static_assert(sizeof(ReferenceCheck) == 8);
 static_assert(sizeof(Notice) == 32);
 static_assert(sizeof(Checkpoint) == 32);
 static_assert(sizeof(RunChanged) == 104);
+static_assert(sizeof(ObstacleConfig) == 32);
+static_assert(sizeof(ObstacleTrackSample) == 64);
+static_assert(sizeof(ObstacleSample) == 32);
+static_assert(sizeof(ObstacleNote) == 40);
 static_assert(sizeof(ScheduleRun) == 112);
 
 // What the logic decides: state, sub_state, the reason bits of an emergency, blade wanted, follower driving.
@@ -191,7 +199,8 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
-      &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade);
+      &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
+      &L::SetObstacleMode);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
