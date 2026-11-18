@@ -147,11 +147,12 @@ class Probe(SimProbe):
         return None
 
     def gaps_since(self, since_index, x, y, radius):
-        """(gap, speed between the poses) along the true track since that index."""
+        """(gap, speed between the poses) along the true track since that index, by the times of the simulated board:
+        a pose read twice is no stop and the next step no jump."""
         with self.lock:
             track = list(self.track[since_index:])
-        return [(gap(b, x, y, radius), math.hypot(b["x"] - a["x"], b["y"] - a["y"]) / 0.2)
-                for a, b in zip(track, track[1:])]
+        return [(gap(b, x, y, radius), math.hypot(b["x"] - a["x"], b["y"] - a["y"]) / (b["t"] - a["t"]))
+                for a, b in zip(track, track[1:]) if b["t"] > a["t"]]
 
 
 class TestObstacleStop(unittest.TestCase):
@@ -245,6 +246,7 @@ class TestObstacleStop(unittest.TestCase):
         x, y = point(start, FRONT + 0.25 + 2.9)
         since, index = len(p.events), len(p.track)
         place(thing("PERSON", "person", x, y, 0.25, 1.7))
+        self.addCleanup(place)
         self.paused_for(since, "PERSON", 20)
         time.sleep(1.5)
         still, poses = p.standing()
