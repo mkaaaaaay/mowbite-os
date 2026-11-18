@@ -3,7 +3,7 @@ the test moves, mowbite_obstacles tracks them, the logic holds the mower and the
 simulated Tron reports the camera stereo and obstacle_mode_max 2, obstacle_mode is stop. Checked on the true pose of
 fake_tron: an object stops the mower with the blade off before it and it goes on once the place is seen free; a person
 slows it, stops it farther off and lets it go on after it walked away; an animal beside the mower out of view holds it
-until the user continues; after a thing right at the nose it waits 30 s; without sight nothing stops it.
+until the user continues; after a person right at the nose it waits 30 s; without sight nothing stops it.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_obstacle_stop.py
 """
@@ -284,10 +284,11 @@ class TestObstacleStop(unittest.TestCase):
     def test_05_after_a_thing_right_at_the_nose_it_waits_thirty_seconds(self):
         p = self.probe
         x, y, stood, _ = self.stop_at_ball()
-        # A cat walks in right before the nose, still in view, and goes again with the ball.
-        cx, cy = point(stood, FRONT + 0.45 + 0.15, 0.1)
-        place(ball(x, y), thing("ANIMAL", "cat", cx, cy, 0.15, 0.3))
-        self.assertTrue(p.wait(lambda: any(t.kind == "ANIMAL" and t.zone == 2 and t.in_view and 0 < t.ahead < NEAR_AHEAD
+        # A person steps in right before the nose, still in view, and goes again with the ball. Nearer than about 0.44 m
+        # the sensor cannot see the place free at all.
+        cx, cy = point(stood, FRONT + 0.48 + 0.25)
+        place(ball(x, y), thing("PERSON", "person", cx, cy, 0.25, 1.7))
+        self.assertTrue(p.wait(lambda: any(t.kind == "PERSON" and t.zone == 2 and t.in_view and 0 < t.ahead < NEAR_AHEAD
                                            for t in p.obstacles.tracks), 5), p.obstacles.tracks)
         took, _ = self.goes_on_after(NEAR_WAIT)
         print(f"near: on after {took:.1f} s")
