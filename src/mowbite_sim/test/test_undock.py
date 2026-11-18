@@ -91,14 +91,16 @@ class Probe(SimProbe):
                          and self.map["areas"][0]["outline"][0]["x"] == lawn[0][0], 10), "the map did not come"
 
     def put_on_the_station(self, **flags):
-        """Carried onto the contacts; waits for the debounced contact and an RTK position fit for the check."""
+        """Carried onto the contacts; waits for the debounced contact, an RTK position fit for the check and the
+        contact seen by the logic (is_charging), which under load comes later than to the probe."""
         self.flags()
         time.sleep(0.3)
         self.flags(place=DOCKED, **flags)
         assert self.wait(lambda: self.hw and self.hw.dock_contact, 10), "no contact on the station"
         assert self.wait(lambda: self.pose and self.pose.position_accuracy <= 0.03
                          and abs(self.pose.x + 1.0) < 0.05, 30), "no RTK position there"
-        assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE", 10)
+        assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE" and self.robot.is_charging, 10), \
+            "the logic does not see the contact"
 
 
 class TestUndock(unittest.TestCase):
