@@ -294,7 +294,9 @@ class TestObstacleAvoid(unittest.TestCase):
         # lanes around it is done.
         c, s = math.cos(start["yaw"]), math.sin(start["yaw"])
         aside = lambda t: abs(-(t["x"] - x) * s + (t["y"] - y) * c)  # noqa: E731
-        self.assertTrue(p.wait(lambda: aside(p.truth()) > AROUND + 0.4, 900), "the lanes never got past the ball")
+        reached = p.wait(lambda: aside(p.truth()) > AROUND + 0.4, 900)
+        place()
+        self.assertTrue(reached, "the lanes never got past the ball")
         with p.lock:
             whole = list(p.track)
         # The lanes before the ball count as mowed too.
@@ -308,10 +310,13 @@ class TestObstacleAvoid(unittest.TestCase):
               f"{avoided['left_out']:.1f} m of lanes left out, nearest {nearest:.2f} m")
         self.assertGreater(nearest, CLEARANCE - STRAY, f"the body came {nearest:.2f} m near the ball")
         self.assertLessEqual(left, UNMOWED_MAX)
-        place()
 
     def test_04_a_person_in_the_way_is_waited_for(self):
         p = self.probe
+        # No circle left from the balls: the mower mows lanes, no way around.
+        circles = lambda: [e for e in p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]  # noqa
+                           if e["keep_out_r"] is not None]
+        self.assertTrue(p.wait(lambda: not circles(), 120), "a circle stays")
         start = p.straight_run(5.0)
         self.assertIsNotNone(start, "no straight run")
         x, y = point(start, FRONT + 0.25 + 2.0)
