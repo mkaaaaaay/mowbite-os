@@ -114,7 +114,7 @@ TEST(ObstaclePart, ThirtySecondsAfterAThingRightAtTheNose) {
 TEST(ObstaclePart, APlaceOutOfViewOrWithoutSightIsNeverFree) {
   ObstaclePart part = Armed();
   // The thing stays in the stop zone out of view: the hold stays as long as it does.
-  Feed(part, Seen({Track(1, "ANIMAL", kStop, 0.1, false)}), 0, 600);
+  Feed(part, Seen({Track(1, "ANIMAL", kStop, 0.7, false)}), 0, 600);
   EXPECT_TRUE(part.Holding());
   // Gone from the tracks, but the sensor sees nothing: the wait does not run.
   Feed(part, Seen({}, false), 600.1, 700);

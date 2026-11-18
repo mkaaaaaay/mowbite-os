@@ -39,9 +39,9 @@ STATE = os.path.join(WORK, "state.json")
 FLAGS = os.path.join(WORK, "flags.json")
 SCENE = os.path.join(WORK, "scene.json")
 METHODS = ["vision.obstacles.clear", "vision.obstacles.image", "vision.obstacles.list"]
-# A ball 0.9 m ahead of the nose of the Tron at the origin, a person on the left, a dog behind: the mower sees one at
+# A ball 0.7 m ahead of the nose of the Tron at the origin, a person on the left, a dog behind: the mower sees one at
 # a time by its heading.
-BALL = (1.6, 0.0)
+BALL = (1.4, 0.0)
 PERSON = (0.0, 3.0)
 DOG = (-3.0, 0.0)
 SCENE_THINGS = {"obstacles": [

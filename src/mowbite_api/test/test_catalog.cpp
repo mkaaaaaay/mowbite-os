@@ -89,7 +89,9 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
                                                                {"MOWING_REFUSED CLOCK_UNSAFE", {"info", "user"}},
                                                                {"MOWING_REFUSED DARK", {"info", "user"}},
                                                                {"STATE SCHEDULE", {"info", "user"}},
-                                                               {"AREA_SKIPPED SCHEDULE", {"info", "auto"}}};
+                                                               {"AREA_SKIPPED SCHEDULE", {"info", "auto"}},
+                                                               // The hold for obstacles of api 51 goes on by itself.
+                                                               {"STATE OBSTACLE", {"warning", "auto"}}};
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED", "CALIBRATION_REFUSED",
                             "CALIBRATION_FAILED", "STATE", "DRIVE", "POSITION_JUMP", "AREA_SKIPPED", "UNDOCKING_FAILED",
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {
