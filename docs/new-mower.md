@@ -744,16 +744,27 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
   is measured on the mower.
 - `obstacle_mode_max` of the driver (in `hw/capabilities`, 1 by default) is the highest mode the sensor is proven for
   on this platform; a higher setting acts as it. Raise it to 2 only after reach and delay per class were measured on
-  the mower (person, animal, object, also lying and crouching) and the stops in the grass of show were counted.
+  the mower (person, animal, object, also lying and crouching) and the stops in the grass of show were counted; to 3
+  only after the stops of stop were watched on the mower and the braking distance and the clearance around a thing
+  were measured.
 - With stop the logic pauses MOWING with the reason OBSTACLE (blade off) and holds a leg of docking towards the
   station while a confirmed thing lies in the stop zone, and goes on by itself once the zone is seen free for
   `obstacle_free_wait` (10 s; `obstacle_near_wait` 30 s after a thing within `obstacle_near_ahead` 0.5 m of the nose).
   A place out of view or without sight is never free; then the user can continue past what no sensor sees. Without
   sight nothing stops. Paths of these legs carry `gate`: the follower stands without a fresh `logic/drive_gate`
   (`gate_timeout` 0.5 s) and goes at most `speed_slow` while a person or animal is in the slow zone.
+- With avoid an object alone (no person, animal or thing of no kind) that held the mower for `obstacle_avoid_wait`
+  (3 s) without moving more than `obstacle_avoid_still` becomes a circle: its radius, `obstacle_avoid_sigma` times its
+  spread and `obstacle_avoid_clearance` (0.30 m, at least 0.1) between it and the body. The planner's `~/cut_plan`
+  (interface 3) cuts the rest of the area's plan by the circles; the mower drives to the next piece within the area
+  around them with the blade on at `obstacle_avoid_speed` (0.3 m/s) and leaves the poses in and behind them out. The
+  circles are temporary obstacles of every transit while mowing and obstacles of the follower's geofence; they go
+  once their place is seen free, after `obstacle_avoid_keep` (30 min) or when mowing ends. Without a cut or a way
+  around the mower waits as with stop. The list entry gets the circle, the event OBSTACLE_AVOIDED tells of it.
 - In the simulation `fake_obstacles` reports the things of a scene file (`config/obstacles_scene.example.json`) from
   the true pose of the fake board, and reads the file again when it changes; `test_obstacles.py` drives the node
-  through the app interface, `test_obstacle_stop.py` the hold in the whole stack.
+  through the app interface, `test_obstacle_stop.py` the hold in the whole stack, `test_obstacle_avoid.py` driving
+  around a ball.
 
 ## Check list
 
@@ -788,5 +799,6 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
       measured; `mowbite_camera` started with them, its ports reachable from the app, each protocol watched once
 - [ ] Obstacle sensors, if any: named in `obstacle_sources`, `hw/obstacles` at a fixed rate with sight and an honest
       sector, the mount measured, classes mapped in the file of the platform, photos only while wanted;
-      `obstacle_mode_max` 2 only after the measurement on the mower
+      `obstacle_mode_max` 2 only after the measurement on the mower, 3 after the stops were watched and the clearance
+      measured
 - [ ] First drive watched: blade off, RTK fix, at most 0.3 m/s
