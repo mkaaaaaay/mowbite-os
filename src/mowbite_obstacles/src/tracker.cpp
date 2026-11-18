@@ -295,10 +295,10 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
 std::vector<uint32_t> Tracker::Tick(double now) {
   std::vector<uint32_t> ended;
   for (auto it = tracks_.begin(); it != tracks_.end();) {
-    const Track& track = it->second;
+    Track& track = it->second;
     const double limit = track.confirmed ? config_.track_timeout : config_.candidate_timeout;
-    const bool stops = track.confirmed && !poses_.empty() && ViewFrom(track, poses_.back()).zone == Zone::kStop;
-    if (now - track.last_seen > limit && !stops) {
+    track.stopping = track.confirmed && !poses_.empty() && ViewFrom(track, poses_.back()).zone == Zone::kStop;
+    if (now - track.last_seen > limit && !track.stopping) {
       ended.push_back(it->first);
       it = tracks_.erase(it);
     } else {
@@ -319,21 +319,24 @@ TrackView Tracker::ViewFrom(const Track& track, const Pose& pose) const {
   view.ahead = bx - reach - body_.front;
   view.aside = by;
   if (!track.confirmed) return view;
+  const double release = track.stopping ? config_.zone_release : 0.0;
   // How far the thing stays off the body sideways, and whether any of it is level with the body or ahead.
   const double beside = std::abs(by) - reach - body_.half_width;
   const bool not_behind = bx + reach >= -body_.rear;
   if (Living(track.kind)) {
     const double off_x = std::max({-body_.rear - bx, 0.0, bx - body_.front});
     const double off_y = std::max(std::abs(by) - body_.half_width, 0.0);
-    const bool around = std::hypot(off_x, off_y) - reach < config_.stop_living_around;
+    const bool around = std::hypot(off_x, off_y) - reach < config_.stop_living_around + release;
     const bool corridor = not_behind && beside <= config_.stop_living_margin;
-    if (around || (corridor && view.ahead <= config_.stop_living_ahead)) {
+    if (around || (not_behind && beside <= config_.stop_living_margin + release &&
+                   view.ahead <= config_.stop_living_ahead + release)) {
       view.zone = Zone::kStop;
     } else if (corridor && view.ahead <= config_.slow_ahead) {
       view.zone = Zone::kSlow;
     }
   } else if (track.kind == Kind::kObject || config_.unknown_stops) {
-    if (not_behind && beside <= config_.stop_object_margin && view.ahead <= config_.stop_object_ahead) {
+    if (not_behind && beside <= config_.stop_object_margin + release &&
+        view.ahead <= config_.stop_object_ahead + release) {
       view.zone = Zone::kStop;
     }
   }

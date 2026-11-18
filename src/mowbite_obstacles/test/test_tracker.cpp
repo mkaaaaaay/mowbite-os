@@ -371,4 +371,26 @@ TEST_F(TrackerTest, AThingTheEdgeOfTheViewCutsIsNotSeenFree) {
   EXPECT_FALSE(tracker.tracks().begin()->second.in_view);
 }
 
+TEST_F(TrackerTest, AThingThatStopsLeavesTheZoneOnlyWellBeyondItsEdge) {
+  // A ball right on the edge of the stop zone of objects, 0.8 m ahead of the nose.
+  Find ball = Thing(Kind::kObject, 0.605 + 0.1 + 0.79, 0.0);
+  ball.cov_xx = ball.cov_yy = 0.0;
+  ASSERT_TRUE(Confirmed(tracker, ball).stop);
+  tracker.Tick(1.3);
+  // The pose wanders back by 5 cm: it still stops.
+  pose = {1.4, -0.05, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.4);
+  EXPECT_TRUE(tracker.StatusAt(1.4).stop);
+  // Beyond the release it lets go, and needs the zone itself again to stop.
+  pose = {1.5, -0.25, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.5);
+  EXPECT_FALSE(tracker.StatusAt(1.5).stop);
+  pose = {1.6, -0.05, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.6);
+  EXPECT_FALSE(tracker.StatusAt(1.6).stop);
+}
+
 }  // namespace mowbite_obstacles

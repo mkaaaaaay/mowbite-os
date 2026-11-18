@@ -112,6 +112,9 @@ struct TrackerConfig {
   double stop_object_margin = 0.15;
   double slow_ahead = 2.0;
   double zone_sigma = 1.0;
+  // A track that stops the mower leaves the stop zone only this much (m) beyond its edges: a thing on the edge does not
+  // let the mower go and stop again as the pose wanders by a few cm.
+  double zone_release = 0.2;
   // Tracks of UNKNOWN (geometry only) stop as objects; off until false stops in the grass are measured.
   bool unknown_stops = false;
   // Finds with a box a track keeps for its photo.
@@ -146,6 +149,8 @@ struct Track {
   double last_seen = 0.0;
   // Since when its place has been in view without a find; negative while not.
   double free_since = -1.0;
+  // It lay in the stop zone at the last Tick.
+  bool stopping = false;
   // Finds (true) and misses over the last frames that had its place in view, newest last.
   std::deque<bool> window;
   // The sensor of its last find, and its last finds with a box, newest last, for a photo.
@@ -197,7 +202,7 @@ class Tracker {
   void OnPose(const Pose& pose);
   // now: when the frame arrived, for the sight of its sensor.
   FrameResult OnFrame(const Frame& frame, double now);
-  // Ends tracks that ran out of time; returns their ids.
+  // Ends tracks that ran out of time and keeps which lie in the stop zone; returns the ids of those that ended.
   std::vector<uint32_t> Tick(double now);
   // The sight of the sensors, the tracks and the zones at the latest pose.
   Status StatusAt(double now) const;

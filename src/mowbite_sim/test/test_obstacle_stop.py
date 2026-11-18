@@ -265,7 +265,7 @@ class TestObstacleStop(unittest.TestCase):
         p = self.probe
         start = p.straight_run(4.5)
         self.assertIsNotNone(start, "no straight run")
-        x, y = point(start, 2.6, 1.05)
+        x, y = point(start, 2.6, 1.2)
         since = len(p.events)
         place(thing("ANIMAL", "dog", x, y, 0.2, 0.5))
         self.paused_for(since, "ANIMAL")
