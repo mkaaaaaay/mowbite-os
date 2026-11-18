@@ -220,6 +220,8 @@ class NetNode : public rclcpp::Node {
     state.pose = msg.gps_percentage > 0;
     state.x = msg.pose_x;
     state.y = msg.pose_y;
+    state.pause_reason = msg.pause_reason;
+    state.pause_kind = msg.pause_kind;
     notifier_.OnState(state);
     Flush();
   }

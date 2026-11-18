@@ -185,13 +185,19 @@ TEST(Notifier, NoStandstillWhileChargingRecordingOrPausedByHand) {
 }
 
 TEST(Notifier, AnObstacleIsToldAfterAMinuteAPersonAfterFive) {
+  const auto held = [](double s, const char* kind) {
+    StateView view = At(s, "PAUSED");
+    view.pause_reason = "OBSTACLE";
+    view.pause_kind = kind;
+    return view;
+  };
   Notifier n = Make();
   n.OnEvent({{"type", "STATE"}, {"state", "PAUSED"}, {"reason", "OBSTACLE"}, {"kind", "OBJECT"}, {"resume", "auto"}},
             0);
-  n.OnState(At(0, "PAUSED"));
-  n.OnState(At(59, "PAUSED"));
+  n.OnState(held(0, "OBJECT"));
+  n.OnState(held(59, "OBJECT"));
   EXPECT_TRUE(n.Take().empty());
-  n.OnState(At(60, "PAUSED"));
+  n.OnState(held(60, "OBJECT"));
   std::vector<Push> out = n.Take();
   ASSERT_EQ(out.size(), 1u);
   EXPECT_EQ(out[0].kind, "standstill");
@@ -199,13 +205,10 @@ TEST(Notifier, AnObstacleIsToldAfterAMinuteAPersonAfterFive) {
             "Robi has been standing still for 1 min and isn't charging. Paused: Obstacle in the way.");
 
   Notifier living = Make();
-  living.OnEvent({{"type", "STATE"}, {"state", "PAUSED"}, {"reason", "OBSTACLE"}, {"kind", "PERSON"},
-                  {"resume", "auto"}},
-                 0);
-  living.OnState(At(0, "PAUSED"));
-  living.OnState(At(299, "PAUSED"));
+  living.OnState(held(0, "PERSON"));
+  living.OnState(held(299, "PERSON"));
   EXPECT_TRUE(living.Take().empty());
-  living.OnState(At(300, "PAUSED"));
+  living.OnState(held(300, "PERSON"));
   EXPECT_EQ(living.Take().size(), 1u);
 }
 

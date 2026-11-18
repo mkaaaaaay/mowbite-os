@@ -125,6 +125,10 @@ TEST_F(ServiceTest, TheModeIsAtMostThatOfThePlatform) {
   const Json list = Call("vision.obstacles.list");
   EXPECT_EQ(list["mode"], "stop");
   EXPECT_EQ(list["mode_max"], "stop");
+  // Avoid is not built yet: it acts as stop, and the list offers stop at most.
+  service->SetModeMax(3);
+  EXPECT_EQ(service->mode(), Mode::kStop);
+  EXPECT_EQ(Call("vision.obstacles.list")["mode_max"], "stop");
   service->SetModeMax(0);
   EXPECT_EQ(service->mode(), Mode::kOff);
   service->SetModeMax(1);

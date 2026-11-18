@@ -257,6 +257,14 @@ constexpr int kObstacleImageBytes = 65536;
 const std::vector<std::string>& ObstacleModes();
 const std::vector<std::string>& ObstacleKinds();
 const std::vector<std::string>& ObstacleActions();
+// The highest obstacle_mode built: avoid acts as stop until the mower drives around obstacles.
+constexpr int kObstacleModeBuilt = 2;
+// obstacle_mode as it acts: the setting, at most mode_max of the platform and what is built, at least off.
+int EffectiveObstacleMode(int setting, int mode_max);
+// A person or animal (kind of ObstacleKinds()).
+bool ObstacleLiving(const std::string& kind);
+// The place of an action in ObstacleActions(), -1 for none.
+int ObstacleActionRank(const std::string& action);
 // The situations of sound.list in their order.
 const std::vector<SoundSituation>& SoundSituations();
 

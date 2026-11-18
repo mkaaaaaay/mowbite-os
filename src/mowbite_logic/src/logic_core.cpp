@@ -427,7 +427,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       Reason why = Held() ? HoldProblem() : ContinueProblem();
       // The user lets the mower go past what it cannot see; what a sensor sees in the stop zone keeps it.
       if (why.empty() && (mowing_.pause() & kPauseObstacle) && !obstacle_part_.Waive()) {
-        why = Reason("OBSTACLE", "An obstacle in view is in the way");
+        why = obstacle_part_.Why().WithMessage("An obstacle in view is in the way");
       }
       if (!why.empty()) {
         RefuseStart(why);

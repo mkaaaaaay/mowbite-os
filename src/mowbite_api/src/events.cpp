@@ -563,7 +563,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "Nothing to do."}}}}},
       {"OBSTACLE",
        {"An obstacle is in the way: the mower stands with the blade off until the way is seen free",
-        {Text("kind", "What held it: a person or animal before an object; not in a refusal", false, ObstacleKinds())},
+        {Text("kind", "What held it: a person or animal before an object", true, ObstacleKinds())},
         {{"de",
           {"Hindernis im Weg",
            "Die Kamera sieht etwas im Weg. Der Mäher steht mit Messer aus und fährt weiter, sobald der Platz frei ist.",

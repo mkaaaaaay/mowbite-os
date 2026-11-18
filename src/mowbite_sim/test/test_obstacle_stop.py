@@ -25,8 +25,8 @@ from mowbite_msgs.srv import ReplaceMap, SetPose
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (LATCHED, SimProbe, sim_description, sim_files, sim_program, stop_process,  # noqa: E402
-                        write_json)
+from sim_common import (LATCHED, SimProbe, follower_param, sim_description, sim_files, sim_program,  # noqa: E402
+                        stop_process, tron_geometry, wrap, write_json)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_obstacle_stop_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
@@ -43,9 +43,13 @@ GARDEN = {
                "outline": [{"x": x, "y": y} for x, y in LAWN]}],
     "docking_stations": [],
 }
-# The nose of the Tron ahead of base_link (m); speed_slow of the follower (m/s).
-FRONT = 0.605
-SPEED_SLOW = 0.3
+# The front of the body ahead of base_link that the zones count from (m); speed_slow of the follower (m/s).
+FRONT = float(tron_geometry("robot_front"))
+SPEED_SLOW = float(follower_param("speed_slow"))
+# The ball of the runs: its radius and height, and how far its edge lies ahead of the front when it is placed (m).
+BALL_RADIUS = 0.1
+BALL_HEIGHT = 0.2
+BALL_GAP = 1.6
 # The hold: seen free this long before it goes on (s), longer after a thing right at the nose; the tracker ends a track
 # once its place is seen free for 1 s.
 FREE_WAIT = 10.0
@@ -61,11 +65,8 @@ with open(CONFIG, "w") as f:
 
 
 def generate_test_description():
-    os.makedirs(os.path.join(DATA, "params"), exist_ok=True)
-    # The settings of params.set: stop, and no sunset (sim_stack leaves this file alone with sunset).
-    write_json(os.path.join(DATA, "params", "mower_logic.json"), {"dock_at_sunset": 0, "obstacle_mode": 2})
     write_json(SCENE, {"obstacles": []})
-    return sim_description(WORK, 18836, extra_config=CONFIG, sunset=True)
+    return sim_description(WORK, 18836, extra_config=CONFIG, settings={"obstacle_mode": 2})
 
 
 def room_ahead(t):
@@ -97,6 +98,10 @@ def place(*things):
 
 def thing(kind, name, x, y, radius, height):
     return {"kind": kind, "class_name": name, "score": 0.9, "x": x, "y": y, "radius": radius, "height": height}
+
+
+def ball(x, y):
+    return thing("OBJECT", "ball", x, y, BALL_RADIUS, BALL_HEIGHT)
 
 
 class Probe(SimProbe):
@@ -134,7 +139,7 @@ class Probe(SimProbe):
         while time.time() < end:
             with self.lock:
                 track = list(self.track[-6:])
-            turned = abs(math.remainder(track[-1]["yaw"] - track[0]["yaw"], 2 * math.pi)) if len(track) == 6 else 1
+            turned = abs(wrap(track[-1]["yaw"] - track[0]["yaw"])) if len(track) == 6 else 1
             if (turned < 0.03 and self.robot is not None and self.robot.current_state == "MOWING"
                     and self.speed() > 0.25 and room_ahead(track[-1]) >= room):
                 return track[-1]
@@ -174,6 +179,33 @@ class TestObstacleStop(unittest.TestCase):
         self.assertEqual(state["resume"], "auto", state)
         return state
 
+    def stop_at_ball(self):
+        """A ball ahead on a straight run, the mower stopped for it: (x, y of the ball, the true pose, the index of the
+        events before)."""
+        p = self.probe
+        start = p.straight_run(4.5)
+        self.assertIsNotNone(start, "no straight run")
+        x, y = point(start, FRONT + BALL_RADIUS + BALL_GAP)
+        since = len(p.events)
+        place(ball(x, y))
+        self.paused_for(since, "OBJECT")
+        time.sleep(1.0)
+        still, poses = p.standing()
+        self.assertTrue(still, poses)
+        return x, y, poses[1], since
+
+    def goes_on_after(self, wait, *things):
+        """The scene changed to things: it goes on after wait plus the second to see the place free, not before.
+        Returns how long it took and the index of the events before."""
+        p = self.probe
+        since = len(p.events)
+        changed = time.time()
+        place(*things)
+        self.assertIsNotNone(p.event(since, "STATE", wait + SEEN_FREE + 6.0, state="MOWING"), "it did not go on")
+        took = time.time() - changed
+        self.assertGreater(took, wait)
+        return took, since
+
     def test_01_mowing_on_the_lawn(self):
         p = self.probe
         self.assertTrue(p.wait(lambda: p.status is not None and p.status.datum_state != MapStatus.DATUM_UNKNOWN, 30))
@@ -193,33 +225,18 @@ class TestObstacleStop(unittest.TestCase):
 
     def test_02_an_object_ahead_stops_it_until_its_place_is_seen_free(self):
         p = self.probe
-        start = p.straight_run(4.5)
-        self.assertIsNotNone(start, "no straight run")
-        x, y = point(start, FRONT + 0.1 + 1.6)
-        since, index = len(p.events), len(p.track)
-        place(thing("OBJECT", "ball", x, y, 0.1, 0.2))
-        self.paused_for(since, "OBJECT")
+        x, y, stood, since = self.stop_at_ball()
         self.assertIsNotNone(p.event(since, "BLADES", 5, enabled=False), "the blade kept running")
-        time.sleep(1.0)
-        still, poses = p.standing()
-        self.assertTrue(still, poses)
-        left = gap(poses[1], x, y, 0.1)
+        left = gap(stood, x, y, BALL_RADIUS)
         self.assertGreater(left, 0.25, f"stopped {left:.2f} m before the ball")
         self.assertLess(left, 0.8 + 0.05)
-        # It stays while the ball lies there.
-        time.sleep(12.0)
+        # It stays while the ball lies there, longer than the wait for a free place.
+        time.sleep(FREE_WAIT + 2.0)
         self.assertEqual(p.robot.current_state, "PAUSED")
         self.assertIsNone(p.event(since, "STATE", 0.1, state="MOWING"))
-        wait = NEAR_WAIT if left < NEAR_AHEAD else FREE_WAIT
-        removed = time.time()
-        since = len(p.events)
-        place()
-        on = p.event(since, "STATE", wait + SEEN_FREE + 6.0, state="MOWING")
-        self.assertIsNotNone(on, "it did not go on")
-        took = time.time() - removed
-        self.assertGreater(took, wait, f"went on after {took:.1f} s, {left:.2f} m left")
+        took, since = self.goes_on_after(NEAR_WAIT if left < NEAR_AHEAD else FREE_WAIT)
         self.assertIsNotNone(p.event(since, "BLADES", 60, enabled=True), "the blade did not come back")
-        print(f"object: {left:.2f} m left before the ball, on {took:.1f} s after it went, {len(p.track) - index} poses")
+        print(f"object: {left:.2f} m left before the ball, on {took:.1f} s after it went")
 
     def test_03_a_person_slows_it_stops_it_farther_off_and_lets_it_go_after_walking_away(self):
         p = self.probe
@@ -239,14 +256,8 @@ class TestObstacleStop(unittest.TestCase):
         self.assertTrue(slowed, "no pose in the slow zone")
         self.assertLessEqual(max(slowed), SPEED_SLOW + 0.05, slowed)
         # The person walks away to the side, out of the corridor.
-        since = len(p.events)
-        gone = time.time()
         px, py = point(poses[1], FRONT + 1.5, 3.0)
-        place(thing("PERSON", "person", px, py, 0.25, 1.7))
-        on = p.event(since, "STATE", FREE_WAIT + SEEN_FREE + 6.0, state="MOWING")
-        self.assertIsNotNone(on, "it did not go on")
-        took = time.time() - gone
-        self.assertGreater(took, FREE_WAIT)
+        took, _ = self.goes_on_after(FREE_WAIT, thing("PERSON", "person", px, py, 0.25, 1.7))
         place()
         print(f"person: {left:.2f} m left, slow zone at most {max(slowed):.2f} m/s, on after {took:.1f} s")
 
@@ -272,27 +283,13 @@ class TestObstacleStop(unittest.TestCase):
 
     def test_05_after_a_thing_right_at_the_nose_it_waits_thirty_seconds(self):
         p = self.probe
-        start = p.straight_run(4.5)
-        self.assertIsNotNone(start, "no straight run")
-        x, y = point(start, FRONT + 0.1 + 1.6)
-        since = len(p.events)
-        place(thing("OBJECT", "ball", x, y, 0.1, 0.2))
-        self.paused_for(since, "OBJECT")
-        time.sleep(1.0)
-        still, poses = p.standing()
-        self.assertTrue(still, poses)
+        x, y, stood, _ = self.stop_at_ball()
         # A cat walks in right before the nose, still in view, and goes again with the ball.
-        cx, cy = point(poses[1], FRONT + 0.45 + 0.15, 0.1)
-        place(thing("OBJECT", "ball", x, y, 0.1, 0.2), thing("ANIMAL", "cat", cx, cy, 0.15, 0.3))
+        cx, cy = point(stood, FRONT + 0.45 + 0.15, 0.1)
+        place(ball(x, y), thing("ANIMAL", "cat", cx, cy, 0.15, 0.3))
         self.assertTrue(p.wait(lambda: any(t.kind == "ANIMAL" and t.confirmed and t.ahead < NEAR_AHEAD
                                            for t in p.obstacles.tracks), 5), p.obstacles.tracks)
-        since = len(p.events)
-        gone = time.time()
-        place()
-        on = p.event(since, "STATE", NEAR_WAIT + SEEN_FREE + 6.0, state="MOWING")
-        self.assertIsNotNone(on, "it did not go on")
-        took = time.time() - gone
-        self.assertGreater(took, NEAR_WAIT)
+        took, _ = self.goes_on_after(NEAR_WAIT)
         print(f"near: on after {took:.1f} s")
 
     def test_06_without_sight_nothing_stops_it(self):
@@ -303,8 +300,7 @@ class TestObstacleStop(unittest.TestCase):
         p.flags(obstacles_dark=1)
         self.assertIsNotNone(p.event(since, "OBSTACLE_SIGHT", 6), "no word that the camera sees nothing")
         now = p.truth()
-        x, y = point(now, FRONT + 0.1 + 1.6)
-        place(thing("OBJECT", "ball", x, y, 0.1, 0.2))
+        place(ball(*point(now, FRONT + BALL_RADIUS + BALL_GAP)))
         time.sleep(6.0)
         self.assertIsNone(p.event(since, "STATE", 0.1, state="PAUSED"))
         self.assertGreater(p.speed(), 0.1)

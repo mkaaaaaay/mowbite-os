@@ -50,9 +50,20 @@ XCORE_EMERGENCY, XCORE_DIFF_DRIVE, XCORE_MOWER = 1, 2, 3
 XCORE_DATA, XCORE_CLAIM = 1, 3
 
 
+def follower_param(name):
+    """A parameter of mowbite_follower on the Tron."""
+    return layers.parameters(layers.files("tron"), "mowbite_follower")[name]
+
+
 def follower_max_linear():
     """max_linear (m/s) of mowbite_follower on the Tron: no drive command of a sim goes faster."""
-    return float(layers.parameters(layers.files("tron"), "mowbite_follower")["max_linear"])
+    return float(follower_param("max_linear"))
+
+
+def tron_geometry(name):
+    """A value of the geometry of the Tron (geometry.yaml)."""
+    with open(layers.geometry("tron")) as f:
+        return yaml.safe_load(f)["mowbite_logic"]["ros__parameters"]["geometry"][name]
 
 
 # fake_tron flags of a real Tron: RTK at 10 Hz with 2 mm per fix (measured 15.11. at rest: 1.0 mm east, 1.7 mm north,
@@ -83,22 +94,22 @@ def sim_files(work):
             os.path.join(work, "data"))
 
 
-def without_sunset(data_dir):
-    """Settings of params.set in data_dir with dock_at_sunset 0: a run in the simulation keeps mowing past the real
-    sunset at its datum, which falls into working hours in winter."""
+def without_sunset(data_dir, **settings):
+    """Settings of params.set in data_dir with dock_at_sunset 0 and the given ones: a run in the simulation keeps mowing
+    past the real sunset at its datum, which falls into working hours in winter."""
     os.makedirs(os.path.join(data_dir, "params"), exist_ok=True)
-    write_json(os.path.join(data_dir, "params", "mower_logic.json"), {"dock_at_sunset": 0})
+    write_json(os.path.join(data_dir, "params", "mower_logic.json"), {"dock_at_sunset": 0, **settings})
 
 
-def sim_stack(work, mqtt_port, sunset=False, **arguments):
+def sim_stack(work, mqtt_port, sunset=False, settings=None, **arguments):
     """sim.launch.py with its links and files in work; arguments add to or replace the launch arguments. Without sunset
-    the run ignores the sunset (without_sunset)."""
+    the run ignores the sunset (without_sunset), with settings of params.set besides."""
     state, flags, log, data = sim_files(work)
     values = {"link": os.path.join(work, "mcu"), "gnss_link": os.path.join(work, "gnss"),
               "imu_link": os.path.join(work, "imu"), "state": state, "flags": flags, "log": log, "data_dir": data,
               "mqtt_port": str(mqtt_port), **arguments}
     if not sunset:
-        without_sunset(values["data_dir"])
+        without_sunset(values["data_dir"], **(settings or {}))
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(FindPackageShare("mowbite_sim").find("mowbite_sim"), "launch", "sim.launch.py")),

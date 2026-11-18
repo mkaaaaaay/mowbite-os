@@ -57,6 +57,9 @@ struct StateView {
   bool pose = false;
   double x = 0;
   double y = 0;
+  // pause_reason and pause_kind of robot_state.
+  std::string pause_reason;
+  std::string pause_kind;
 };
 
 struct PartView {
@@ -114,6 +117,8 @@ class Notifier {
   void OnStateEvent(const json& event);
   void Remind(const StateView& state);
   void Standstill(const StateView& state);
+  // How long the mower stands before it is told: sooner in a pause for an obstacle.
+  static double StandstillAfter(const StateView& state);
 
   NotifyRules rules_;
   std::optional<Open> open_;
@@ -123,7 +128,6 @@ class Notifier {
   bool emergency_told_ = false;
   std::optional<double> spinup_at_;
   std::string paused_reason_;  // of the last STATE PAUSED
-  std::string paused_kind_;    // its kind with OBSTACLE
   // Standstill: where and since when the mower stands.
   std::optional<double> still_since_;
   bool still_told_ = false;

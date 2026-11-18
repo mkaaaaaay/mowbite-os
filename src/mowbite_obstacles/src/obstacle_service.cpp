@@ -78,23 +78,21 @@ void ObstacleService::Load(double now) {
 
 void ObstacleService::SetMode(int mode) {
   setting_ = mode;
-  mode_ = static_cast<Mode>(std::clamp(std::min(setting_, mode_max_), 0, static_cast<int>(Mode::kAvoid)));
   if (!PhotosWanted()) images_.clear();
 }
 
 void ObstacleService::SetModeMax(int mode_max) {
-  mode_max_ = std::clamp(mode_max, 0, static_cast<int>(Mode::kAvoid));
-  SetMode(setting_);
+  mode_max_ = mode_max;
+  if (!PhotosWanted()) images_.clear();
 }
 
 void ObstacleService::OnAction(uint32_t track, const std::string& action) {
   const Entry* entry = list_.Get(list_.EntryOf(track));
-  if (mode_ == Mode::kOff || !entry) return;
+  if (mode() == Mode::kOff || !entry) return;
   // An entry keeps the most the mower did about it.
-  const auto& actions = mowbite_api::ObstacleActions();
-  const auto next = std::find(actions.begin(), actions.end(), action);
-  if (next == actions.end() || next <= std::find(actions.begin(), actions.end(), entry->action)) return;
-  if (list_.SetAction(entry->id, action)) dirty_ = true;
+  if (mowbite_api::ObstacleActionRank(action) <= mowbite_api::ObstacleActionRank(entry->action)) return;
+  list_.SetAction(entry->id, action);
+  dirty_ = true;
 }
 
 void ObstacleService::SetPhotos(bool on) {
@@ -110,7 +108,7 @@ void ObstacleService::SetSight(bool ok, const std::string& reason, const std::st
 }
 
 void ObstacleService::OnFrame(const Tracker& tracker, const FrameResult& frame, double now) {
-  if (mode_ == Mode::kOff) return;
+  if (mode() == Mode::kOff) return;
   bool added = false;
   for (const uint32_t id : frame.confirmed) {
     const Track* track = tracker.TrackOf(id);
@@ -226,7 +224,7 @@ void ObstacleService::Tick(double now) {
   }
   if (!(sight_ == told_) && now - sight_since_ >= config_.sight_settle) {
     told_ = sight_;
-    if (mode_ != Mode::kOff) {
+    if (mode() != Mode::kOff) {
       Json details = {{"ok", sight_.ok}};
       if (!sight_.ok) {
         details["reason"] = sight_.reason;
@@ -274,8 +272,9 @@ Outcome ObstacleService::List(const Json& params) const {
     since = it->get<double>();
   }
   const ListLimits& limits = list_.limits();
-  Json result = {{"mode", mowbite_api::ObstacleModes().at(static_cast<size_t>(mode_))},
-                 {"mode_max", mowbite_api::ObstacleModes().at(static_cast<size_t>(mode_max_))},
+  const int mode_max = mowbite_api::EffectiveObstacleMode(mowbite_api::kObstacleModeBuilt, mode_max_);
+  Json result = {{"mode", mowbite_api::ObstacleModes().at(static_cast<size_t>(mode()))},
+                 {"mode_max", mowbite_api::ObstacleModes().at(static_cast<size_t>(mode_max))},
                  {"photos", photos_},
                  {"sight", {{"ok", sight_.ok}, {"reason", sight_.ok ? Json() : Json(sight_.reason)}}},
                  {"limit", {{"entries", limits.entries}, {"bytes", limits.bytes}, {"days", limits.days}}},

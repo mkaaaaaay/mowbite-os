@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstdint>
 #include <iterator>
 #include <map>
@@ -1337,6 +1338,20 @@ const std::vector<std::string>& ObstacleKinds() {
 const std::vector<std::string>& ObstacleActions() {
   static const std::vector<std::string> actions = {"seen", "slowed", "would_stop", "stopped", "avoided"};
   return actions;
+}
+
+int EffectiveObstacleMode(int setting, int mode_max) {
+  return std::clamp(std::min({setting, mode_max, kObstacleModeBuilt}), 0, kObstacleModeBuilt);
+}
+
+bool ObstacleLiving(const std::string& kind) {
+  return kind == "PERSON" || kind == "ANIMAL";
+}
+
+int ObstacleActionRank(const std::string& action) {
+  const auto& actions = ObstacleActions();
+  const auto it = std::find(actions.begin(), actions.end(), action);
+  return it == actions.end() ? -1 : static_cast<int>(it - actions.begin());
 }
 
 const std::vector<SettingEntry>& LogicSettings() {

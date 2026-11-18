@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_obstacles/obstacle_list.h"
 
 namespace mowbite_obstacles {
@@ -61,9 +62,9 @@ class ObstacleService {
   void SetMode(int mode);
   void SetModeMax(int mode_max);
   void SetPhotos(bool on);
-  Mode mode() const { return mode_; }
+  Mode mode() const { return static_cast<Mode>(mowbite_api::EffectiveObstacleMode(setting_, mode_max_)); }
   // Whether the sensors are to send images: photos on and the obstacles shown.
-  bool PhotosWanted() const { return photos_ && mode_ != Mode::kOff; }
+  bool PhotosWanted() const { return photos_ && mode() != Mode::kOff; }
   // The sight of the sensors as the tracker has it now.
   void SetSight(bool ok, const std::string& reason, const std::string& source, double now);
 
@@ -100,7 +101,6 @@ class ObstacleService {
   ServiceConfig config_;
   std::function<void(const std::string&)> warn_;
   ObstacleList list_;
-  Mode mode_ = Mode::kOff;
   int setting_ = 0;
   int mode_max_ = 1;
   bool photos_ = false;

@@ -78,8 +78,8 @@ class ObstacleList {
 
   const Entry* Get(uint32_t id) const;
   bool SetPhoto(uint32_t id, const Photo& photo);
-  // What the mower did about it; false when nothing changed.
-  bool SetAction(uint32_t id, const std::string& action);
+  // What the mower did about it.
+  void SetAction(uint32_t id, const std::string& action);
   void DropPhoto(uint32_t id);
   // The entry with this photo name, 0 without one.
   uint32_t ByPhoto(const std::string& name) const;

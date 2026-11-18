@@ -2,6 +2,7 @@
 #include <iterator>
 #include <utility>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_logic/obstacle_part.h"
 
 namespace mowbite_logic {
@@ -32,7 +33,7 @@ void ObstaclePart::SetMode(int setting, int mode_max) {
 }
 
 int ObstaclePart::mode() const {
-  return std::clamp(std::min(setting_, mode_max_), 0, 2);
+  return mowbite_api::EffectiveObstacleMode(setting_, mode_max_);
 }
 
 std::vector<const ObstacleTrackSample*> ObstaclePart::Holders(const ObstacleSample& sample) const {
