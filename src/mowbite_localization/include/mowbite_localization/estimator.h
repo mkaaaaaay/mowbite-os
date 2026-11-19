@@ -23,9 +23,12 @@ struct EstimatorConfig {
   GateConfig gate;
   CourseConfig course;
   AccuracyConfig accuracy;
-  // Gyro samples further apart than max_imu_gap s are not integrated; a wheel speed older than wheel_timeout s is 0.
+  // Gyro samples further apart than max_imu_gap s are not integrated: after such a gap heading and position count as
+  // disturbed. A wheel speed older than wheel_timeout s is 0, and the position gets as much less accurate as the
+  // mower could drive meanwhile at stale_wheel_speed (m/s).
   double max_imu_gap = 0.5;
   double wheel_timeout = 0.5;
+  double stale_wheel_speed = 0.6;
   // Wheels slower than min_speed (m/s, and rad/s for their turn) stand. They count as moving only after
   // motion_confirm_time s above it, so single noise samples of a standing mower do not end a still window.
   double min_speed = 0.01;

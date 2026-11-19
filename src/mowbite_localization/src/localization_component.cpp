@@ -109,6 +109,12 @@ class LocalizationNode : public rclcpp::Node {
         "logic/gps_limits", LatchedQos(1), [this](mowbite_msgs::msg::GpsLimits::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
           estimator_.Call<&Estimator::SetGpsLimits>(msg->max_position_accuracy, msg->gps_timeout);
+          if (!(msg->max_position_accuracy > 0) || !std::isfinite(msg->max_position_accuracy) ||
+              !(msg->gps_timeout > 0) || !std::isfinite(msg->gps_timeout)) {
+            RCLCPP_ERROR(get_logger(), "GPS limits ignored: accuracy %g m, timeout %g s", msg->max_position_accuracy,
+                         msg->gps_timeout);
+            return;
+          }
           RCLCPP_INFO(get_logger(), "GPS limits: accuracy %.3f m, timeout %.1f s", msg->max_position_accuracy,
                       msg->gps_timeout);
         });
@@ -356,7 +362,9 @@ class LocalizationNode : public rclcpp::Node {
 
   void OnParams(const std::string& text) {
     nlohmann::json json = nlohmann::json::parse(text, nullptr, false);
-    if (!json.is_object() || json.value("node", "") != "/mowbite_geometry" || !json.contains("params")) return;
+    if (!json.is_object() || !json.contains("node") || json["node"] != "/mowbite_geometry" || !json.contains("params")) {
+      return;
+    }
     const nlohmann::json& params = json["params"];
     if (!params.is_object() || !params.contains("antenna_x") || !params.contains("antenna_y") ||
         !params["antenna_x"].is_number() || !params["antenna_y"].is_number()) {
@@ -407,7 +415,12 @@ class LocalizationNode : public rclcpp::Node {
 
   void OnSetPose(const mowbite_msgs::srv::SetPose::Request& req) {
     std::lock_guard<std::mutex> lock(mutex_);
-    estimator_.Call<&Estimator::SetPose>(Pose2{req.pose.position.x, req.pose.position.y, YawOf(req.pose.orientation)});
+    const Pose2 asked{req.pose.position.x, req.pose.position.y, YawOf(req.pose.orientation)};
+    if (!std::isfinite(asked.x) || !std::isfinite(asked.y) || !std::isfinite(asked.heading)) {
+      RCLCPP_ERROR(get_logger(), "Pose not set: a value is no number");
+      return;
+    }
+    estimator_.Call<&Estimator::SetPose>(asked);
     const Pose2 pose = estimator_.View().pose();
     RCLCPP_INFO(get_logger(), "Pose set to %.3f, %.3f, heading %.3f", pose.x, pose.y, pose.heading);
     Publish(MonotonicSeconds());

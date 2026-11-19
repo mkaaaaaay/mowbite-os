@@ -9,6 +9,9 @@ namespace mowbite_localization {
 
 namespace {
 
+// m driven since the last fix below which a new lever moves base_link behind that fix.
+constexpr double kPlaceStill = 0.01;
+
 // The lever turned by a heading: where the antenna is from base_link in the map frame.
 Eigen::Vector2d Turned(const Eigen::Vector2d& lever, double heading) {
   return AntennaPosition(State(0.0, 0.0, heading), lever);
@@ -43,7 +46,14 @@ bool Estimator::AddImu(double t, double rate) {
   }
   const double dt = t - *last_imu_;
   last_imu_ = t;
-  if (dt > config_.max_imu_gap) return false;
+  if (dt > config_.max_imu_gap) {
+    // What the mower turned and drove meanwhile is not known.
+    if (bias_.calibrated()) {
+      LoosenHeading();
+      accuracy_.Forget();
+    }
+    return false;
+  }
   const bool fresh = wheel_time_ && t - *wheel_time_ <= config_.wheel_timeout;
   const double speed = fresh ? wheel_speed_ : 0.0;
   const double wheel_turn = fresh ? wheel_turn_ : 0.0;
@@ -66,7 +76,7 @@ bool Estimator::AddImu(double t, double rate) {
   const double slip = fresh ? 0.5 * wheel_distance_ * std::abs(wheel_turn - turn_rate_) * dt : 0.0;
   filter_.Predict(motion_.distance, motion_.turn, motion_.gyro_time, slip);
   accuracy_.OnDistance(motion_.distance);
-  accuracy_.OnSlip(slip);
+  accuracy_.OnSlip(fresh ? slip : config_.stale_wheel_speed * dt);
   Remember(t);
   return true;
 }
@@ -246,6 +256,8 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
 }
 
 void Estimator::SetGpsLimits(double max_accuracy, double timeout) {
+  // Limits that are no positive number would switch the checks off: the ones before stay.
+  if (!(max_accuracy > 0) || !std::isfinite(max_accuracy) || !(timeout > 0) || !std::isfinite(timeout)) return;
   config_.gate.max_accuracy = max_accuracy;
   gate_.SetMaxAccuracy(max_accuracy);
   accuracy_.SetTimeout(timeout);
@@ -253,9 +265,11 @@ void Estimator::SetGpsLimits(double max_accuracy, double timeout) {
 
 void Estimator::SetAntennaOffset(double x, double y, double t) {
   if (!std::isfinite(x) || !std::isfinite(y)) return;
+  if (geometry_known_ && lever_ == Eigen::Vector2d(x, y)) return;
   lever_ = Eigen::Vector2d(x, y);
   geometry_known_ = true;
-  PlaceBehindLastFix(t);
+  // Behind the last fix only while the mower has not driven since: else the way since would be lost.
+  if (accuracy_.distance() < kPlaceStill) PlaceBehindLastFix(t);
 }
 
 void Estimator::PlaceBehindLastFix(double t) {
@@ -281,6 +295,7 @@ Eigen::Vector2d Estimator::Lever(const Tilt& tilt) const {
 }
 
 void Estimator::SetPose(const Pose2& pose) {
+  if (!std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.heading)) return;
   const Covariance covariance =
       Eigen::Vector3d(config_.pose_variance, config_.pose_variance, config_.pose_heading_variance).asDiagonal();
   filter_.Reset(State(pose.x, pose.y, pose.heading), covariance);
@@ -339,7 +354,11 @@ bool Estimator::RecentGps(double t) const {
 }
 
 double Estimator::PositionAccuracy(double t) const {
-  return gate_.initialized() ? accuracy_.Value(t) : kNoAccuracy;
+  if (!gate_.initialized()) return kNoAccuracy;
+  // Never better than the spread of the estimate itself, with that of the heading over the lever of the antenna.
+  const Covariance& p = filter_.covariance();
+  const double spread = std::sqrt(std::max(p(0, 0), p(1, 1))) + std::sqrt(std::max(0.0, p(2, 2))) * lever_.norm();
+  return std::max(accuracy_.Value(t), spread);
 }
 
 double Estimator::FixAge(double t) const {

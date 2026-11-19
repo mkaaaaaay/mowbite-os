@@ -40,6 +40,8 @@ class FixAccuracy {
   void Forget() { known_ = false; }
   void SetTimeout(double timeout) { config_.timeout = timeout; }
   double timeout() const { return config_.timeout; }
+  // m driven since the last fix.
+  double distance() const { return distance_; }
 
   double Value(double t) const {
     if (!known_ || t - fix_time_ >= config_.timeout) return kNoAccuracy;

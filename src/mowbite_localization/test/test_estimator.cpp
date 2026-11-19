@@ -1208,3 +1208,55 @@ TEST(L7Accuracy, TheAgeOfTheLastFixTheEstimateTook) {
   w.Run(0.2, 0.0, 0.0);
   EXPECT_NEAR(w.est.FixAge(w.t), 0.0, 1e-9);
 }
+
+// A gap of the gyro: heading and position count as disturbed until the next fix and course.
+TEST(Estimator, AGapOfTheGyroDisturbsHeadingAndPosition) {
+  World w;
+  w.Aligned();
+  ASSERT_LT(w.est.PositionAccuracy(w.t), 0.1);
+  w.t += 1.0;
+  w.est.AddImu(w.t, 0.0);
+  EXPECT_EQ(w.est.PositionAccuracy(w.t), kNoAccuracy);
+  EXPECT_GE(w.est.covariance()(2, 2), 0.9 * std::pow(20.0 * kDeg, 2));
+}
+
+// Wheels that stopped reporting: the mower may drive on, so the position gets less accurate as if it did.
+TEST(Estimator, StaleWheelsMakeThePositionLessAccurate) {
+  World w;
+  w.Aligned();
+  w.gnss = false;
+  const double before = w.est.PositionAccuracy(w.t);
+  for (int i = 0; i < 100; ++i) {
+    w.t += kStep;
+    w.est.AddImu(w.t, 0.0);
+  }
+  EXPECT_GE(w.est.PositionAccuracy(w.t), before + 0.6 * 1.5);
+}
+
+// The same lever again moves nothing; a new one after a drive without a fix only takes the lever.
+TEST(Estimator, TheSameLeverAgainKeepsThePose) {
+  World w;
+  w.Aligned();
+  w.gnss = false;
+  w.Run(2.0, 0.3, 0.0);
+  const Pose2 driven = w.est.pose();
+  w.Geometry();
+  EXPECT_NEAR(w.est.pose().x, driven.x, 1e-9);
+  EXPECT_NEAR(w.est.pose().y, driven.y, 1e-9);
+  w.est.SetAntennaOffset(0.2, 0.0, w.t);
+  EXPECT_NEAR(w.est.pose().x, driven.x, 1e-9);
+}
+
+TEST(Estimator, APoseOrLimitsThatAreNoNumberChangeNothing) {
+  World w;
+  w.Aligned();
+  const Pose2 before = w.est.pose();
+  w.est.SetPose(Pose2{std::nan(""), 1.0, 0.0});
+  EXPECT_DOUBLE_EQ(w.est.pose().x, before.x);
+  EXPECT_TRUE(std::isfinite(w.est.pose().x));
+  // A timeout that is no number would keep the position forever.
+  w.est.SetGpsLimits(std::nan(""), std::numeric_limits<double>::infinity());
+  w.gnss = false;
+  w.Run(11.0, 0.0, 0.0);
+  EXPECT_EQ(w.est.PositionAccuracy(w.t), kNoAccuracy);
+}
