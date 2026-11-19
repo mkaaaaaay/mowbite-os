@@ -223,7 +223,7 @@ class LightNode : public rclcpp::Node {
       outcome = service_.Call(request.method, params, MonotonicSeconds());
     } else if (const auto& methods = LightService::Methods();
                std::find(methods.begin(), methods.end(), request.method) != methods.end()) {
-      outcome = RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON"};
+      outcome = RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()};
     }
     // A method of another node, which answers it.
     if (!outcome) return;

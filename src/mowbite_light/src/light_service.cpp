@@ -13,7 +13,7 @@ constexpr int kProfileSchema = 1;
 constexpr size_t kProfileMaxBytes = size_t{64} * 1024;
 
 RpcOutcome Invalid(std::string message) {
-  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message)};
+  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json()};
 }
 
 }  // namespace
@@ -135,7 +135,7 @@ RpcOutcome LightService::GetProfile() const {
                  {"max_preview", kMaxPreview}}},
                {"leds", config_.leds}},
           0,
-          ""};
+          "", Json()};
 }
 
 RpcOutcome LightService::SetProfile(const Json& params) {
@@ -147,11 +147,11 @@ RpcOutcome LightService::SetProfile(const Json& params) {
   if (!config_.profile_path.empty()) {
     const Json file = {{"schema", kProfileSchema}, {"profile", ToJson(*profile)}};
     if (!mowbite_hold::WriteFileAtomic(config_.profile_path, file.dump(2) + "\n", &error)) {
-      return {false, Json(), mowbite_bridge::kInternalError, error};
+      return {false, Json(), mowbite_bridge::kInternalError, error, Json()};
     }
   }
   profile_ = *profile;
-  return {true, Json{{"profile", ToJson(profile_)}}, 0, ""};
+  return {true, Json{{"profile", ToJson(profile_)}}, 0, "", Json()};
 }
 
 RpcOutcome LightService::Preview(const Json& params, double now) {
@@ -168,7 +168,7 @@ RpcOutcome LightService::Preview(const Json& params, double now) {
   preview_ = *effect;
   preview_until_ = now + duration.get<double>();
   ++previews_;
-  return {true, Json{{"duration", duration.get<double>()}, {"emergency", InEmergency()}}, 0, ""};
+  return {true, Json{{"duration", duration.get<double>()}, {"emergency", InEmergency()}}, 0, "", Json()};
 }
 
 RpcOutcome LightService::RefuseInHold() const {
@@ -180,11 +180,11 @@ RpcOutcome LightService::Reset() {
   if (hold_until_ > 0) return RefuseInHold();
   std::string error;
   if (!config_.profile_path.empty() && !mowbite_hold::RemoveFileSynced(config_.profile_path, &error)) {
-    return {false, Json(), mowbite_bridge::kInternalError, error};
+    return {false, Json(), mowbite_bridge::kInternalError, error, Json()};
   }
   profile_ = DefaultProfile();
   preview_.reset();
-  return {true, Json{{"profile", ToJson(profile_)}}, 0, ""};
+  return {true, Json{{"profile", ToJson(profile_)}}, 0, "", Json()};
 }
 
 }  // namespace mowbite_light
