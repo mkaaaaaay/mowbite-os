@@ -86,7 +86,8 @@ def run():
                                        on_connect=lambda: host and host.connected(),
                                        will=(service.HOST_STATUS, service.OFFLINE))
     service_os = carrier.of(where)
-    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), origin.Inbox(where), rpc,
+    inbox = origin.Inbox(where, alive=lambda: notify("WATCHDOG=1"))
+    tool = updater.Updater(where, service_os, installer.health_of(where, service_os, check), inbox, rpc,
                            net=net.of(where))
     check.api_of_running = tool.running_api
     # A switch of the host ends this process; systemd starts the new one.

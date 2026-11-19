@@ -35,10 +35,13 @@ def _component(name):
 
 
 class Inbox:
-    def __init__(self, paths, folder=None):
+    # alive: called before each bundle read itself, for the watchdog of systemd (a read can take a while).
+    def __init__(self, paths, folder=None, alive=lambda: None):
         self.paths = paths
         self.folder = folder or paths.inbox
-        # Bundles read without an index: (name, size, mtime_ns) -> candidate or None when it is no good bundle.
+        self.alive = alive
+        # Bundles read without an index: (name, size, mtime_ns, size and mtime_ns of the .sig or None) -> candidate or
+        # None when it is no good bundle.
         self._read = {}
 
     def _stage(self, name):
@@ -77,9 +80,15 @@ class Inbox:
     def _read_bundle(self, name):
         path = os.path.join(self.folder, name)
         info = os.lstat(path)
-        key = (name, info.st_size, info.st_mtime_ns)
+        try:
+            sig = os.lstat(path + ".sig")
+            signed = (sig.st_size, sig.st_mtime_ns)
+        except OSError:
+            signed = None
+        key = (name, info.st_size, info.st_mtime_ns, signed)
         if key in self._read:
             return self._read[key]
+        self.alive()
         component = _component(name)
         stage = self._stage(name)
         try:
