@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/warn_log.h"
 
 using namespace mowbite_bridge;
@@ -74,4 +75,14 @@ TEST(WarnLog, BytesThatAreNotUtf8AreReplacedAndLongLinesCut) {
   EXPECT_EQ(all[0]["msg"], "caster Gr\xef\xbf\xbd" "fin");
   EXPECT_EQ(all[1]["msg"], std::string(1999, 'x') + "\xef\xbf\xbd...");
   EXPECT_EQ(all[2]["msg"], std::string(2000, 'y'));
+}
+
+TEST(WarnLog, TheAnswerKeepsTheNewestLinesThatFit) {
+  WarnLog log(1000);
+  // Long lines of quotes grow by their escapes.
+  for (int i = 0; i < 1000; ++i) log.Add(i, kLogWarn, "n", std::string(1900, '"') + std::to_string(i));
+  const Json lines = log.Recent(nullptr);
+  EXPECT_LT(lines.size(), 1000u);
+  EXPECT_LE(lines.dump().size(), static_cast<std::size_t>(mowbite_api::kHistoryMaxAnswerBytes));
+  EXPECT_NE(lines.back()["msg"].get<std::string>().find("999"), std::string::npos);
 }

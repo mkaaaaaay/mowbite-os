@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 
+#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/text.h"
 
 namespace mowbite_bridge {
@@ -56,6 +57,14 @@ Json WarnLog::Recent(const Json& params) const {
     out.push_back(Json{{"t", line.t}, {"level", LevelName(line.level)}, {"node", line.node}, {"msg", line.message}});
   }
   if (out.size() > limit) out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(out.size() - limit));
+  // The newest lines that fit into an answer of kHistoryMaxAnswerBytes.
+  std::size_t bytes = 2;
+  std::size_t keep = 0;
+  for (auto it = out.rbegin(); it != out.rend(); ++it, ++keep) {
+    bytes += it->dump().size() + 1;
+    if (bytes > static_cast<std::size_t>(mowbite_api::kHistoryMaxAnswerBytes)) break;
+  }
+  out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(out.size() - keep));
   return out;
 }
 

@@ -21,6 +21,9 @@ constexpr int kHold = -32004;
 
 // Requests nested deeper than this are refused before they are parsed.
 constexpr std::size_t kMaxRequestDepth = 64;
+// A result larger than this goes out as kInternalError instead, so that the client gets an answer; the histories
+// keep their answers below it (kHistoryMaxAnswerBytes).
+constexpr std::size_t kMaxReplyBytes = 1000000;
 
 struct RpcCall {
   std::string method;

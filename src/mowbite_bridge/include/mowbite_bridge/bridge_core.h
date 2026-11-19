@@ -192,6 +192,8 @@ class BridgeCore {
   std::string RefuseRequest(const Json& id, const std::string& reason, const std::string& message, Json fields = {});
   void Send(const std::string& topic, const std::string& payload, bool retain);
   void SendReply(const Reply& to, const std::string& payload);
+  // A result reply, or kInternalError for one larger than kMaxReplyBytes.
+  void SendResult(const Reply& to, const Json& id, const std::string& payload);
   void Keep(const std::string& topic, const std::string& payload);
   void Event(const Json& event);
   void Log(int level, std::string text);

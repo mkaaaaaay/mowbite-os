@@ -253,6 +253,11 @@ TEST_F(Core, AddedLocalMethodsAndTheirErrors) {
   EXPECT_EQ(Call(core_, "x.params")["error"].dump(), R"({"code":-32602,"message":"date must be a text"})");
   EXPECT_EQ(Call(core_, "x.fail")["error"].dump(), R"({"code":-32600,"message":"busy"})");
   EXPECT_EQ(Call(core_, "x.broken")["error"]["code"], kInternalError);
+  // An answer too large for the broker goes out as an error the client gets.
+  core_.AddLocalMethod("x.large", [](const Json&) { return Json(std::string(kMaxReplyBytes, 'x')); });
+  const Json large = Call(core_, "x.large");
+  EXPECT_EQ(large["error"]["code"], kInternalError);
+  EXPECT_NE(large["error"]["message"].get<std::string>().find("bytes, at most"), std::string::npos);
   const Json methods = Call(core_, "rpc.methods")["result"];
   EXPECT_NE(std::find(methods.begin(), methods.end(), "events.history.list"), methods.end());
 }

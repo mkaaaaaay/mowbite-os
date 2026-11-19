@@ -229,7 +229,7 @@ void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
   switch (methods_.Find(call.method)) {
     case Route::kLocal:
       try {
-        SendReply(to, ResultReply(call.id, local_.at(call.method)(call.params)));
+        SendResult(to, call.id, ResultReply(call.id, local_.at(call.method)(call.params)));
       } catch (const RpcFailure& e) {
         SendReply(to, ErrorReply(call.id, e.code, e.what()));
       } catch (const std::invalid_argument& e) {
@@ -421,7 +421,7 @@ void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
   Guard("rpc response", [&] {
     Json client_id;
     Reply to;
-    if (Close(id, &client_id, &to)) SendReply(to, ResultReplyFromText(client_id, result));
+    if (Close(id, &client_id, &to)) SendResult(to, client_id, ResultReplyFromText(client_id, result));
   });
 }
 
@@ -460,6 +460,16 @@ void BridgeCore::Send(const std::string& topic, const std::string& payload, bool
 
 void BridgeCore::SendReply(const Reply& to, const std::string& payload) {
   if (connected_) out_.mqtt.push_back({to.topic, payload, false, 0, to.correlation});
+}
+
+void BridgeCore::SendResult(const Reply& to, const Json& id, const std::string& payload) {
+  if (payload.size() <= kMaxReplyBytes) {
+    SendReply(to, payload);
+    return;
+  }
+  SendReply(to, ErrorReply(id, kInternalError,
+                           "The answer has " + std::to_string(payload.size()) + " bytes, at most " +
+                               std::to_string(kMaxReplyBytes) + " go out"));
 }
 
 void BridgeCore::Keep(const std::string& topic, const std::string& payload) {
