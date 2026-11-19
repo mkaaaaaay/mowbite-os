@@ -512,10 +512,10 @@ TEST(LogicCommands, ContinueKeepsAPauseWithoutSafetyMeasurementOrMap) {
   EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   core = Paused();
-  core.OnMowMap({{"lawn", "Lawn", true}}, Reason("MAP_CHANGED", "The map changed"));
+  core.OnMowMap({{"lawn", "Lawn", true}}, MapReason(MapDatum::kMismatch, "The map does not fit"));
   Settle(core);
   outcome = Rpc(core, "mowing.continue");
-  EXPECT_EQ(outcome.why.code, "MAP_CHANGED");
+  EXPECT_EQ(outcome.why.code, "MAP_MISMATCH");
   EXPECT_EQ(core.RobotState().state, "PAUSED");
 }
 

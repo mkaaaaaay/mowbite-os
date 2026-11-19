@@ -1,6 +1,7 @@
 #ifndef MOWBITE_LOGIC_DOCKING_PART_H
 #define MOWBITE_LOGIC_DOCKING_PART_H
 
+#include <algorithm>
 #include <optional>
 #include <string>
 
@@ -13,7 +14,7 @@ namespace mowbite_logic {
 // calls are those of LogicCore with the same names.
 class DockingPart {
  public:
-  DockingPart(const ChargeConfig& charge, const MarkerConfig& marker) : charge_watch_(charge), marker_(marker) {}
+  DockingPart(const ChargeConfig& charge, const MarkerConfig& marker) : marker_(marker), charge_watch_(charge) {}
 
   void SetTurningRadius(double radius);
   Reason ApproachProblem(CoreFacts core) const;
@@ -42,6 +43,9 @@ class DockingPart {
   void WatchMarkerNear(CoreFacts core);
   void OnDockMarker(CoreFacts core, const DockMarkerSample& sample);
   void OnDockPose(CoreAccess core, const DockPoseSample& pose);
+  void AgeDockPose(double now_s) {
+    marker_clock_ = std::max(marker_clock_, now_s);
+  }
   // runs 1 to 10: with more than one a series (runs above 1): after each DOCKED out to the start of the line in the
   // station frame and docking again, every run ends with DOCKING_TEST_RUN, the first failure ends the series.
   Reason StartDockingTest(CoreAccess core, const Reason& node_problem, int runs);

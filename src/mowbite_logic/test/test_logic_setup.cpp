@@ -166,7 +166,7 @@ TEST(LogicSetup, TheBladeTurnsAsTheStepAsksWithoutASafetyMeasurement) {
     HardwareSnapshot hw = Healthy();
     hw.emergency = cut == 0;
     hw.emergency_reason = cut == 0 ? 1u << 2 : 0;
-    hw.telemetry_ok = cut != 0;
+    hw.telemetry_ok = cut == 0;
     core.OnHardwareStatus(hw);
     EXPECT_FALSE(core.BladeWanted());
     core.OnHardwareStatus(Healthy());

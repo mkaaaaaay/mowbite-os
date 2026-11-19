@@ -544,8 +544,9 @@ TEST(Motion, WheelsThatStoodBeforeTheTriggerMeasureNothing) {
   mower.Run(0.5);
   mower.hardware.stop = false;
   mower.stalled = false;
-  const json end = mower.RunToEnd(20);
-  ASSERT_FALSE(end.is_null());
+  // It ends at once, before the input is gone.
+  ASSERT_FALSE(mower.ends.empty());
+  const json end = mower.ends.back();
   EXPECT_EQ(end["reason"], "NO_START") << end.dump();
   EXPECT_EQ(mower.StepState("stop_moving")["state"], "failed");
 }
@@ -1049,8 +1050,8 @@ TEST(Blade, ABladeThatStoodBeforeTheTriggerMeasuresNothing) {
   mower.Latch(Bit("STOP"));
   mower.Run(0.5);
   mower.hardware.stop = false;
-  const json end = mower.RunToEnd(20);
-  ASSERT_FALSE(end.is_null());
+  ASSERT_FALSE(mower.ends.empty());
+  const json end = mower.ends.back();
   EXPECT_EQ(end["reason"], "NO_START") << end.dump();
 }
 
