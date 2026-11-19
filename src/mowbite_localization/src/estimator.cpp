@@ -11,6 +11,8 @@ namespace {
 
 // m driven since the last fix below which a new lever moves base_link behind that fix.
 constexpr double kPlaceStill = 0.01;
+// s of moments kept behind gnss_latency: half the longest window of a course (1.5 s in tron_gnss) and a margin.
+constexpr double kCourseWindowKeep = 1.5;
 
 // The lever turned by a heading: where the antenna is from base_link in the map frame.
 Eigen::Vector2d Turned(const Eigen::Vector2d& lever, double heading) {
@@ -106,6 +108,9 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   const Eigen::Vector2d antenna(fix.x, fix.y);
   const double then_time = t - config_.gnss_latency;
   const Moment then = MomentAt(then_time);
+  const auto course_then = [&] {
+    return fix.motion_window > 0.0 ? CourseMomentAt(then_time - 0.5 * fix.motion_window) : MomentAt(then_time);
+  };
   FixResult result = gate_.Classify(t, antenna, AntennaPosition(then.state, Lever(then.tilt)));
   // A new warmup starts the track again; an outlier is no part of it.
   if (result == FixResult::kRestarted || result == FixResult::kOutlierReset) track_.Clear();
@@ -117,17 +122,17 @@ FixResult Estimator::AddFix(const GnssFix& fix, double t) {
   switch (result) {
     case FixResult::kRestarted:
     case FixResult::kWarmup:
-      Course(fix, MomentAt(then_time), t);
+      Course(fix, course_then(), t);
       break;
     case FixResult::kInitialized:
-      Course(fix, MomentAt(then_time), t);
+      Course(fix, course_then(), t);
       SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, turn(),
                  gate_.reason() == WarmupReason::kFirst ? std::nullopt : std::optional(gate_.reason()));
       break;
     case FixResult::kFused: {
       // Without a heading, and when the course just set it, the dead reckoning since the last fix went the wrong
       // way: the fix sets the position.
-      const bool turned = Course(fix, MomentAt(then_time), t);
+      const bool turned = Course(fix, course_then(), t);
       if (turned || !heading_valid_) {
         contradictions_ = 0;
         SetOntoFix(antenna, fix.accuracy, MomentAt(then_time), t, turn(), std::nullopt);
@@ -208,6 +213,9 @@ void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Mome
 bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
   // Without a velocity, or too slow, a fix says nothing about the heading; an inconsistent course breaks the run.
   if (!fix.motion_valid) return false;
+  // A course over a window shares its positions with the courses whose windows overlap it: one per window counts.
+  const bool windowed = fix.motion_window > 0.0;
+  if (windowed && t - fix.motion_window < course_window_end_) return false;
   const Eigen::Vector2d velocity(fix.motion_x, fix.motion_y);
   const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, Lever(then.tilt), config_.course);
   if (course.kind == CourseKind::kInconsistent) course_.Clear();
@@ -222,6 +230,7 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
     case TrackCheck::kAgrees:
       break;
   }
+  if (windowed) course_window_end_ = t;
   const std::optional<double> heading = course.heading;
   const double variance = CourseVariance(velocity.norm(), config_.course);
   const double heading_variance = filter_.covariance()(2, 2);
@@ -379,9 +388,13 @@ Estimator::Moment Estimator::MomentAt(double t) const {
   return *history_.At(t);
 }
 
+Estimator::Moment Estimator::CourseMomentAt(double t) const {
+  if (history_.empty()) return Moment{t, filter_.state(), gyro_heading_, TiltAt(t)};
+  return *history_.At(t);
+}
+
 void Estimator::Remember(double t) {
-  if (config_.gnss_latency <= 0.0) return;
-  history_.Add(Moment{t, filter_.state(), gyro_heading_, TiltAt(t)}, t - config_.gnss_latency - 0.5);
+  history_.Add(Moment{t, filter_.state(), gyro_heading_, TiltAt(t)}, t - config_.gnss_latency - kCourseWindowKeep);
 }
 
 void Estimator::ShiftHistory(const State& before) {

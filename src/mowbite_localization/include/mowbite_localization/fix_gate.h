@@ -20,6 +20,8 @@ struct GnssFix {
   bool motion_valid = false;
   double motion_x = 0.0;
   double motion_y = 0.0;
+  // s the motion is the mean over, up to this fix (a chord of earlier positions); 0 for a momentary one.
+  double motion_window = 0.0;
 };
 
 enum class FixResult {

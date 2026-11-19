@@ -25,7 +25,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(EstimatorConfig, gyro, noise, ga
                                                 steady_turn_rate, pose_variance, pose_heading_variance,
                                                 set_heading_variance, disturbed_heading_sigma, antenna_height,
                                                 stale_wheel_speed)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(GnssFix, solution, accuracy, x, y, motion_valid, motion_x, motion_y)
+// With defaults: journals before motion_window have none.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(GnssFix, solution, accuracy, x, y, motion_valid, motion_x, motion_y,
+                                                motion_window)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Pose2, x, y, heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Jump, reason, from_x, from_y, to_x, to_y)
 
@@ -35,7 +37,7 @@ static_assert(sizeof(GateConfig) == 40);
 static_assert(sizeof(CourseConfig) == 80);
 static_assert(sizeof(AccuracyConfig) == 24);
 static_assert(sizeof(EstimatorConfig) == 344);
-static_assert(sizeof(GnssFix) == 56);
+static_assert(sizeof(GnssFix) == 64);
 static_assert(sizeof(Pose2) == 24);
 static_assert(sizeof(Jump) == 40);
 

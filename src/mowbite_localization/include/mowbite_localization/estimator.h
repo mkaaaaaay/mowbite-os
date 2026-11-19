@@ -3,6 +3,7 @@
 
 #include <Eigen/Core>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -188,8 +189,10 @@ class Estimator {
   // The fix lies further from the estimate than its covariance allows and than max_position_accuracy.
   bool Contradicts(const Eigen::Vector2d& antenna, double accuracy, const Moment& then) const;
   void Fuse(const Eigen::Vector2d& antenna, double accuracy, const Moment& then, double t);
-  // True when the course of a fix at t set the heading.
+  // True when the course of a fix at t set the heading; then is the moment the course belongs to.
   bool Course(const GnssFix& fix, const Moment& then, double t);
+  // The moment of a course over a window: its middle, from the history whatever gnss_latency is.
+  Moment CourseMomentAt(double t) const;
 
   EstimatorConfig config_;
   GyroBias bias_;
@@ -198,6 +201,8 @@ class Estimator {
   CourseAlignment course_;
   CourseTrack track_;
   int course_rejections_ = 0;
+  // The fix time of the last course over a window that counted: windows that overlap it share its positions.
+  double course_window_end_ = -std::numeric_limits<double>::infinity();
   FixAccuracy accuracy_;
   Eigen::Vector2d lever_ = Eigen::Vector2d::Zero();
   Tilt tilt_;

@@ -348,6 +348,7 @@ class LocalizationNode : public rclcpp::Node {
     fix.motion_valid = msg.velocity_valid;
     fix.motion_x = msg.velocity_east;
     fix.motion_y = msg.velocity_north;
+    fix.motion_window = msg.velocity_window;
     const FixResult result = estimator_.Call<&Estimator::AddFix>(fix, MonotonicSeconds());
     const GateConfig gate;
     if (result == FixResult::kRestarted && had_gps_) {
