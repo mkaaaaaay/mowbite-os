@@ -111,9 +111,57 @@ TEST_F(Fixture, RetryDoublesUpToTheLimitAndFramesResetIt) {
     now += wait;
   }
   EXPECT_EQ(client.last_error(), "connect: Connection refused");
+  // Frames after a stable minute reset it.
   Stream(now);
-  client.OnClosed(now + 1, "closed by the caster");
-  EXPECT_NEAR(client.retry_in(now + 1), 5.0, 1e-9);
+  Bytes(MakeFrame(1005, 19), now + 60);
+  client.OnClosed(now + 61, "closed by the caster");
+  EXPECT_NEAR(client.retry_in(now + 61), 5.0, 1e-9);
+}
+
+TEST_F(Fixture, ACasterThatEndsEachStreamSoonKeepsTheDelayGrowing) {
+  client.SetConfig(Config(), 0);
+  double now = 0;
+  for (double wait : {5.0, 10.0, 20.0, 40.0}) {
+    Stream(now);
+    Bytes(MakeFrame(1005, 19), now + 2);
+    client.OnClosed(now + 3, "closed by the caster");
+    EXPECT_NEAR(client.retry_in(now + 3), wait, 1e-9);
+    now += 3 + wait;
+  }
+}
+
+TEST_F(Fixture, BytesWithoutAValidFrameClose) {
+  client.SetConfig(Config(), 0);
+  Stream(0);
+  // Bytes go on, but none makes a frame.
+  for (double t = 1; t <= 31; t += 1) Bytes(std::string(20, 'x'), t);
+  EXPECT_FALSE(client.CloseReason(30));
+  EXPECT_EQ(*client.CloseReason(31), "no valid RTCM frame for 30 s");
+  // Also when none came at all since the answer.
+  client.OnClosed(31, *client.CloseReason(31));
+  const double now = 31 + client.retry_in(31);
+  client.BeginAttempt(now);
+  Bytes("ICY 200 OK\r\n", now);
+  for (double t = now + 1; t <= now + 31; t += 1) Bytes(std::string(20, 'x'), t);
+  EXPECT_EQ(*client.CloseReason(now + 31), "no valid RTCM frame for 30 s");
+}
+
+TEST_F(Fixture, TheAnswerIsAwaitedFromTheRequestOn) {
+  client.SetConfig(Config(), 0);
+  client.BeginAttempt(0);
+  // Lookup and connect took 12 s.
+  client.OnRequestSent(12);
+  EXPECT_FALSE(client.CloseReason(20));
+  EXPECT_EQ(*client.CloseReason(27.1), "no answer for 15 s");
+}
+
+TEST_F(Fixture, ForbiddenCountsAsRefused) {
+  client.SetConfig(Config(), 0);
+  client.BeginAttempt(0);
+  Bytes("HTTP/1.1 403 Forbidden\r\n\r\n", 0.2);
+  EXPECT_EQ(*client.CloseReason(0.2), "login refused (403)");
+  client.OnClosed(0.2, "");
+  EXPECT_NEAR(client.retry_in(0.2), 300.0, 1e-9);
 }
 
 TEST_F(Fixture, RejectedWaitsLongAndReportsOnce) {

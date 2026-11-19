@@ -8,9 +8,11 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <memory>
 #include <mowbite_bridge/event_builder.h>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/ntrip_status.hpp>
@@ -85,6 +87,48 @@ bool SendAll(int fd, const std::string& data, int timeout_ms, const std::atomic<
 
 std::string SourceText(const CorrectionSource& source) {
   return source.host + ":" + std::to_string(source.port) + "/" + source.mountpoint;
+}
+
+// getaddrinfo has no time limit: it runs in a thread of its own, which frees what it found once nobody waits.
+struct Lookup {
+  std::mutex mutex;
+  std::condition_variable done_cv;
+  bool done = false;
+  bool abandoned = false;
+  int rc = EAI_AGAIN;
+  addrinfo* result = nullptr;
+};
+
+// The addresses of host:port within timeout_s, or rc != 0. The caller frees result.
+std::pair<int, addrinfo*> Resolve(const std::string& host, int port, double timeout_s,
+                                  const std::atomic<bool>& running) {
+  auto lookup = std::make_shared<Lookup>();
+  std::thread([lookup, host, port] {
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* result = nullptr;
+    const int rc = ::getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &result);
+    std::lock_guard<std::mutex> lock(lookup->mutex);
+    if (lookup->abandoned) {
+      if (rc == 0) ::freeaddrinfo(result);
+      return;
+    }
+    lookup->rc = rc;
+    lookup->result = result;
+    lookup->done = true;
+    lookup->done_cv.notify_all();
+  }).detach();
+  std::unique_lock<std::mutex> lock(lookup->mutex);
+  const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(timeout_s);
+  while (!lookup->done && running && std::chrono::steady_clock::now() < until) {
+    lookup->done_cv.wait_for(lock, std::chrono::milliseconds(100));
+  }
+  if (!lookup->done) {
+    lookup->abandoned = true;
+    return {EAI_AGAIN, nullptr};
+  }
+  return {lookup->rc, lookup->result};
 }
 
 }  // namespace
@@ -343,11 +387,7 @@ class NtripNode : public rclcpp::Node {
       config = *client_.config();
       request = client_.BeginAttempt(MonotonicSeconds());
     }
-    addrinfo hints{};
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
-    addrinfo* result = nullptr;
-    const int rc = ::getaddrinfo(config.host.c_str(), std::to_string(config.port).c_str(), &hints, &result);
+    const auto [rc, result] = Resolve(config.host, config.port, connect_timeout_s_, running_);
     if (rc != 0) {
       Failed(std::string("cannot resolve the host: ") + ::gai_strerror(rc));
       return;
@@ -381,7 +421,12 @@ class NtripNode : public rclcpp::Node {
       Failed(error);
       return;
     }
-    if (!SendAll(fd_, request, 5000, running_)) Close(std::string("sending the request: ") + std::strerror(errno));
+    if (!SendAll(fd_, request, 5000, running_)) {
+      Close(std::string("sending the request: ") + std::strerror(errno));
+      return;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    client_.OnRequestSent(MonotonicSeconds());
   }
 
   // An attempt failed before a socket was open.

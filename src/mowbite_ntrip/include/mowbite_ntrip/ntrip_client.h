@@ -15,9 +15,10 @@
 namespace mowbite_ntrip {
 
 struct ClientTiming {
-  // Wait before the next attempt after a failure, doubled each time up to max_retry; whole frames reset it.
+  // Wait before the next attempt after a failure, doubled each time up to max_retry; frames for stable_s reset it.
   double first_retry_s = 5.0;
   double max_retry_s = 300.0;
+  double stable_s = 60.0;
   // Wait after the caster refused the login: retrying at once gets an account locked.
   double rejected_retry_s = 300.0;
   // No byte from the caster for this long ends the connection (also while waiting for its answer).
@@ -27,6 +28,7 @@ struct ClientTiming {
   // Without a GGA yet the first attempt waits this long for one: a VRS mountpoint sends nothing before it.
   double gga_wait_s = 60.0;
   // No frame for this long after there were some gives the LOST event: max_correction_age, when the fix counts as float.
+  // A stream without a valid frame for this long is closed, also while bytes come.
   double lost_after_s = 30.0;
 };
 
@@ -71,6 +73,8 @@ class NtripClient {
   bool ShouldConnect(double now) const;
   // An attempt starts now; returns the request to send once the socket is connected.
   std::string BeginAttempt(double now);
+  // The request went out: the wait for the answer counts from now, not from the lookup and the connect.
+  void OnRequestSent(double now);
   // Bytes from the caster. Whole frames with a valid CRC are appended to frames.
   void OnBytes(const uint8_t* data, size_t size, double now, std::vector<std::vector<uint8_t>>& frames);
   // Why the open connection should be closed now, if it should.
@@ -138,6 +142,8 @@ class NtripClient {
   double retry_delay_ = 0;
   double last_data_ = 0;
   std::optional<double> last_frame_;
+  // Since when this connection streams; its frames reset the retry delay once it streamed stable_s.
+  std::optional<double> streaming_since_;
   std::optional<double> last_gga_sent_;
   std::string gga_;
   std::string last_error_;

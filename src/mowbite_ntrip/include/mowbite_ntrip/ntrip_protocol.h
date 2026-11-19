@@ -21,7 +21,7 @@ class ResponseReader {
   enum class Result {
     kPending,       // header not complete yet
     kStreaming,     // 200: corrections follow
-    kUnauthorized,  // 401: user or password refused
+    kUnauthorized,  // 401 or 403: user or password refused, or the account not let in
     kNoMountpoint,  // 404 or the source table instead of a stream
     kError,         // any other answer, or one that makes no sense
   };

@@ -84,8 +84,13 @@ std::string NtripClient::BeginAttempt(double now) {
   framer_.Reset();
   last_data_ = now;
   last_gga_sent_.reset();
+  streaming_since_.reset();
   attempts_++;
   return config_ ? BuildRequest(*config_) : std::string();
+}
+
+void NtripClient::OnRequestSent(double now) {
+  if (socket_open_ && state_ == ClientState::kConnecting) last_data_ = now;
 }
 
 void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vector<std::vector<uint8_t>>& frames) {
@@ -117,7 +122,10 @@ void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vec
       close_reason_ = last_error_;
       return;
   }
-  if (state_ != ClientState::kConnected) answered_without_gga_ = gga_.empty();
+  if (state_ != ClientState::kConnected) {
+    answered_without_gga_ = gga_.empty();
+    streaming_since_ = now;
+  }
   state_ = ClientState::kConnected;
   const size_t before = frames.size();
   const uint64_t crc_before = framer_.crc_errors();
@@ -126,7 +134,8 @@ void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vec
   if (frames.size() > before) {
     frames_ += frames.size() - before;
     last_frame_ = now;
-    retry_delay_ = timing_.first_retry_s;
+    // A caster that ends every stream after its first frames keeps the delay growing.
+    if (streaming_since_ && now - *streaming_since_ >= timing_.stable_s) retry_delay_ = timing_.first_retry_s;
     last_error_.clear();
     rejected_reported_ = false;
     if (!source_checked_ && config_) UseSource();
@@ -141,6 +150,12 @@ void NtripClient::OnBytes(const uint8_t* data, size_t size, double now, std::vec
 std::optional<std::string> NtripClient::CloseReason(double now) const {
   if (!socket_open_) return std::nullopt;
   if (close_reason_) return close_reason_;
+  if (state_ == ClientState::kConnected && streaming_since_) {
+    const double since = std::max(*streaming_since_, last_frame_.value_or(*streaming_since_));
+    if (now - since > timing_.lost_after_s) {
+      return "no valid RTCM frame for " + std::to_string(static_cast<int>(timing_.lost_after_s)) + " s";
+    }
+  }
   if (now - last_data_ > timing_.data_timeout_s) {
     return std::string(state_ == ClientState::kConnected ? "no data" : "no answer") + " for " +
            std::to_string(static_cast<int>(timing_.data_timeout_s)) + " s";

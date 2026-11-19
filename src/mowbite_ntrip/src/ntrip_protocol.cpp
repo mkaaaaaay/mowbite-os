@@ -115,7 +115,7 @@ ResponseReader::Result ResponseReader::ParseHeader(std::vector<uint8_t>& body) {
   }
   const size_t space = first.find(' ');
   status_code_ = space == std::string::npos ? 0 : std::atoi(first.c_str() + space + 1);
-  if (status_code_ == 401) {
+  if (status_code_ == 401 || status_code_ == 403) {
     Fail(Result::kUnauthorized, first);
     return result_;
   }
