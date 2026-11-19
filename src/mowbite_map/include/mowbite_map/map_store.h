@@ -19,6 +19,8 @@ class MapStore {
     std::optional<MapData> map;
     // The file the map came from, empty without a map.
     std::string source;
+    // SHA-256 of that file as it lies on the disk.
+    std::string sha256;
     // Why a file was not used, empty if all was well.
     std::string problem;
   };
@@ -31,13 +33,15 @@ class MapStore {
 
   struct LoadedDatum {
     std::optional<Datum> datum;
+    // SHA-256 of the map file the datum belongs to; empty in a file of an older version.
+    std::string map_sha256;
     // Why the file was not used, empty if it is missing or fine.
     std::string problem;
   };
 
-  // map_datum.json next to the map: the datum the map was recorded in.
+  // map_datum.json next to the map: the datum the map was recorded in, tied to the map file by its SHA-256.
   LoadedDatum LoadDatum() const;
-  std::string SaveDatum(const Datum& datum);
+  std::string SaveDatum(const Datum& datum, const std::string& map_sha256);
 
   const std::string& dir() const {
     return dir_;

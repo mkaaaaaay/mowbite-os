@@ -101,6 +101,14 @@ MapService::MapService(const Config& config)
   MapStore::LoadedDatum datum = store_.LoadDatum();
   recorded_ = datum.datum;
   if (!datum.problem.empty()) notices_.push_back({Notice::Level::kWarn, "Datum file problem: " + datum.problem});
+  // A datum of another map file: the map was written but not its datum after it (error or power loss).
+  if (recorded_ && !datum.map_sha256.empty() && datum.map_sha256 != loaded.sha256) {
+    recorded_.reset();
+    if (loaded.map) {
+      notices_.push_back({Notice::Level::kWarn, "The datum file belongs to another version of the map: the map counts "
+                                                "as without a datum"});
+    }
+  }
   Refresh();
 }
 
@@ -319,14 +327,17 @@ RpcOutcome MapService::Commit(MapData candidate, bool replaces) {
   text_ = std::move(text);
   on_disk_ = true;
   changed_ = true;
-  // The datum goes after the map: if it fails the map stays without one, which blocks mowing and does no harm.
-  if (bind) {
-    const std::string datum_error = store_.SaveDatum(*current_);
+  // The datum goes after the map, tied to its file: if it fails, the map counts as without one, now and after a
+  // restart, which blocks mowing until map.replace ties it to the datum in use.
+  if (!map_.Empty() && (bind || recorded_)) {
+    const Datum datum = bind ? *current_ : *recorded_;
+    const std::string datum_error = store_.SaveDatum(datum, Sha256Hex(text_));
     if (!datum_error.empty()) {
+      recorded_.reset();
       Refresh();
       return Failure(kRpcInternal, "Stored the map but not its datum: " + datum_error);
     }
-    recorded_ = current_;
+    recorded_ = datum;
   }
   Refresh();
   return {};

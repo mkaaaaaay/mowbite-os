@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "mowbite_map/map_store.h"
+#include "mowbite_map/sha256.h"
 
 using mowbite_map::json;
 using mowbite_map::MapStore;
@@ -217,9 +218,12 @@ TEST(MapStoreDatum, SavesAndLoadsTheDatumExactly) {
   MapStore store(dir.path().string(), kLimit);
   const mowbite_map::Datum datum{52.123456789012, -9.987654321098, 61.5};
   ASSERT_EQ(store.Save(Text("a")), "");
-  ASSERT_EQ(store.SaveDatum(datum), "");
+  const std::string sha = mowbite_map::Sha256Hex(Text("a"));
+  ASSERT_EQ(store.SaveDatum(datum, sha), "");
   const auto loaded = store.LoadDatum();
   ASSERT_TRUE(loaded.datum.has_value());
+  EXPECT_EQ(loaded.map_sha256, sha);
+  EXPECT_EQ(store.Load().sha256, sha);
   EXPECT_EQ(loaded.datum->lat, datum.lat);
   EXPECT_EQ(loaded.datum->lon, datum.lon);
   EXPECT_EQ(loaded.datum->height, datum.height);
@@ -258,14 +262,27 @@ TEST(MapStoreDatum, DoesNotUseAFileItCannotTrust) {
   EXPECT_EQ(problem(R"({"schema": 1, "datum_lat": 91, "datum_long": 9, "datum_height": 1})"),
             "map_datum.json holds no valid datum");
   EXPECT_EQ(problem(std::string(5000, ' ')), "map_datum.json is too large");
+  EXPECT_EQ(problem(R"({"schema": 1, "datum_lat": 52, "datum_long": 9, "datum_height": 1, "map_sha256": "ab"})"),
+            "map_datum.json holds no valid map_sha256");
+}
+
+TEST(MapStoreDatum, AFileOfAnOlderVersionHasNoMapSha) {
+  TempDir dir;
+  WriteAll(dir.path() / "map_datum.json", R"({"schema": 1, "datum_lat": 52, "datum_long": 9, "datum_height": 1})");
+  const auto loaded = MapStore(dir.path().string(), kLimit).LoadDatum();
+  ASSERT_TRUE(loaded.datum.has_value());
+  EXPECT_TRUE(loaded.map_sha256.empty());
+  EXPECT_TRUE(loaded.problem.empty());
 }
 
 TEST(MapStoreDatum, RefusesToWriteAnInvalidDatum) {
   TempDir dir;
   MapStore store(dir.path().string(), kLimit);
-  EXPECT_EQ(store.SaveDatum({91.0, 0.0, 0.0}), "not a valid datum");
-  EXPECT_EQ(store.SaveDatum({0.0, 181.0, 0.0}), "not a valid datum");
-  EXPECT_EQ(store.SaveDatum({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0}), "not a valid datum");
+  const std::string sha = mowbite_map::Sha256Hex("a");
+  EXPECT_EQ(store.SaveDatum({91.0, 0.0, 0.0}, sha), "not a valid datum");
+  EXPECT_EQ(store.SaveDatum({0.0, 181.0, 0.0}, sha), "not a valid datum");
+  EXPECT_EQ(store.SaveDatum({std::numeric_limits<double>::quiet_NaN(), 0.0, 0.0}, sha), "not a valid datum");
+  EXPECT_EQ(store.SaveDatum({52.0, 9.0, 0.0}, ""), "not a SHA-256 of a map");
   EXPECT_FALSE(fs::exists(dir.path() / "map_datum.json"));
 }
 
@@ -273,7 +290,7 @@ TEST(MapStoreDatum, ReportsWhyItCannotWrite) {
   TempDir dir;
   WriteAll(dir.path() / "file", "not a directory");
   MapStore store((dir.path() / "file" / "sub").string(), kLimit);
-  EXPECT_NE(store.SaveDatum({52.0, 9.0, 0.0}).find("cannot create"), std::string::npos);
+  EXPECT_NE(store.SaveDatum({52.0, 9.0, 0.0}, mowbite_map::Sha256Hex("a")).find("cannot create"), std::string::npos);
 }
 
 TEST(Datum, MeasuresTheDistanceOnTheGround) {

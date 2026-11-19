@@ -788,6 +788,54 @@ TEST(MapDatum, ABrokenDatumFileCountsAsMissing) {
   EXPECT_EQ(service.status().datum, DatumState::kUnbound);
 }
 
+TEST(MapDatum, AMapWhoseDatumWasNotWrittenAfterItIsNotTiedToTheOldOne) {
+  TempDir dir;
+  StoreAppMap(dir);
+  {
+    MapService service(ConfigFor(dir));
+    service.SetDatum(Moved(1000.0));
+    ASSERT_TRUE(service.Call("map.replace", json::array({json::parse(R"({"areas": [], "docking_stations": []})")}))->ok);
+    // The datum file cannot be written: the new recording of the other datum keeps no tie.
+    fs::create_directory(dir.path() / "map_datum.json.tmp");
+    const auto area = service.AddArea("mow", "New", Square(3));
+    EXPECT_FALSE(area.ok);
+    EXPECT_NE(area.message.find("not its datum"), std::string::npos) << area.message;
+    EXPECT_EQ(service.map().areas.size(), 1u);
+    EXPECT_EQ(service.status().datum, DatumState::kUnbound);
+    EXPECT_FALSE(service.status().mowing_allowed);
+  }
+  // After a restart the old datum file does not belong to the map: setting the old datum back does not let it mow.
+  MapService again(ConfigFor(dir));
+  EXPECT_TRUE(Mentions(again.TakeNotices(), Notice::Level::kWarn, "belongs to another version of the map"));
+  again.SetDatum(kDatum);
+  EXPECT_EQ(again.status().datum, DatumState::kUnbound);
+  again.SetDatum(Moved(1000.0));
+  EXPECT_EQ(again.status().datum, DatumState::kUnbound);
+  EXPECT_FALSE(again.status().mowing_allowed);
+}
+
+TEST(MapDatum, EveryChangeOfTheMapKeepsItsTie) {
+  TempDir dir;
+  StoreAppMap(dir);
+  {
+    MapService service = Started(NumberedIds(dir));
+    ASSERT_TRUE(service.AddArea("mow", "More", Square(2)).ok);
+  }
+  MapService again(ConfigFor(dir));
+  again.SetDatum(kDatum);
+  EXPECT_EQ(again.status().datum, DatumState::kMatch);
+  EXPECT_EQ(again.map().areas.size(), 3u);
+}
+
+TEST(MapDatum, ADatumFileOfAnOlderVersionStillTies) {
+  TempDir dir;
+  StoreAppMap(dir);
+  WriteAll(dir.path() / "map_datum.json", R"({"schema": 1, "datum_lat": 52.0, "datum_long": 9.0, "datum_height": 50})");
+  MapService service(ConfigFor(dir));
+  service.SetDatum(kDatum);
+  EXPECT_EQ(service.status().datum, DatumState::kMatch);
+}
+
 TEST(MapDatum, TheFirstAreaTiesTheMap) {
   TempDir dir;
   MapService service = Started(NumberedIds(dir));
