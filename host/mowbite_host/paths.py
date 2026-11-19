@@ -62,7 +62,8 @@ class Paths:
         self.checkpoint = data + "/checkpoint.json"
         self.halt = p + (self.env().get("MOWBITE_HALT_FILE") or "/run/mowbite-os/halt")
 
-    # KEY=value of the environment files of the OS service.
+    # KEY=value of the environment files of the OS service, read as systemd reads EnvironmentFile: comments with # or
+    # ;, blanks around key and value, one pair of matching quotes around the value removed.
     def env(self):
         env = {}
         for path in self.env_files:
@@ -70,8 +71,11 @@ class Paths:
                 with open(path) as f:
                     for line in f:
                         line = line.strip()
-                        if line and not line.startswith("#") and "=" in line:
-                            key, value = line.split("=", 1)
+                        if line and line[0] not in "#;" and "=" in line:
+                            key, value = (part.strip() for part in line.split("=", 1))
+                            quote = value[:1]
+                            if quote in ("'", '"') and len(value) > 1 and value.endswith(quote):
+                                value = value[1:-1]
                             env[key] = value
             except FileNotFoundError:
                 pass
