@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 
 namespace mowbite_bridge {
 
@@ -173,6 +174,23 @@ std::string HideSecrets(std::string_view text) {
     at = k + 2;
   }
   return out;
+}
+
+bool AppendLines(const std::string& path, const std::string& lines) {
+  bool torn = false;
+  {
+    std::ifstream in(path, std::ios::binary | std::ios::ate);
+    if (in && in.tellg() > 0) {
+      in.seekg(-1, std::ios::end);
+      torn = in.get() != '\n';
+    }
+  }
+  std::ofstream out(path, std::ios::app | std::ios::binary);
+  if (!out) return false;
+  if (torn) out << '\n';
+  out << lines;
+  out.flush();
+  return static_cast<bool>(out);
 }
 
 }  // namespace mowbite_bridge

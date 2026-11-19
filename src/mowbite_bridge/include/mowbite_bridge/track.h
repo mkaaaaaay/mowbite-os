@@ -25,7 +25,8 @@ class MowTrack {
   // One position; kept only while a session runs.
   void Add(double x, double y);
   // Appends what is new to the file of the job (every 30 s).
-  void Save();
+  // False when the file could not be written; what failed is written with the next Save.
+  bool Save();
   // Takes the open points into the run and saves (at shutdown).
   void Close();
 

@@ -231,7 +231,7 @@ class BridgeNode : public rclcpp::Node {
     track_.Open(WallNow());
     core_.SetEventSink([this](const Json& event) {
       const double now = WallNow();
-      events_.Write(event, now);
+      Written("event history", events_.Write(event, now), &events_failed_);
       track_.OnEvent(event, now);
     });
     core_.AddLocalMethod("events.history", [this](const Json& p) { return events_.Read(p, WallNow()); });
@@ -312,7 +312,7 @@ class BridgeNode : public rclcpp::Node {
         core_.SendPosition(pose->x, pose->y, pose->heading, track_.Attributes());
       });
     });
-    save_timer_ = create_wall_timer(kSavePeriod, [this] { Locked("track save", [&] { track_.Save(); }); });
+    save_timer_ = create_wall_timer(kSavePeriod, [this] { Locked("track save", [&] { Written("track", track_.Save(), &track_failed_); }); });
     providers_timer_ = create_wall_timer(kProvidersPeriod, [this] {
       // A graph that cannot be read skips the check: it throws, and no provider counts as missing.
       Locked("providers", [&] {
@@ -439,6 +439,17 @@ class BridgeNode : public rclcpp::Node {
    private:
     BridgeNode& node_;
   };
+
+  // A store that cannot be written is told once, and once more when it works again.
+  void Written(const char* what, bool ok, bool* failed) {
+    if (ok == !*failed) return;
+    *failed = !ok;
+    if (ok) {
+      RCLCPP_INFO(get_logger(), "The %s is written again", what);
+    } else {
+      RCLCPP_ERROR(get_logger(), "The %s cannot be written (disk full?): entries are missing from it", what);
+    }
+  }
 
   template <typename M, typename F>
   void Subscribe(const std::string& topic, const rclcpp::QoS& qos, F handler) {
@@ -608,6 +619,8 @@ class BridgeNode : public rclcpp::Node {
   BridgeCore core_;
   EventLog events_;
   MowTrack track_;
+  bool events_failed_ = false;
+  bool track_failed_ = false;
   PoseWindow window_;
   std::map<std::string, bool> text_sensors_;
 

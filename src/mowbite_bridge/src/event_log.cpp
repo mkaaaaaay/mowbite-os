@@ -83,8 +83,8 @@ void EventLog::Trim(const std::string& today, std::uintmax_t incoming) {
   }
 }
 
-void EventLog::Write(const Json& event, double now) {
-  if (dir_.empty() || !event.is_object()) return;
+bool EventLog::Write(const Json& event, double now) {
+  if (dir_.empty() || !event.is_object()) return true;
   std::error_code ec;
   fs::create_directories(dir_, ec);
   const std::string today = DayOf(now);
@@ -100,9 +100,9 @@ void EventLog::Write(const Json& event, double now) {
     Trim(today, line.size());
     total = line.size();
     for (const auto& d : Scan()) total += d.bytes;
-    if (total > max_bytes_) return;
+    if (total > max_bytes_) return true;
   }
-  std::ofstream(PathOf(today), std::ios::app) << line;
+  return AppendLines(PathOf(today), line);
 }
 
 Json EventLog::Read(const Json& params, double now) const {

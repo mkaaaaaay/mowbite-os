@@ -266,9 +266,10 @@ void MowTrack::EndRun() {
   open_.clear();
 }
 
-void MowTrack::Save() {
-  if (file_.empty()) return;
+bool MowTrack::Save() {
+  if (file_.empty()) return true;
   std::string lines;
+  std::vector<Run*> written;
   for (auto& run : runs_) {
     if (!run.in_file) {
       // A run with nothing in it is written only when it began with a session (not the one after a start).
@@ -276,18 +277,23 @@ void MowTrack::Save() {
       Json line = {{"type", "new_segment"}, {"attributes", AttributesJson(run.attributes)},
                    {"started_at", run.started_at}, {"points", PointsJson(run.points)}};
       lines += line.dump() + "\n";
-      run.in_file = true;
     } else if (run.saved < run.points.size()) {
       lines += Json{{"type", "append_points"}, {"points", PointsJson(run.points, run.saved)}}.dump() + "\n";
     } else {
       continue;
     }
-    run.saved = run.points.size();
+    written.push_back(&run);
   }
-  if (lines.empty()) return;
+  if (lines.empty()) return true;
   std::error_code ec;
   fs::create_directories(dir_, ec);
-  std::ofstream(file_, std::ios::app) << lines;
+  // Only what went into the file counts as saved.
+  if (!AppendLines(file_, lines)) return false;
+  for (Run* run : written) {
+    run->in_file = true;
+    run->saved = run->points.size();
+  }
+  return true;
 }
 
 void MowTrack::Close() {

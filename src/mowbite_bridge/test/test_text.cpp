@@ -1,4 +1,10 @@
 #include <gtest/gtest.h>
+#include <unistd.h>
+
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <string>
 
 #include "mowbite_bridge/text.h"
 
@@ -55,4 +61,17 @@ TEST(HideSecrets, QuotedNamesAndValuesAsInJson) {
             "client_secret='***' private_key: *** api_key=***");
   EXPECT_EQ(HideSecrets(R"({"token": "open)"), R"({"token": "***)");
   EXPECT_EQ(HideSecrets(R"({"geometry_key": "g"})"), R"({"geometry_key": "g"})");
+}
+
+TEST(AppendLines, ATornLineGetsItsEndAndAFailureIsTold) {
+  const std::filesystem::path dir = std::filesystem::temp_directory_path() / ("append_" + std::to_string(::getpid()));
+  std::filesystem::create_directories(dir);
+  const std::string path = (dir / "f.jsonl").string();
+  std::ofstream(path) << "{\"a\":1}\n{\"b\":";
+  EXPECT_TRUE(AppendLines(path, "{\"c\":3}\n"));
+  std::ifstream in(path);
+  const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  EXPECT_EQ(text, "{\"a\":1}\n{\"b\":\n{\"c\":3}\n");
+  EXPECT_FALSE(AppendLines(dir.string(), "x\n"));
+  std::filesystem::remove_all(dir);
 }

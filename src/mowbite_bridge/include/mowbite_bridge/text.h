@@ -18,6 +18,10 @@ bool IsSecretName(std::string_view name);
 // Hides user:password@ of a URL and the value after a secret name in a log line, "quoted" up to its closing quote.
 std::string HideSecrets(std::string_view text);
 
+// Appends whole lines to a file; a line torn off at its end (power loss) gets its line end first, so that it does not
+// swallow the next one. False when the file cannot be written in full.
+bool AppendLines(const std::string& path, const std::string& lines);
+
 }  // namespace mowbite_bridge
 
 #endif  // MOWBITE_BRIDGE_TEXT_H

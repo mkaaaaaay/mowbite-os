@@ -18,8 +18,9 @@ class EventLog {
   EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes,
            std::size_t answer_bytes = mowbite_api::kHistoryMaxAnswerBytes);
 
-  // Appends one event to the file of today; over the byte limit older days go first.
-  void Write(const Json& event, double now);
+  // Appends one event to the file of today; over the byte limit older days go first. False when it could not be
+  // written (one over the limit is no failure).
+  bool Write(const Json& event, double now);
 
   // events.history: params {"date": "YYYYMMDD"} or ["YYYYMMDD"], none for today; an unknown or invalid day gives [].
   // Too big an answer leaves out the oldest events of the day.
