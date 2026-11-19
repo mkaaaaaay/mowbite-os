@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <vector>
 
 #include "mowbite_logic/logic_core.h"
 #include "mowbite_time/sun.h"
@@ -401,6 +403,31 @@ TEST(GoingHome, BatteryVoltagesInOrder) {
   config = LogicConfig();
   config.battery_critical_voltage = 0;
   EXPECT_NE(BatteryVoltagesProblem(config), "");
+}
+
+TEST(GoingHome, ConfigRangesHoldTheSafetyValues) {
+  EXPECT_EQ(ConfigRangeProblem(LogicConfig()), "");
+  const std::vector<std::function<void(LogicConfig&)>> bad = {
+      [](LogicConfig& c) { c.obstacle.free_wait = -1; },
+      [](LogicConfig& c) { c.obstacle.free_wait = 0; },
+      [](LogicConfig& c) { c.obstacle.near_wait = 5; },
+      [](LogicConfig& c) { c.obstacle.stale = 0; },
+      [](LogicConfig& c) { c.obstacle.avoid_sigma = 0; },
+      [](LogicConfig& c) { c.obstacle.avoid_clearance = 0.2; },
+      [](LogicConfig& c) { c.obstacle.avoid_pass_clearance = 0.05; },
+      [](LogicConfig& c) { c.obstacle.avoid_speed = 0.5; },
+      [](LogicConfig& c) { c.obstacle.avoid_still = 0; },
+      [](LogicConfig& c) { c.obstacle.avoid_keep = std::nan(""); },
+      [](LogicConfig& c) { c.undock.speed = 0; },
+      [](LogicConfig& c) { c.dock.contact_speed = -0.1; },
+      [](LogicConfig& c) { c.gps_wait_time = -1; },
+      [](LogicConfig& c) { c.calibration.timeout = 0; },
+  };
+  for (size_t i = 0; i < bad.size(); i++) {
+    LogicConfig config;
+    bad[i](config);
+    EXPECT_NE(ConfigRangeProblem(config), "") << i;
+  }
 }
 
 TEST(SilentPlanner, AnApproachWithoutAnAnswerIsAskedForAgain) {

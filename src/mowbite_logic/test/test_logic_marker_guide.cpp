@@ -336,6 +336,23 @@ TEST(LogicMarkerGuide, NotSeenNeverDocksByThePosition) {
   EXPECT_TRUE(core.MarkerWanted());
 }
 
+// Docking home waits for the marker as long as the platform says, not the default.
+TEST(LogicMarkerGuide, TheWaitForTheMarkerIsThatOfThePlatform) {
+  LogicConfig config = Tron();
+  config.marker.wait = 10.0;
+  TestCore core = AtTheApproachPoint(config);
+  for (int i = 1; i < 20; i++) {
+    const double t = 100.0 + 0.5 * i;
+    core.OnDockMarker(Message(t, kMeasuring, false, false, "TOO_DARK"));
+    core.OnTick(t);
+  }
+  core.OnTick(110.1);
+  const auto events = core.TakeEvents();
+  const Event* retry = Find(events, "DOCKING_RETRY");
+  ASSERT_TRUE(retry);
+  EXPECT_EQ(retry->details["cause"], "MARKER_NOT_SEEN");
+}
+
 // The marker lost on the line for good: out to the approach point by the map, then the next try with a sight.
 TEST(LogicMarkerGuide, LostOnTheLineDrivesOutByTheMap) {
   TestCore core = AtTheApproachPoint();

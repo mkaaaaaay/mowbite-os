@@ -503,6 +503,22 @@ TEST(LogicCommands, TheHoldRefusesEveryStartWithHold) {
   EXPECT_EQ(core.RobotState().state, "PAUSED");
 }
 
+TEST(LogicCommands, ContinueKeepsAPauseWithoutSafetyMeasurementOrMap) {
+  TestCore core = Paused();
+  core.OnCapabilities(false);
+  Settle(core);
+  CommandOutcome outcome = Rpc(core, "mowing.continue");
+  EXPECT_EQ(outcome.why.code, "NO_SAFETY_MEASUREMENT");
+  EXPECT_EQ(outcome.data["event"], "MOWING_REFUSED");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  core = Paused();
+  core.OnMowMap({{"lawn", "Lawn", true}}, Reason("MAP_CHANGED", "The map changed"));
+  Settle(core);
+  outcome = Rpc(core, "mowing.continue");
+  EXPECT_EQ(outcome.why.code, "MAP_CHANGED");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
 TEST(LogicCommands, InAnEmergencyNoSecondEvent) {
   TestCore core = PausedInEmergency();
   CommandOutcome outcome = Rpc(core, "mowing.continue");

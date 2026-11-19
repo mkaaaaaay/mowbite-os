@@ -76,12 +76,13 @@ void MowingPart::PrepareStart(CoreAccess core) {
   // Planned anew on every start, the map may have changed; the fingerprint keeps the place if the plan is the same.
   job_.Restore(job_.progress());
   leg_ = Leg::kNone;
+  stopping_ = false;
   approached_ = false;
   planner_silent_ = 0;
   announced_area_.clear();
   cut_.reset();
   cutting_added_.clear();
-  recut_ = detour_ = false;
+  recut_ = detour_ = hold_on_lane_ = avoid_failed_ = false;
   cut_retries_ = 0;
 }
 
@@ -125,9 +126,13 @@ void MowingPart::Pause(CoreAccess core, int why, const Reason& reason) {
   for (size_t bit = 0; bit < pause_reasons_.size(); ++bit) {
     if ((why & (1 << bit)) && !(pause_ & (1 << bit))) pause_reasons_[bit] = reason;
   }
+  if ((why & kPauseObstacle) && !(pause_ & kPauseObstacle)) {
+    hold_on_lane_ = leg_ == Leg::kFollow || leg_ == Leg::kDetour;
+  }
   pause_ |= why;
   if (why == kPauseGps) gps_good_since_.reset();
   if (LegDrives()) {
+    stopping_ = true;
     core.CancelDrive(reason);
     core.effects().SetDue<StopRequest>(true);
   }
@@ -152,6 +157,7 @@ const Reason& MowingPart::PauseReason() const {
 
 void MowingPart::Unpause(CoreAccess core, int why) {
   if (pause_ == 0) return;
+  if (why & pause_ & kPauseObstacle) avoid_failed_ = false;
   pause_ &= ~why;
   core.effects().SetDue<ActionsChanged>(true);
   if (pause_ != 0) return;
@@ -166,7 +172,7 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
   if (core.state() != State::kMowing || core.emergency() || leg_ != Leg::kNone) return step;
   if (core.obstacle_part().TakeCirclesGone()) recut_ = true;
   // Objects alone that stood avoid_wait s in a hold: the mower drives around them where the planner cuts the plan.
-  if (pause_ == kPauseObstacle && pose_now && job_.CurrentPath()) {
+  if (pause_ == kPauseObstacle && hold_on_lane_ && !avoid_failed_ && pose_now && job_.CurrentPath()) {
     std::vector<AvoidCircle> due = core.obstacle_part().AvoidDue(now_s);
     if (!due.empty()) return CutStep(core, std::move(due));
   }
@@ -279,6 +285,14 @@ JobStep MowingPart::CutStep(CoreAccess core, std::vector<AvoidCircle> added) {
   return step;
 }
 
+void MowingPart::DropCut(CoreAccess core, const std::string& why) {
+  cut_.reset();
+  detour_ = false;
+  core.obstacle_part().ClearCircles();
+  core.obstacle_part().TakeCirclesGone();
+  core.Notify("Mowing: " + why + ", stopping at the obstacles again");
+}
+
 void MowingPart::OnCutAnswer(CoreAccess core, const CutAnswer& given) {
   if (core.state() != State::kMowing || leg_ != Leg::kCutting) return;
   leg_ = Leg::kNone;
@@ -318,13 +332,7 @@ void MowingPart::OnCutAnswer(CoreAccess core, const CutAnswer& given) {
     return;
   }
   if (!answer.ok) {
-    // The circles left cannot be kept out of: they go, and objects in the way hold the mower again.
-    cut_.reset();
-    detour_ = false;
-    core.obstacle_part().ClearCircles();
-    core.obstacle_part().TakeCirclesGone();
-    core.Notify("Mowing: the plan cannot be cut by the obstacles any more (" + answer.code +
-                "), stopping at them again");
+    DropCut(core, "the plan cannot be cut by the obstacles any more (" + answer.code + ")");
     return;
   }
   cut_ = answer.pieces;
@@ -453,6 +461,7 @@ void MowingPart::OnJobProgress(CoreFacts core, size_t index) {
 
 void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Reason& reason) {
   const auto& mower = core.pose();
+  stopping_ = false;
   if (core.state() != State::kMowing || !LegDrives()) return;
   const bool follow = leg_ == Leg::kFollow;
   const bool detour = leg_ == Leg::kDetour;
@@ -504,9 +513,11 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
       break;
     case LegEnd::kEmergency: Pause(core, kPauseEmergency, reason); break;
     case LegEnd::kNoWay:
-      // No way to the next piece from here after all: it is left out too, the detour goes to the one after it.
-      if (detour && cut_ && !cut_->empty()) {
-        cut_->erase(cut_->begin());
+      // No way to the next piece within the area: nothing more is left out, the objects hold the mower like stop.
+      if (detour) {
+        approached_ = false;
+        avoid_failed_ = true;
+        DropCut(core, "no way around the obstacle to the rest of the area");
         break;
       }
       // After a skip the path left is a checked way on: a piece of it, then the approach is asked for again.
@@ -576,13 +587,14 @@ void MowingPart::Leave(CoreAccess core) {
   session_id_.clear();
   if (LegDrives()) core.CancelDrive(Reason("STOPPED", "Mowing ended"));
   leg_ = Leg::kNone;
+  stopping_ = false;
   pause_ = 0;
   skip_path_ = skip_area_ = drive_on_ = false;
   skipped_.reset();
   // Circles count within a session of mowing only: out of it objects hold the mower again.
   cut_.reset();
   cutting_added_.clear();
-  recut_ = detour_ = false;
+  recut_ = detour_ = hold_on_lane_ = avoid_failed_ = false;
   cut_retries_ = 0;
   core.obstacle_part().ClearCircles();
   spinup_since_.reset();

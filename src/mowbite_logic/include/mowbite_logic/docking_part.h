@@ -13,7 +13,7 @@ namespace mowbite_logic {
 // calls are those of LogicCore with the same names.
 class DockingPart {
  public:
-  explicit DockingPart(const ChargeConfig& charge) : charge_watch_(charge) {}
+  DockingPart(const ChargeConfig& charge, const MarkerConfig& marker) : charge_watch_(charge), marker_(marker) {}
 
   void SetTurningRadius(double radius);
   Reason ApproachProblem(CoreFacts core) const;

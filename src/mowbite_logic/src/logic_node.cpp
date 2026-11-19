@@ -265,7 +265,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
         bool active;
         {
           std::lock_guard<std::mutex> lock(mutex_);
-          active = core_.View().FollowerActive();
+          // Only the goal of the running drive, once taken, may drive.
+          active = core_.View().FollowerActive() && drive_.active && drive_.handle;
         }
         if (active) SendDrive(mowbite_msgs::msg::DriveCommand::SOURCE_FOLLOWER, *msg);
       });
@@ -746,7 +747,11 @@ void LogicNode::SendFollow(const FollowPath::Goal& goal, const std::string& what
   options.goal_response_callback = [this, seq, what](const FollowHandle::SharedPtr& handle) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (seq != drive_.seq) return;
+      if (seq != drive_.seq) {
+        // Taken after its drive ended: it must not keep driving beside the next one.
+        if (handle) CancelGoal(handle);
+        return;
+      }
       if (!handle) {
         EndDrive(false, Reason("FOLLOWER_REFUSED", "The follower did not take the path"),
                  FollowPath::Result::REASON_INVALID, 0);
@@ -814,14 +819,18 @@ bool LogicNode::CheckFollowerLocked() {
   const bool canceled = drive_.cancel_reason.has_value();
   Reason why = Reason("FOLLOWER_MISSING", text).With("seconds", quiet).With("limit", follower_timeout_s_);
   if (canceled) why = Reason(*drive_.cancel_reason).WithMessage(drive_.cancel_reason->message + " (" + text + ")");
-  try {
-    if (drive_.handle) follow_client_->async_cancel_goal(drive_.handle);
-  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {  // NOLINT(bugprone-empty-catch)
-    // The client has dropped the goal already; there is nothing left to cancel.
-  }
+  if (drive_.handle) CancelGoal(drive_.handle);
   EndDrive(false, why, canceled ? FollowPath::Result::REASON_CANCELED : FollowPath::Result::REASON_TIMEOUT,
            drive_.follower_index);
   return true;
+}
+
+void LogicNode::CancelGoal(const FollowHandle::SharedPtr& handle) {
+  try {
+    follow_client_->async_cancel_goal(handle);
+  } catch (const rclcpp_action::exceptions::UnknownGoalHandleError&) {  // NOLINT(bugprone-empty-catch)
+    // The client has dropped the goal already; there is nothing left to cancel.
+  }
 }
 
 // Stops the drive: cancels the follower, or drops the way still being planned. Called with the mutex held.

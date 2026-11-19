@@ -67,6 +67,10 @@ class MowingPart {
   Leg leg() const {
     return leg_;
   }
+  // A pause stopped the leg on its way and the follower has not ended it yet: no blade, nothing of the follower.
+  bool stopping() const {
+    return stopping_;
+  }
   const std::optional<double>& spinup_since() const {
     return spinup_since_;
   }
@@ -97,6 +101,8 @@ class MowingPart {
   bool BladeReady(CoreAccess core, double now_s);
   // Asks the planner to cut the rest of the plan by the circles kept now and the ones added (from a hold).
   JobStep CutStep(CoreAccess core, std::vector<AvoidCircle> added);
+  // The circles cannot be kept out of: they go with the cut, and objects in the way hold the mower again.
+  void DropCut(CoreAccess core, const std::string& why);
   // The job onto the first piece of the cut not behind it; poses left out on the way make the next leg a detour. No
   // piece left: the rest of the area is left out.
   void FollowCut();
@@ -113,6 +119,7 @@ class MowingPart {
   // The reason each kind of pause came with, by its bit.
   std::array<Reason, 5> pause_reasons_;
   Leg leg_ = Leg::kNone;
+  bool stopping_ = false;
   bool approached_ = false;
   // Questions of the job in a row the planner gave no answer for.
   int planner_silent_ = 0;
@@ -135,6 +142,10 @@ class MowingPart {
   bool recut_ = false;
   bool detour_ = false;
   int cut_retries_ = 0;
+  // The hold for obstacles began on a lane or a detour (within the area): only there the mower drives around. A detour
+  // without a way leaves the objects to the hold until it ends.
+  bool hold_on_lane_ = false;
+  bool avoid_failed_ = false;
   // Why the next skip of an area is made: MANUAL by the app, SCHEDULE for a pause of the schedule.
   Reason skip_why_;
   double last_checkpoint_s_ = 0;

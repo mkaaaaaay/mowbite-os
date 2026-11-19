@@ -139,6 +139,7 @@ class LogicNode : public rclcpp::Node {
   void OnTransit(uint64_t seq, const PlanTransit::Response& response);
   void SendFollow(const FollowPath::Goal& goal, const std::string& what);
   bool CheckFollowerLocked();
+  void CancelGoal(const FollowHandle::SharedPtr& handle);
   void CancelDrive(const Reason& why);
   void EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32_t index);
   static const char* PurposeName(int purpose);

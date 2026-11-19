@@ -143,6 +143,9 @@ struct LogicConfig {
 
 // Why the battery voltages of the config do not fit (critical < empty < full), empty when they do.
 std::string BatteryVoltagesProblem(const LogicConfig& config);
+// Why a time, speed or clearance of the config is out of its range, empty when all fit. The clearances of driving
+// around objects keep at least G46: 0.30 m and 2 sigma on the way around, 0.10 m beside a lane, 0.3 m/s.
+std::string ConfigRangeProblem(const LogicConfig& config);
 
 // calibration/status: the problems of the program against a drive from here (room, sensors, map) and the lane it
 // would take (lane_length 0 without one), with the strip it needs.

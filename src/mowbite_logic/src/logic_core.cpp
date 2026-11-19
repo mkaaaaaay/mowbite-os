@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <iterator>
 
 #include "mowbite_api/catalog.h"
@@ -80,11 +81,47 @@ std::string BatteryVoltagesProblem(const LogicConfig& config) {
   return "battery voltages need 0 < battery_critical_voltage < battery_empty_voltage < battery_full_voltage";
 }
 
+std::string ConfigRangeProblem(const LogicConfig& config) {
+  const ObstacleConfig& o = config.obstacle;
+  const auto finite = [](std::initializer_list<double> values) {
+    return std::all_of(values.begin(), values.end(), [](double v) { return std::isfinite(v); });
+  };
+  if (!finite({o.free_wait, o.near_wait, o.near_ahead, o.stale, o.avoid_wait, o.avoid_still, o.avoid_sigma,
+               o.avoid_clearance, o.avoid_pass_clearance, o.avoid_keep, o.avoid_speed})) {
+    return "the obstacle_* values need to be numbers";
+  }
+  if (!(o.free_wait > 0) || !(o.near_wait >= o.free_wait) || !(o.near_ahead >= 0) || !(o.stale > 0)) {
+    return "obstacle_free_wait and obstacle_stale need to be above 0, obstacle_near_wait at least obstacle_free_wait, "
+           "obstacle_near_ahead 0 or more";
+  }
+  if (!(o.avoid_clearance >= 0.30) || !(o.avoid_sigma >= 2.0) || !(o.avoid_pass_clearance >= 0.10) ||
+      !(o.avoid_pass_clearance <= o.avoid_clearance) || !(o.avoid_speed > 0 && o.avoid_speed <= 0.3) ||
+      !(o.avoid_wait >= 0) || !(o.avoid_still > 0) || !(o.avoid_keep > 0)) {
+    return "obstacle_avoid_clearance needs to be at least 0.30, obstacle_avoid_sigma at least 2, "
+           "obstacle_avoid_pass_clearance at least 0.10 and at most obstacle_avoid_clearance, obstacle_avoid_speed "
+           "above 0 and at most 0.3, obstacle_avoid_still and obstacle_avoid_keep above 0, obstacle_avoid_wait 0 or more";
+  }
+  const UndockConfig& u = config.undock;
+  const DockConfig& d = config.dock;
+  if (!finite({u.speed, u.stall_time, d.speed, d.contact_speed, d.contact_timeout, config.gps_wait_time}) ||
+      !(u.speed > 0) || !(u.stall_time > 0) || !(d.speed > 0) || !(d.contact_speed > 0) ||
+      !(d.contact_timeout > 0) || !(config.gps_wait_time >= 0)) {
+    return "undock_speed, undock_stall_time, docking_speed, contact_speed and contact_timeout need to be above 0, "
+           "gps_wait_time 0 or more";
+  }
+  const CalibrationConfig& c = config.calibration;
+  if (!finite({c.status_timeout, c.timeout, c.max_position_accuracy}) || !(c.status_timeout > 0) ||
+      !(c.timeout > 0) || !(c.max_position_accuracy > 0)) {
+    return "calibration_status_timeout, calibration_timeout and calibration_max_position_accuracy need to be above 0";
+  }
+  return "";
+}
+
 LogicCore::LogicCore(const LogicConfig& config)
     : config_(config),
       ids_(config.id_seed),
       recording_(RecorderConfigOf(config)),
-      docking_part_(config.charge),
+      docking_part_(config.charge, config.marker),
       home_(HomeRules()),
       obstacle_part_(config.obstacle) {
   // Without telemetry the mower counts as stopped until the driver reports.
@@ -425,7 +462,10 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       if ((mowing_.pause() & (waiting | kPauseObstacle)) == 0) return WrongState();
       // The EMERGENCY event told already: no MOWING_REFUSED.
       if (emergency_) return Reason("EMERGENCY", "Emergency: reset it first");
-      Reason why = Held() ? HoldProblem() : ContinueProblem();
+      // Without a safety measurement or a usable mowing map the pause stays.
+      Reason why = Unsafe();
+      if (why.empty()) why = mow_map_problem_;
+      if (why.empty()) why = Held() ? HoldProblem() : ContinueProblem();
       // The user lets the mower go past what it cannot see; what a sensor sees in the stop zone keeps it.
       if (why.empty() && (mowing_.pause() & kPauseObstacle) && !obstacle_part_.Waive()) {
         why = obstacle_part_.Why().WithMessage("An obstacle in view, or one the sensors report no more, is in the way");
@@ -604,7 +644,7 @@ bool LogicCore::FollowerActive() const {
   if (state_ == State::kDriving) return true;
   if (state_ == State::kUndocking) return undocking_.Leaving();
   if (state_ == State::kDocking) return docking_part_.MapLegActive();
-  return state_ == State::kMowing && mowing_.pause() == 0 && LegDrives();
+  return state_ == State::kMowing && mowing_.pause() == 0 && !mowing_.stopping() && LegDrives();
 }
 
 void LogicCore::CancelDrive(const Reason& reason) {
@@ -1009,8 +1049,8 @@ bool LogicCore::BladeWanted() const {
     return setup_.setup_blade() != 0 && !setup_.setup_blade_refused() && !emergency_ && hw_.telemetry_ok &&
            !hw_.dock_contact;
   }
-  if (state_ != State::kMowing || mowing_.pause() != 0 || emergency_ || !config_.mow_with_blade || !safety_measured_ ||
-      !hw_.telemetry_ok || hw_.dock_contact) {
+  if (state_ != State::kMowing || mowing_.pause() != 0 || mowing_.stopping() || emergency_ || !config_.mow_with_blade ||
+      !safety_measured_ || !hw_.telemetry_ok || hw_.dock_contact) {
     return false;
   }
   if (mowing_.spinup_since()) return true;

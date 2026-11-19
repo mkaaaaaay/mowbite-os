@@ -154,7 +154,7 @@ Reason DockingPart::StartDockingTest(CoreAccess core, const Reason& node_problem
   json details = json::object();
   PutReason(&details, "DOCKING", Reason("TEST", "Docking test by the dock marker, without map and position"));
   core.AddEvent("DOCKING", std::move(details));
-  marker_ = MarkerWatch(core.config().marker);
+  marker_.Reset();
   marker_docking_ = docking_test_ = try_by_marker_ = true;
   test_runs_ = runs;
   test_run_ = 1;

@@ -232,6 +232,23 @@ TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "reset_job"));
 }
 
+// A continue before the follower ended the leg the pause stopped: neither blade nor follower until it did.
+TEST(LogicMowing, AQuickContinueWaitsForTheStoppedLeg) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  TestCore core = Following(config);
+  core.OnJobProgress(1);
+  ASSERT_TRUE(core.BladeWanted());
+  EXPECT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_FALSE(core.FollowerActive());
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  core.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  EXPECT_NE(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+}
+
 TEST(LogicMowing, PauseStopsAtOnceAndContinueGoesOnFromWhereItStopped) {
   TestCore core = Following();
   core.OnJobProgress(2);
@@ -1621,17 +1638,38 @@ TEST(LogicAvoid, NothingOfThePlanLeftEndsTheArea) {
   EXPECT_NE(next.kind, JobStep::Kind::kFollow);
 }
 
-TEST(LogicAvoid, ADetourWithoutAWayLeavesThatPieceOut) {
+TEST(LogicAvoid, ADetourWithoutAWayStopsAtTheObjectUntilItGoes) {
   TestCore core = Avoiding();
   StandBefore(core, 100, ObjectAt(2.0, 2.0));
   ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
   core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 2, 4}}));
   ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
   core.OnLegEnded(LegEnd::kNoWay, 0, Reason("TRANSIT_FAILED", "no way"));
-  EXPECT_EQ(core.RobotState().state, "MOWING");
-  const JobStep detour = core.NextJobStep(104);
-  ASSERT_EQ(detour.kind, JobStep::Kind::kDetour);
-  EXPECT_EQ(core.RobotState().current_path, 1);
+  // No piece is left out silently: the circles go, and the object holds the mower again.
+  EXPECT_TRUE(core.Circles().empty());
+  EXPECT_EQ(core.RobotState().current_path, 0);
+  const JobStep next = core.NextJobStep(104);
+  EXPECT_NE(next.kind, JobStep::Kind::kDetour);
+  core.OnObstacleStatus(ObjectAt(2.0, 2.0), 104.1);
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  core.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  for (double t = 104.2; t < 110; t += 0.1) {
+    core.OnObstacleStatus(ObjectAt(2.0, 2.0), t);
+    EXPECT_EQ(core.NextJobStep(t).kind, JobStep::Kind::kNone) << t;
+  }
+}
+
+TEST(LogicAvoid, AHoldOnTheWayToALaneIsWaitedFor) {
+  TestCore core = Avoiding();
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  core.OnPose(PoseAt(-3, -3));
+  ASSERT_EQ(core.NextJobStep(99).kind, JobStep::Kind::kApproach);
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.RobotState().state, "PAUSED");
+  for (double t = 103; t < 106; t += 0.1) {
+    core.OnObstacleStatus(ObjectAt(2.0, 2.0), t);
+    EXPECT_EQ(core.NextJobStep(t).kind, JobStep::Kind::kNone) << t;
+  }
 }
 
 TEST(LogicAvoid, CirclesCountWithinMowingOnly) {
