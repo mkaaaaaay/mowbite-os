@@ -183,8 +183,8 @@ TEST(Steps, AnImageIsOneColourAndNothingElse) {
   EXPECT_EQ(CheckImage(head + "<SCRIPT>x()</SCRIPT></svg>"), "it has <script");
   EXPECT_EQ(CheckImage(head + R"x(<path fill="url(#g)"/></svg>)x"), "it has url(");
   EXPECT_EQ(CheckImage(head + R"(<path style="fill:#f00"/></svg>)"), "it has style=");
-  EXPECT_EQ(CheckImage(R"(<svg onload="x()" viewBox="0 0 1 1"></svg>)"), "it has an attribute on...");
-  EXPECT_EQ(CheckImage(head + R"(<path fill="#000" ONCLICK ="x()"/></svg>)"), "it has an attribute on...");
+  EXPECT_EQ(CheckImage(R"x(<svg onload="x()" viewBox="0 0 1 1"></svg>)x"), "it has an attribute on...");
+  EXPECT_EQ(CheckImage(head + R"x(<path fill="#000" ONCLICK ="x()"/></svg>)x"), "it has an attribute on...");
   EXPECT_EQ(CheckImage("<html></html>"), "no SVG");
   EXPECT_EQ(CheckImage(head + std::string(mowbite_api::kSetupImageBytes, ' ') + "</svg>"),
             "larger than " + std::to_string(mowbite_api::kSetupImageBytes) + " bytes");
