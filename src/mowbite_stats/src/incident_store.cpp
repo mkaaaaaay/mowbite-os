@@ -13,6 +13,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -30,6 +31,34 @@ namespace mowbite_stats {
 namespace fs = std::filesystem;
 
 namespace {
+
+// Whether the members of object named in keys, where present, are strings.
+bool StringsWhereGiven(const json& object, std::initializer_list<const char*> keys) {
+  for (const char* key : keys) {
+    const auto it = object.find(key);
+    if (it != object.end() && !it->is_string()) return false;
+  }
+  return true;
+}
+
+// Whether a manifest has the types this store reads (a damaged or foreign file counts as missing).
+bool ManifestFits(const json& manifest) {
+  if (!manifest.is_object() || !StringsWhereGiven(manifest, {"id", "state", "replay"})) return false;
+  if (manifest.contains("created") && !manifest["created"].is_number()) return false;
+  if (manifest.contains("safety") && !manifest["safety"].is_boolean()) return false;
+  if (!manifest.contains("window") || !manifest["window"].is_object()) return false;
+  if (manifest.contains("log") && !manifest["log"].is_array()) return false;
+  for (const char* list : {"triggers", "runs"}) {
+    if (!manifest.contains(list) || !manifest[list].is_array()) return false;
+  }
+  for (const json& trigger : manifest["triggers"]) {
+    if (!trigger.is_object() || !StringsWhereGiven(trigger, {"kind", "reason", "run"})) return false;
+  }
+  for (const json& run : manifest["runs"]) {
+    if (!run.is_object() || !StringsWhereGiven(run, {"name"})) return false;
+  }
+  return true;
+}
 
 // Text of a manifest; invalid UTF-8 becomes U+FFFD instead of an exception.
 std::string ManifestText(const json& manifest) {
@@ -258,7 +287,7 @@ std::optional<json> IncidentStore::Manifest(const std::string& id) const {
       mowbite_hold::ReadSmallFile((fs::path(Folder(id)) / kManifest).string(), kMaxManifestBytes, &text, &error);
   if (read != mowbite_hold::FileRead::kText) return std::nullopt;
   json manifest = json::parse(text, nullptr, false);
-  if (manifest.is_discarded() || !manifest.is_object()) return std::nullopt;
+  if (manifest.is_discarded() || !ManifestFits(manifest)) return std::nullopt;
   return manifest;
 }
 

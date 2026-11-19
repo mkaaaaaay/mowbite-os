@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <ctime>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <mutex>
@@ -150,7 +151,12 @@ class Incidents::Worker {
       jobs_.pop_front();
       busy_ = true;
       lock.unlock();
-      std::function<void()> then = job();
+      std::function<void()> then;
+      // A job that throws (a damaged file) is dropped; the node goes on.
+      try {
+        then = job();
+      } catch (const std::exception&) {
+      }
       lock.lock();
       busy_ = false;
       if (then) done_.push_back(std::move(then));

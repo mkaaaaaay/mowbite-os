@@ -376,6 +376,27 @@ TEST_F(IncidentsTest, MarksAreThrottledAndChecked) {
   EXPECT_EQ(status["incidents"]["throttled"][0]["kind"], "MARK");
 }
 
+// A damaged manifest (wrong types) counts as missing: listing, getting and the pass over old ones go on.
+TEST_F(IncidentsTest, ADamagedManifestIsLeftOut) {
+  const std::string id = Sealed();
+  ASSERT_FALSE(id.empty());
+  const fs::path file = dir_ / "incidents" / id / "manifest.json";
+  ASSERT_TRUE(fs::exists(file));
+  for (const char* text : {R"({"created":"x","window":{},"triggers":[],"runs":[]})",
+                           R"({"created":1,"triggers":[],"runs":[]})",
+                           R"({"created":1,"window":{},"triggers":[1],"runs":[]})",
+                           R"({"created":1,"window":{},"triggers":[{"kind":2}],"runs":[]})",
+                           R"({"created":1,"window":{},"triggers":[],"runs":["a"]})", "[1]"}) {
+    std::ofstream(file) << text;
+    EXPECT_NO_THROW(Call("incidents.list", nullptr)) << text;
+    std::optional<RpcError> error;
+    EXPECT_NO_THROW(Call("incidents.get", {{"id", id}}, &error)) << text;
+    EXPECT_NO_THROW(Call("journal.status", nullptr)) << text;
+  }
+  EXPECT_NO_THROW(Pass());
+  EXPECT_TRUE(Call("incidents.list", nullptr).empty());
+}
+
 TEST_F(IncidentsTest, DeleteOnlyWhatIsDone) {
   const std::string id = Sealed();
   ASSERT_FALSE(id.empty());

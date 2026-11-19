@@ -131,35 +131,40 @@ std::string Timeline(const std::vector<std::string>& run_dirs, int64_t from_ns, 
             *error = path + ": " + e.what();
             return "";
           }
-          if (record.method == kHead) {
-            if (value.contains("process") && value["process"].is_string()) {
-              processes[r] = value["process"].get<std::string>();
+          // A record of other types than the journal writes is left out, not the whole timeline.
+          if (!value.is_object()) continue;
+          try {
+            if (record.method == kHead) {
+              if (value.contains("process") && value["process"].is_string()) {
+                processes[r] = value["process"].get<std::string>();
+              }
+            } else if (record.method == kDefine) {
+              const uint16_t id = value.value("stream", uint16_t{0});
+              if (streams[r].count(id)) continue;
+              StreamInfo& stream = streams[r][id];
+              stream.name = value.value("name", "");
+              stream.kind = value.value("kind", "");
+              stream.view = value.value("view", "");
+              for (const auto& method : value.value("methods", json::array())) {
+                stream.methods.push_back(method.value("name", "?"));
+              }
+            } else if (record.method == kGap) {
+              json dropped = json::object();
+              for (const auto& entry : value.value("dropped", json::array())) {
+                const auto id = entry.at(0).get<uint16_t>();
+                const auto found = streams[r].find(id);
+                const std::string name = id == kJournalStream          ? std::string("journal")
+                                         : found != streams[r].end() ? found->second.name
+                                                                     : "#" + std::to_string(id);
+                dropped[name] = entry.at(1);
+              }
+              json gap = {{"why", value.value("why", "")}, {"dropped", dropped}};
+              lines.push_back({record.t_ns, r, seq, Text(record.t_ns, processes[r], "journal", "gap", Dump(gap))});
+            } else if (record.method == kEnd) {
+              lines.push_back({record.t_ns, r, seq,
+                               Text(record.t_ns, processes[r], "journal", "end", Dump(value.value("reason", "")))});
             }
-          } else if (record.method == kDefine) {
-            const uint16_t id = value.value("stream", uint16_t{0});
-            if (streams[r].count(id)) continue;
-            StreamInfo& stream = streams[r][id];
-            stream.name = value.value("name", "");
-            stream.kind = value.value("kind", "");
-            stream.view = value.value("view", "");
-            for (const auto& method : value.value("methods", json::array())) {
-              stream.methods.push_back(method.value("name", "?"));
-            }
-          } else if (record.method == kGap) {
-            json dropped = json::object();
-            for (const auto& entry : value.value("dropped", json::array())) {
-              const auto id = entry.at(0).get<uint16_t>();
-              const auto found = streams[r].find(id);
-              const std::string name = id == kJournalStream          ? std::string("journal")
-                                       : found != streams[r].end() ? found->second.name
-                                                                   : "#" + std::to_string(id);
-              dropped[name] = entry.at(1);
-            }
-            json gap = {{"why", value.value("why", "")}, {"dropped", dropped}};
-            lines.push_back({record.t_ns, r, seq, Text(record.t_ns, processes[r], "journal", "gap", Dump(gap))});
-          } else if (record.method == kEnd) {
-            lines.push_back({record.t_ns, r, seq,
-                             Text(record.t_ns, processes[r], "journal", "end", Dump(value.value("reason", "")))});
+          } catch (const json::exception&) {
           }
           continue;
         }
