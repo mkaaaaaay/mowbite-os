@@ -90,6 +90,12 @@ def data_names(folder):
     return sorted(name for name in os.listdir(folder) if not kept_out(name))
 
 
+def has_data(folder, besides=()):
+    """Whether folder holds data beyond the names in besides (the file of the device, put there before the first
+    start, is no data of an earlier schema yet)."""
+    return any(name not in besides for name in data_names(folder))
+
+
 def backup_path(data_dir, number):
     return os.path.join(data_dir, f"{BACKUP}{number}")
 
@@ -264,14 +270,14 @@ def need_room(data_dir, needed, schema):
                    f"there are {free // 1048576} MB; nothing was changed.", schema)
 
 
-def prepare(data_dir, schema, version="unknown", steps=None, wait=LOCK_WAIT):
+def prepare(data_dir, schema, version="unknown", steps=None, wait=LOCK_WAIT, besides=()):
     """Brings data_dir to schema and returns the file descriptor of its lock, to keep open while the OS runs, and
-    the note of a way back, if there was one. Raises Halt when no node may start."""
+    the note of a way back, if there was one; besides as in has_data. Raises Halt when no node may start."""
     steps = STEPS if steps is None else steps
     os.makedirs(data_dir, 0o700, exist_ok=True)
     fd = lock(data_dir, wait)
     try:
-        return fd, _prepare(data_dir, schema, version, steps)
+        return fd, _prepare(data_dir, schema, version, steps, besides)
     except OSError as error:
         os.close(fd)
         raise Halt("DATA_ERROR", f"{data_dir} cannot be prepared: {error}.")
@@ -280,7 +286,7 @@ def prepare(data_dir, schema, version="unknown", steps=None, wait=LOCK_WAIT):
         raise
 
 
-def _prepare(data_dir, schema, version, steps):
+def _prepare(data_dir, schema, version, steps, besides=()):
     clean(data_dir)
     remove(os.path.join(data_dir, ROLLBACK_NOTE))
     state = read_schema(data_dir)
@@ -293,7 +299,7 @@ def _prepare(data_dir, schema, version, steps):
         state = {"schema": start, "by": state.get("by", "unknown")}
         write_json(data_dir, SCHEMA_FILE, state)
     if state is None:
-        current = 1 if data_names(data_dir) else schema
+        current = 1 if has_data(data_dir, besides) else schema
     else:
         current = state["schema"]
     note = None

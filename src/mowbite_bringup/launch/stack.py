@@ -85,7 +85,7 @@ def halt_actions(line, logger):
 
 
 # DDS and data_dir for this image before any node starts (data_store.py): None to go on, else the halt.
-def prepare_data_dir(data_dir, logger):
+def prepare_data_dir(data_dir, logger, besides=()):
     try:
         os.remove(halt_file())
     except FileNotFoundError:
@@ -97,7 +97,8 @@ def prepare_data_dir(data_dir, logger):
             return None
         schema, _ = data_store.image_schema()
         # The lock stays open until this process ends, after its nodes have stopped writing.
-        _, note = data_store.prepare(data_dir, schema, os.environ.get("MOWBITE_OS_REVISION") or "unknown")
+        _, note = data_store.prepare(data_dir, schema, os.environ.get("MOWBITE_OS_REVISION") or "unknown",
+                                     besides=besides)
     except data_store.Halt as halt:
         line = halt.line(schema)
     except (OSError, ValueError, KeyError, LookupError) as error:
@@ -507,7 +508,9 @@ def launch_setup(context, platform, module):
 
     logger = launch.logging.get_logger(f"{platform}.launch")
     data_dir = arg("data_dir")
-    halt = prepare_data_dir(data_dir, logger)
+    # The file of the device alone is no data yet: the first start counts as new and imports.
+    device_name = (os.path.basename(layers.device_file(data_dir, platform)),) if data_dir else ()
+    halt = prepare_data_dir(data_dir, logger, device_name)
     if halt:
         return halt
     # What every mower shares, the values of the platform, values on top of both, then what the setup program found
@@ -532,7 +535,8 @@ def launch_setup(context, platform, module):
     if halt:
         return halt
     import_dir = arg("import_dir")
-    if import_dir and data_dir and getattr(module, "OPENMOWER_IMPORT", False) and migrate.wanted(data_dir):
+    if (import_dir and data_dir and getattr(module, "OPENMOWER_IMPORT", False)
+            and migrate.wanted(data_dir, device_name)):
         migrate.take(data_dir, import_dir, int(layers.parameters(files, "mowbite_map")["max_map_bytes"]), logger)
     parts = module.parts(Start(arg, files, found, device, data_dir, journal, logger))
     driver = []

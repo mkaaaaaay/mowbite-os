@@ -194,6 +194,32 @@ def test_a_broken_parameter_file_fails_the_import_but_not_the_start(tmp_path):
     assert not migrate.wanted(data_dir)
 
 
+# PyYAML quotes the line of the error; the note keeps its kind and line number only.
+def test_a_broken_parameter_file_leaves_its_text_out(tmp_path):
+    params = PARAMS.replace(f'password: "{SECRET}"', f"password: {SECRET}: [")
+    data_dir, note = take(tmp_path, source(tmp_path, params=params))
+    assert note["state"] == "failed"
+    assert "line" in note["error"]
+    assert SECRET not in all_text(data_dir)
+
+
+# A note that cannot be written at the end leaves no pending one: the next start would import again.
+def test_a_note_not_written_at_the_end_is_not_left_pending(tmp_path, monkeypatch):
+    writes = []
+    real = migrate.data_store.write_json
+
+    def write_json(folder, name, value):
+        writes.append(name)
+        if name == "migrate.json" and len(writes) > 1:
+            raise OSError("no space")
+        real(folder, name, value)
+    monkeypatch.setattr(migrate.data_store, "write_json", write_json)
+    data_dir, note = take(tmp_path, source(tmp_path))
+    assert note["state"] == "done"
+    assert not os.path.exists(os.path.join(data_dir, "migrate.json"))
+    assert not migrate.wanted(data_dir)
+
+
 def test_only_a_first_start_or_a_cut_off_import_imports(tmp_path):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -206,8 +232,12 @@ def test_only_a_first_start_or_a_cut_off_import_imports(tmp_path):
     (data_dir / "migrate.json").write_text("{")
     assert not migrate.wanted(str(data_dir))
     (data_dir / "migrate.json").unlink()
-    (data_dir / "map.json").write_text("{}")
+    # The file of the device, put there before the first start, is no data yet.
+    (data_dir / "nx60i.yaml").write_text("x: 1\n")
+    assert migrate.wanted(str(data_dir), ("nx60i.yaml",))
     assert not migrate.wanted(str(data_dir))
+    (data_dir / "map.json").write_text("{}")
+    assert not migrate.wanted(str(data_dir), ("nx60i.yaml",))
 
 
 def test_a_cut_off_import_starts_over_without_what_it_left(tmp_path):

@@ -112,6 +112,15 @@ def test_a_new_data_dir_gets_the_schema_of_the_image(data_dir):
     assert data_store.backups(other) == []
 
 
+def test_the_file_of_the_device_alone_is_no_data(data_dir):
+    os.makedirs(data_dir)
+    write(os.path.join(data_dir, "nx60i.yaml"), "x: 1\n")
+    start(data_dir, 3, besides=("nx60i.yaml",))
+    assert schema_of(data_dir)["schema"] == 3
+    assert data_store.backups(data_dir) == []
+    assert data_store.has_data(data_dir) and not data_store.has_data(data_dir, ("nx60i.yaml",))
+
+
 def test_data_from_before_the_schema_counts_as_schema_1(data_dir):
     garden(data_dir)
     before = tree(data_dir)

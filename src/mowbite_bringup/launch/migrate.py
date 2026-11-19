@@ -141,11 +141,12 @@ def read_note(data_dir):
     return note if isinstance(note, dict) else {}
 
 
-def wanted(data_dir):
-    """Whether this start imports: data_dir has no data and no note yet, or the note of an import cut off."""
+def wanted(data_dir, besides=()):
+    """Whether this start imports: data_dir has no data and no note yet, or the note of an import cut off; besides as
+    in data_store.has_data."""
     note = read_note(data_dir)
     if note is None:
-        return not data_store.data_names(data_dir)
+        return not data_store.has_data(data_dir, besides)
     return note.get("state") == "pending"
 
 
@@ -214,6 +215,11 @@ def take(data_dir, import_dir, map_max_bytes, logger, ranges=None, run=run_tool)
         data_store.write_json(data_dir, NOTE, note)
     except OSError as error:
         logger.error(f"{NOTE} cannot be written: {error}")
+        # Never pending once the nodes start with what came over: the next start would remove it and import again.
+        try:
+            data_store.remove(os.path.join(data_dir, NOTE))
+        except OSError as gone:
+            logger.error(f"{NOTE} cannot be removed: {gone}")
     if note["state"] == "done":
         logger.info(f"Taken over from OpenMower: {', '.join(note['taken']) or 'nothing'}; "
                     f"{len(note['not_taken'])} left behind, see {os.path.join(data_dir, NOTE)}")
@@ -231,7 +237,10 @@ def _take(data_dir, import_dir, map_max_bytes, note, ranges, run):
         try:
             loaded = yaml.safe_load(params_data.decode("utf-8", errors="replace"))
         except yaml.YAMLError as error:
-            raise ValueError(f"{PARAMS_SOURCE} cannot be read: {error}")
+            # The kind and the line only: the text of PyYAML quotes the line, which may hold the NTRIP password.
+            mark = getattr(error, "problem_mark", None)
+            where = f" in line {mark.line + 1}" if mark is not None else ""
+            raise ValueError(f"{PARAMS_SOURCE} cannot be read: {type(error).__name__}{where}")
         if not isinstance(loaded, dict):
             raise ValueError(f"{PARAMS_SOURCE} holds no values")
         params = flatten(loaded)

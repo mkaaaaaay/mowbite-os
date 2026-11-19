@@ -58,7 +58,7 @@ def start(tmp_path, monkeypatch):
     for name in [n for n in os.environ if n.startswith("MOWBITE_")]:
         monkeypatch.delenv(name)
     # The data schema needs the installed bridge.
-    monkeypatch.setattr(stack, "prepare_data_dir", lambda data_dir, logger: None)
+    monkeypatch.setattr(stack, "prepare_data_dir", lambda data_dir, logger, besides=(): None)
 
     def started(platform, module=None, **arguments):
         module = module or stack.platform_module(platform)
