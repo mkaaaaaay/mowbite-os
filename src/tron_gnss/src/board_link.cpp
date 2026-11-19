@@ -9,8 +9,9 @@ void BoardLink::OnPortOpened() {
 }
 
 void BoardLink::OnBoardReport(bool on, double now) {
-  // Only a fall back from ON is worth a reset; a first OFF (unknown -> OFF) just waits for ON.
+  // Only a fall back from ON is worth a reset; a first OFF (unknown -> OFF) just waits for ON, and ON again drops it.
   if (state_ == BoardState::kOn && !on && config_.reset_on_off && wanted(now)) pending_reset_ = true;
+  if (on) pending_reset_ = false;
   state_ = on ? BoardState::kOn : BoardState::kOff;
 }
 

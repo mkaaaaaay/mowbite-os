@@ -96,6 +96,22 @@ TEST_F(BoardTest, ResetsAtMostOnceAMinute) {
   EXPECT_EQ(board.resets(), 2u);
 }
 
+TEST_F(BoardTest, OnAgainBeforeTheGapDropsTheWaitingReset) {
+  board.OnBoardReport(true, 0);
+  board.OnRtcm(50, 0);
+  board.Poll(0);
+  board.OnBoardReport(false, 1.0);
+  EXPECT_EQ(board.Poll(1.0), kReset + kOn);
+  board.OnBoardReport(true, 3.0);
+  board.OnBoardReport(false, 5.0);
+  board.OnBoardReport(true, 6.0);
+  for (double t = 5.0; t <= 70.0; t += 1.0) {
+    board.OnRtcm(50, t);
+    EXPECT_EQ(board.Poll(t).find(kReset), std::string::npos) << t;
+  }
+  EXPECT_EQ(board.resets(), 1u);
+}
+
 TEST_F(BoardTest, FirstOffOnlyWaitsForOn) {
   board.OnPortOpened();
   board.OnRtcm(50, 0);
