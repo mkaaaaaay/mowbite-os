@@ -181,20 +181,37 @@ std::optional<RpcOutcome> MapService::HoldRefusal() const {
   return outcome;
 }
 
-// params is [map], the same shape as map/json, like with OpenMower.
+std::optional<RpcOutcome> MapService::VersionRefusal(const std::string& expected_sha256) const {
+  if (!IsSha256Hex(expected_sha256)) {
+    return Failure(kRpcInvalidParams, "expected_sha256 is not 64 lower-case hex digits");
+  }
+  const std::string current = Sha256Hex(text_);
+  if (current.empty()) return Failure(kRpcInternal, "Cannot make the SHA-256 of the map");
+  if (current != expected_sha256) return Failure(kRpcMapChanged, "map changed meanwhile");
+  return std::nullopt;
+}
+
+// params is [map], the same shape as map/json, like with OpenMower; or [map, {"expected_sha256": the SHA-256 of
+// map/json as the caller last read it}], which refuses the map when another one was stored meanwhile.
 RpcOutcome MapService::Replace(const json& params) {
   if (auto held = HoldRefusal()) return *held;
-  if (!params.is_array() || params.size() != 1) return Failure(kRpcInvalidParams, "Missing map parameter");
+  if (!params.is_array() || params.empty() || params.size() > 2) {
+    return Failure(kRpcInvalidParams, "Missing map parameter");
+  }
+  if (params.size() == 2) {
+    const json& check = params[1];
+    if (!check.is_object() || !check.contains("expected_sha256") || !check["expected_sha256"].is_string()) {
+      return Failure(kRpcInvalidParams, "The second parameter is {\"expected_sha256\": the SHA-256 of map/json}");
+    }
+    if (auto refused = VersionRefusal(check["expected_sha256"].get<std::string>())) return *refused;
+  }
   return ReplaceMap(params[0]);
 }
 
 RpcOutcome MapService::ReplaceChecked(const std::string& map, const std::string& expected_sha256) {
   if (auto held = HoldRefusal()) return *held;
   if (!expected_sha256.empty()) {
-    if (!IsSha256Hex(expected_sha256)) return Failure(kRpcInvalidParams, "expected_sha256 is not 64 lower-case hex digits");
-    const std::string current = Sha256Hex(text_);
-    if (current.empty()) return Failure(kRpcInternal, "Cannot make the SHA-256 of the map");
-    if (current != expected_sha256) return Failure(kRpcMapChanged, "map changed meanwhile");
+    if (auto refused = VersionRefusal(expected_sha256)) return *refused;
   }
   const json parsed = json::parse(map, nullptr, false);
   if (parsed.is_discarded()) return Failure(kRpcInvalidParams, "Invalid map: not valid JSON");

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_map/sha256.h"
 #include "mowbite_map/map_service.h"
 #include "mowbite_map/sha256.h"
 
@@ -794,7 +795,8 @@ TEST(MapDatum, AMapWhoseDatumWasNotWrittenAfterItIsNotTiedToTheOldOne) {
   {
     MapService service(ConfigFor(dir));
     service.SetDatum(Moved(1000.0));
-    ASSERT_TRUE(service.Call("map.replace", json::array({json::parse(R"({"areas": [], "docking_stations": []})")}))->ok);
+    const json empty = json::parse(R"({"areas": [], "docking_stations": []})");
+    ASSERT_TRUE(service.Call("map.replace", json::array({empty}))->ok);
     // The datum file cannot be written: the new recording of the other datum keeps no tie.
     fs::create_directory(dir.path() / "map_datum.json.tmp");
     const auto area = service.AddArea("mow", "New", Square(3));
@@ -834,6 +836,26 @@ TEST(MapDatum, ADatumFileOfAnOlderVersionStillTies) {
   MapService service(ConfigFor(dir));
   service.SetDatum(kDatum);
   EXPECT_EQ(service.status().datum, DatumState::kMatch);
+}
+
+TEST(MapService, ReplaceWithTheVersionReadRefusesAMapChangedMeanwhile) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  ASSERT_TRUE(service.Call("map.replace", json::array({AppMap()}))->ok);
+  const std::string read = mowbite_map::Sha256Hex(service.map_text());
+  // The logic adds an area meanwhile.
+  ASSERT_TRUE(service.AddArea("mow", "More", Square(2)).ok);
+  const std::string before = service.map_text();
+  auto answer = service.Call("map.replace", json::array({AppMap(), {{"expected_sha256", read}}}));
+  EXPECT_FALSE(answer->ok);
+  EXPECT_EQ(answer->code, -32001);
+  EXPECT_EQ(service.map_text(), before);
+  answer = service.Call("map.replace",
+                        json::array({AppMap(), {{"expected_sha256", mowbite_map::Sha256Hex(service.map_text())}}}));
+  EXPECT_TRUE(answer->ok) << answer->message;
+  EXPECT_EQ(service.Call("map.replace", json::array({AppMap(), {{"expected_sha256", "abc"}}}))->code, -32602);
+  EXPECT_EQ(service.Call("map.replace", json::array({AppMap(), "x"}))->code, -32602);
+  EXPECT_EQ(service.Call("map.replace", json::array({AppMap(), json::object(), json::object()}))->code, -32602);
 }
 
 TEST(MapService, RefusesAnAreaNameThatIsNotUtf8) {

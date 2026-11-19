@@ -156,6 +156,8 @@ class MapService {
   RpcOutcome AreaProperties() const;
   // kRpcHold while an update holds the mower.
   std::optional<RpcOutcome> HoldRefusal() const;
+  // kRpcMapChanged when the map text is not the one of expected_sha256, kRpcInvalidParams for no SHA-256.
+  std::optional<RpcOutcome> VersionRefusal(const std::string& expected_sha256) const;
   // Stores the map and makes it the current one. replaces: the whole map is sent again (map.replace).
   RpcOutcome Commit(MapData candidate, bool replaces);
   // Checks a map made by an edit the way a replaced map is checked, then stores it.

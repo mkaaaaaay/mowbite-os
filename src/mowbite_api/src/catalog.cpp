@@ -1168,8 +1168,12 @@ const std::vector<Method>& Methods() {
        "id the list does not have",
        Object("params", "Which", {Client(), Integer("id", "The entry; all without", false)}),
        Object("result", "What went", {Integer("removed", "Entries removed")}), kObstaclesOffered},
-      {"map.replace", "mowbite_map", "Replaces the map with the one given, in the shape of map/json",
-       List("params", "[map]", Type::kObject), Text("result", "Successfully stored map (n areas)"), ""},
+      {"map.replace", "mowbite_map",
+       "Replaces the map with the one given, in the shape of map/json. With a second parameter {\"expected_sha256\": "
+       "sha256 of the map/json text the client last read} another map stored meanwhile is not replaced (-32001 map "
+       "changed meanwhile)",
+       List("params", "[map] or [map, {expected_sha256}]", Type::kObject),
+       Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),
        List("result", "Property names", Type::kString), ""},
       {"ntrip.get", "mowbite_ntrip", "The access to the caster for corrections, without user and password",
