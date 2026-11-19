@@ -68,3 +68,12 @@ TEST(ParamTable, TheStartObjectStaysUnderTheNodes) {
   table.Apply(R"({"node":"/n","params":{"a":true}})");
   EXPECT_EQ(table.Text(), R"({"/mower_logic/x":1,"/n/a":true})");
 }
+
+TEST(ParamTable, SecretsAreMaskedAtEveryDepthAndInTheBase) {
+  ParamTable table(R"({"/n/password": "p1", "/n/url": "ntrip://u:pw@host/M"})");
+  ASSERT_TRUE(table.Apply(R"({"node": "/m", "params": {"access": {"user": "u", "token": "t1"},
+                                                       "list": ["http://a:b@h"]}})"));
+  const std::string text = table.Text();
+  for (const char* secret : {"p1", "pw@", "t1", "a:b@"}) EXPECT_EQ(text.find(secret), std::string::npos) << secret;
+  EXPECT_NE(text.find("\"user\":\"u\""), std::string::npos) << text;
+}
