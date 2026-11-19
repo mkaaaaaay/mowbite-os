@@ -206,6 +206,8 @@ class BridgeCore {
   void NoteMethods();
   // -32601 to every open call of one of these methods.
   void FailCalls(const std::set<std::string>& methods);
+  // Calls open longer than kCallWaitS end with kInternalError.
+  void ExpireCalls(double now);
 
   BridgeConfig config_;
   bool connected_ = false;

@@ -342,6 +342,10 @@ void BridgeCore::OnRpcMethods(const std::string& node, const std::vector<std::st
       Log(kLogWarn, CleanUtf8(node) + " registered anew from another process");
       FailCalls(methods_.Of(node));
     }
+    // Calls of methods the node no longer offers get no answer from it.
+    std::set<std::string> dropped = methods_.Of(node);
+    for (const auto& method : methods) dropped.erase(method);
+    FailCalls(dropped);
     methods_.SetNode(node, methods);
     if (methods.empty()) {
       node_provider_.erase(node);
@@ -402,6 +406,7 @@ void BridgeCore::OnProviders(const std::set<std::string>& alive) {
 }
 
 void BridgeCore::Tick(double t) {
+  Guard("calls", [&] { ExpireCalls(Now()); });
   Guard("methods", [&] {
     if (!methods_changed_ || !connected_ || Now() - *methods_changed_ < kMethodsCollectS) return;
     methods_changed_.reset();
@@ -513,10 +518,13 @@ double BridgeCore::Now() const {
 
 std::string BridgeCore::Open(const Json& id, const std::string& method, const Reply& to) {
   const double now = Now();
-  while (!open_.empty() && now - open_.begin()->second.since > kCallWaitS) open_.erase(open_.begin());
+  ExpireCalls(now);
   if (open_.size() >= kMaxOpenCalls) {
     Log(kLogWarn, "Bridge: " + std::to_string(kMaxOpenCalls) + " calls are open, the oldest (" +
-                      CleanUtf8(open_.begin()->second.method) + ") gets no answer");
+                      CleanUtf8(open_.begin()->second.method) + ") ends without the answer of its node");
+    SendReply(open_.begin()->second.to,
+              ErrorReply(open_.begin()->second.id, kInternalError,
+                         "Too many calls are open: the answer of the node will not come through"));
     open_.erase(open_.begin());
   }
   const uint64_t number = ++next_call_;
@@ -529,6 +537,15 @@ void BridgeCore::NoteMethods() {
     methods_changed_.reset();
   } else if (!methods_changed_) {
     methods_changed_ = Now();
+  }
+}
+
+void BridgeCore::ExpireCalls(double now) {
+  while (!open_.empty() && now - open_.begin()->second.since > kCallWaitS) {
+    SendReply(open_.begin()->second.to,
+              ErrorReply(open_.begin()->second.id, kInternalError,
+                         "No answer of the node within " + std::to_string(static_cast<int>(kCallWaitS)) + " s"));
+    open_.erase(open_.begin());
   }
 }
 
