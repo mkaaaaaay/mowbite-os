@@ -38,8 +38,11 @@ int Write(const std::filesystem::path& dir) {
     }
     // Within a break the new schema only adds; a raised kApiBreak may take away.
     if (mowbite_api::ApiBreakOf(old) == mowbite_api::kApiBreak) {
-      for (const auto& problem : mowbite_api::CheckAdditive(old, mowbite_api::Schema())) {
-        std::cerr << "not only added: " << problem << "\n";
+      const auto problems = mowbite_api::CheckAdditive(old, mowbite_api::Schema());
+      for (const auto& problem : problems) std::cerr << "not only added: " << problem << "\n";
+      if (!problems.empty()) {
+        std::cerr << file << " stays: raise kApiBreak in catalog.h for a change that takes away\n";
+        return 1;
       }
     }
     // Without a version (the placeholder before the first schema) there is nothing to keep.

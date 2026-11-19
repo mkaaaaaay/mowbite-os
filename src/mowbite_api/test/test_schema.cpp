@@ -147,6 +147,12 @@ TEST(Additive, WhatIsTakenAwayIsFound) {
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-reasons"]["STATE"].erase("MANUAL"); }), "x-reasons.STATE.MANUAL"));
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-emergency-bits"][3]["name"] = "LIFTED"; }), "x-emergency-bits"));
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-commands"].erase("docking.start"); }), "x-commands.docking.start"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-methods"].erase("map.replace"); }), "x-methods.map.replace: gone"));
+  // A parameter newly limited breaks callers; a result's limit may only narrow.
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["docking.test.params"]["properties"]["runs"]["maximum"] = 10; }),
+                  "maximum tighter"));
+  EXPECT_TRUE(changed([](Json& s) { s["$defs"]["robot_state"]["properties"]["battery_percentage"]["maximum"] = 1; })
+                  .empty());
   EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["robot_state"]["required"] = Json::array(); }),
                   "no longer always there"));
   EXPECT_TRUE(Has(changed([](Json& s) {

@@ -412,10 +412,25 @@ void Compare(const Json& older, const Json& newer, const std::string& path, bool
   const std::set<std::string> old_types = Types(older);
   const std::set<std::string> new_types = Types(newer);
   for (const auto& type : old_types) {
-    // integer may widen to number, never the other way.
-    if (!new_types.count(type) && !(type == "integer" && new_types.count("number"))) {
+    // A parameter may widen from integer to number, a result not: the client would get what it cannot read.
+    if (!new_types.count(type) && !(params && type == "integer" && new_types.count("number"))) {
       out->push_back(path + ": type " + type + " gone");
     }
+  }
+  // Limits: parameters may only loosen them, results only tighten them.
+  for (const auto& [key, lower] : {std::pair<const char*, bool>{"minimum", true}, {"minLength", true},
+                                   {"minItems", true}, {"maximum", false}, {"maxLength", false},
+                                   {"maxItems", false}}) {
+    const bool had = older.contains(key) && older[key].is_number();
+    const bool has = newer.contains(key) && newer[key].is_number();
+    const double before = had ? older[key].get<double>() : 0.0;
+    const double now = has ? newer[key].get<double>() : 0.0;
+    const bool tighter = has && (!had || (lower ? now > before : now < before));
+    const bool wider = had && (!has || (lower ? now < before : now > before));
+    if (params ? tighter : wider) out->push_back(path + ": " + key + (params ? " tighter" : " wider"));
+  }
+  if (params && newer.contains("pattern") && (!older.contains("pattern") || older["pattern"] != newer["pattern"])) {
+    out->push_back(path + ": pattern newly set or changed");
   }
   if (older.contains("const") && (!newer.contains("const") || newer["const"] != older["const"])) {
     out->push_back(path + ": const changed");
@@ -507,10 +522,13 @@ std::vector<std::string> CheckAdditive(const Json& older, const Json& newer) {
     });
     if (!kept) out.push_back("x-emergency-bits." + bit.value("name", "?") + ": gone or renamed");
   }
-  const Json& new_commands = newer.value("x-commands", Json::object());
-  const Json old_commands = older.value("x-commands", Json::object());
-  for (const auto& [name, command] : old_commands.items()) {
-    if (!new_commands.contains(name)) out.push_back("x-commands." + name + ": gone");
+  // Ratings in x-reasons may change; what an app may call or read may not go.
+  for (const char* section : {"x-commands", "x-methods", "x-settings", "x-geometry", "x-sensors"}) {
+    const Json& now = newer.value(section, Json::object());
+    const Json before = older.value(section, Json::object());
+    for (const auto& [name, entry] : before.items()) {
+      if (!now.contains(name)) out.push_back(std::string(section) + "." + name + ": gone");
+    }
   }
   return out;
 }
