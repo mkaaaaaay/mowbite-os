@@ -85,6 +85,61 @@ TEST_F(TrackerTest, AFrameWithoutAPoseNearItsStampIsLeftOut) {
   EXPECT_TRUE(lost.tracks().empty());
 }
 
+TEST_F(TrackerTest, FramesWithoutAPoseOrAnOldPoseLeaveNoSight) {
+  Feed(1.0);
+  ASSERT_TRUE(tracker.StatusAt(1.1).sight);
+  // The poses stop: the next frame cannot be placed.
+  tracker.OnFrame(At(1.6), 1.65);
+  Status status = tracker.StatusAt(1.7);
+  EXPECT_FALSE(status.sight);
+  EXPECT_EQ(status.reason, "NO_SIGNAL");
+  // A frame with its pose again sees.
+  Feed(1.8);
+  EXPECT_TRUE(tracker.StatusAt(1.9).sight);
+}
+
+// A box cut at the lower edge of the image: the thing may reach down to where the view begins.
+TEST_F(TrackerTest, AFindCutAtTheBottomReachesToTheStartOfTheView) {
+  Stand(0, 0, 0);
+  Find cut = Thing(Kind::kObject, 2.0, 0.0);
+  cut.cut_bottom = true;
+  Feed(1.0, {cut});
+  Feed(1.2, {cut});
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  const Track& track = tracker.tracks().begin()->second;
+  EXPECT_NEAR(track.x, (0.866 + 2.0) / 2, 0.02);
+  EXPECT_NEAR(track.radius, 0.1 + 0.5 * (2.0 - 0.466 - 0.4), 1e-6);
+  EXPECT_TRUE(tracker.StatusAt(1.3).stop);
+  // The same thing whole is beyond the zone.
+  Tracker whole;
+  whole.SetSources({"stereo"});
+  whole.SetBody({0.605, 0.12, 0.235});
+  for (double t : {1.0, 1.2}) {
+    whole.OnPose({t, 0.0, 0.0, 0.0, 0.0});
+    whole.OnFrame(At(t, {Thing(Kind::kObject, 2.0, 0.0)}), t + 0.05);
+  }
+  EXPECT_FALSE(whole.StatusAt(1.3).stop);
+}
+
+// Two sensors: frames of the rear one, which does not see the place ahead, leave the front one to see it free.
+TEST_F(TrackerTest, AThingIsSeenFreeBetweenFramesOfAnotherSensor) {
+  tracker.SetSources({"stereo", "rear"});
+  Feed(1.0, {Thing(Kind::kObject, 2.0, 0.0)});
+  Feed(1.1, {Thing(Kind::kObject, 2.0, 0.0)});
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  bool ended = false;
+  for (double t = 1.2; t < 3.0 && !ended; t += 0.1) {
+    ended = !Feed(t).ended.empty();
+    Frame rear = At(t + 0.05);
+    rear.source = "rear";
+    rear.view = {-0.12, 0.0, -150.0 * kDeg, 150.0 * kDeg, 0.4, 4.0};
+    pose.stamp = t + 0.05;
+    tracker.OnPose(pose);
+    tracker.OnFrame(rear, t + 0.06);
+  }
+  EXPECT_TRUE(ended);
+}
+
 TEST_F(TrackerTest, AFrameOfAnotherSensorIsIgnored) {
   Frame frame = At(1.0, {Thing(Kind::kObject, 2.0, 0.0)});
   frame.source = "rear";
@@ -415,6 +470,20 @@ TEST(Body, WithoutItTheSensorsAreNotSetUp) {
   EXPECT_EQ(status.reason, "NOT_SET_UP");
   tracker.SetBody({0.605, 0.12, 0.235});
   EXPECT_TRUE(tracker.StatusAt(1.1).sight);
+}
+
+TEST(Pose, TheErrorOfTheHeadingWidensAFindByItsDistance) {
+  Tracker tracker;
+  tracker.SetSources({"stereo"});
+  tracker.SetBody({0.605, 0.12, 0.235});
+  Pose pose{1.0, 0.0, 0.0, 0.0, 0.0};
+  pose.heading_accuracy = 0.1;
+  tracker.OnPose(pose);
+  tracker.OnFrame(At(1.0, {Thing(Kind::kObject, 2.0, 0.0)}), 1.0);
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  const Track& track = tracker.tracks().begin()->second;
+  EXPECT_NEAR(track.cov_yy, 0.0025 + 0.04, 1e-9);
+  EXPECT_NEAR(track.cov_xx, 0.01 + 0.04, 1e-9);
 }
 
 TEST(Pose, OneThatIsNotFiniteIsLeftOut) {

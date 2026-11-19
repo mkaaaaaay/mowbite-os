@@ -16,6 +16,11 @@ namespace mowbite_obstacles {
 
 using Json = nlohmann::ordered_json;
 
+// The file of the photo of an entry, in the folder of the photos.
+inline std::string PhotoName(uint32_t entry) {
+  return "o" + std::to_string(entry) + ".jpg";
+}
+
 struct Photo {
   std::string name;
   std::string sha256;

@@ -195,7 +195,8 @@ bool ObstacleList::Load(const std::string& text) {
   const Json json = Json::parse(text, nullptr, false);
   if (!json.is_object() || !json.contains("entries") || !json["entries"].is_array()) return false;
   std::map<uint32_t, Entry> entries;
-  uint32_t next_id = json.value("next_id", 1u);
+  uint32_t next_id = 1;
+  if (json.contains("next_id") && json["next_id"].is_number_unsigned()) next_id = json["next_id"].get<uint32_t>();
   for (const Json& item : json["entries"]) {
     if (!item.is_object()) continue;
     try {
@@ -225,7 +226,8 @@ bool ObstacleList::Load(const std::string& text) {
         photo.box_y = box.at("y").get<double>();
         photo.box_w = box.at("w").get<double>();
         photo.box_h = box.at("h").get<double>();
-        entry.photo = photo;
+        // Only a photo by the name the service gives this entry: the name is read and deleted later.
+        if (photo.name == PhotoName(entry.id)) entry.photo = photo;
       }
       next_id = std::max(next_id, entry.id + 1);
       entries[entry.id] = std::move(entry);

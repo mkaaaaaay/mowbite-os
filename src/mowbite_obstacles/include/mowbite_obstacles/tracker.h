@@ -34,6 +34,8 @@ struct Find {
   double box_y = 0.0;
   double box_w = 0.0;
   double box_h = 0.0;
+  // The box touches the lower edge of the image: the footprint reaches nearer than x, y.
+  bool cut_bottom = false;
 };
 
 // Where a sensor sees the ground, as Obstacles.msg has it.
@@ -62,8 +64,9 @@ struct Pose {
   double x = 0.0;
   double y = 0.0;
   double heading = 0.0;
-  // Expected error of x and y (m).
+  // Expected error of x and y (m) and of the heading (rad).
   double accuracy = 0.0;
+  double heading_accuracy = 0.0;
 };
 
 // The body of the mower around base_link (m): its nose ahead, its back behind, half its width.
@@ -99,7 +102,7 @@ struct TrackerConfig {
   // A frame needs a pose within this of its stamp (s); poses kept this long.
   double pose_gap = 0.25;
   double pose_keep = 3.0;
-  // A sensor without a frame this long has no sight (s).
+  // A sensor without a frame this long has no sight, nor any without a pose this long (s).
   double stale = 1.0;
   // Zones from the nose (m): stop for living things ahead within stop_living_ahead in a corridor of the body plus
   // stop_living_margin on each side, or anywhere within stop_living_around of the body; for objects within
@@ -145,6 +148,8 @@ struct Track {
   double cov_yy = 0.0;
   bool confirmed = false;
   bool in_view = false;
+  // The sensor whose last frame had its place in view; a frame of another one that does not see it changes nothing.
+  std::string viewed_by;
   double first_seen = 0.0;
   double last_seen = 0.0;
   // Since when its place has been in view without a find; negative while not.
@@ -209,7 +214,8 @@ class Tracker {
   FrameResult OnFrame(const Frame& frame, double now);
   // Ends tracks that ran out of time and keeps which lie in the stop zone; returns the ids of those that ended.
   std::vector<uint32_t> Tick(double now);
-  // The sight of the sensors, the tracks and the zones at the latest pose.
+  // The sight of the sensors, the tracks and the zones at the latest pose; a frame without a pose near its stamp
+  // leaves its sensor without sight (NO_SIGNAL) until the next one.
   Status StatusAt(double now) const;
   const std::map<uint32_t, Track>& tracks() const { return tracks_; }
   const Track* TrackOf(uint32_t id) const;

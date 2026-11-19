@@ -172,5 +172,20 @@ TEST(ObstacleList, TheTextKeepsEverything) {
   EXPECT_EQ(read.size(), 0u);
 }
 
+// A file changed by hand: a next_id of another type is no crash, a photo of another name is not taken.
+TEST(ObstacleList, ATextOfOtherValuesLoadsWhatFits) {
+  ObstacleList list;
+  list.OnConfirmed(Confirmed(1, Kind::kObject, 1.0, 2.0, 100.0, 130.0));
+  list.SetPhoto(1, PhotoOf(1, 1234));
+  Json text = Json::parse(list.Text());
+  text["next_id"] = "seven";
+  text["entries"][0]["image"]["name"] = "../setup.json";
+  ObstacleList read;
+  ASSERT_TRUE(read.Load(text.dump()));
+  ASSERT_NE(read.Get(1), nullptr);
+  EXPECT_FALSE(read.Get(1)->photo.has_value());
+  EXPECT_EQ(read.OnConfirmed(Confirmed(9, Kind::kObject, 50.0, 0.0, 300.0, 300.0)).id, 2u);
+}
+
 }  // namespace
 }  // namespace mowbite_obstacles

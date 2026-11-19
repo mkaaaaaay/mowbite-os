@@ -76,6 +76,7 @@ Frame ToFrame(const mowbite_msgs::msg::Obstacles& msg) {
     find.box_y = obstacle.box_y;
     find.box_w = obstacle.box_w;
     find.box_h = obstacle.box_h;
+    find.cut_bottom = obstacle.cut_bottom;
     if (!std::isfinite(find.x) || !std::isfinite(find.y) || !std::isfinite(find.score)) continue;
     // A find whose size or spread cannot be read leaves the frame without sight rather than smaller than it is.
     if (!std::isfinite(obstacle.radius) || !std::isfinite(find.cov_xx) || !std::isfinite(find.cov_xy) ||
@@ -128,7 +129,10 @@ class ObstaclesNode : public rclcpp::Node {
         });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose& msg) {
-          tracker_.OnPose({Seconds(msg.header.stamp), msg.x, msg.y, msg.heading, msg.position_accuracy});
+          // Without its heading a pose would put the finds anywhere: frames then have no pose.
+          if (!msg.heading_valid) return;
+          tracker_.OnPose(
+              {Seconds(msg.header.stamp), msg.x, msg.y, msg.heading, msg.position_accuracy, msg.heading_accuracy});
         });
     params_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/params", LatchedQos(50), [this](const std_msgs::msg::String& msg) { OnParams(msg.data); });

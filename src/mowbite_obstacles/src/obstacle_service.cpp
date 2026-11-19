@@ -181,7 +181,7 @@ void ObstacleService::TryPhotos(const Tracker& tracker) {
 
 void ObstacleService::SavePhoto(uint32_t entry, const Image& image, const Shot& shot) {
   Photo photo;
-  photo.name = "o" + std::to_string(entry) + ".jpg";
+  photo.name = PhotoName(entry);
   photo.sha256 = mowbite_map::Sha256Hex(image.jpeg);
   photo.bytes = static_cast<int64_t>(image.jpeg.size());
   photo.width = image.width;

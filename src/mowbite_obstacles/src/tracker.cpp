@@ -32,6 +32,21 @@ bool Compatible(Kind track, Kind find) {
 }
 
 // PERSON before ANIMAL before OBJECT before UNKNOWN: a track takes the kind of a find above its own, never one below.
+// A find cut at the lower edge of the image as a disc from its place down to where the view begins, along the ray of
+// the sensor: how near it really is stays unknown.
+Find Reaching(const Find& find, const ViewSector& view) {
+  if (!find.cut_bottom) return find;
+  const double dx = find.x - view.x, dy = find.y - view.y;
+  const double far = std::hypot(dx, dy);
+  if (!(far > view.range_min)) return find;
+  const double nx = view.x + dx / far * view.range_min, ny = view.y + dy / far * view.range_min;
+  Find reaching = find;
+  reaching.x = 0.5 * (nx + find.x);
+  reaching.y = 0.5 * (ny + find.y);
+  reaching.radius = find.radius + 0.5 * (far - view.range_min);
+  return reaching;
+}
+
 int Rank(Kind kind) {
   switch (kind) {
     case Kind::kPerson:
@@ -106,7 +121,7 @@ void Tracker::SetSources(const std::vector<std::string>& sources) {
 
 void Tracker::OnPose(const Pose& pose) {
   if (!std::isfinite(pose.stamp) || !std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.heading) ||
-      !std::isfinite(pose.accuracy)) {
+      !std::isfinite(pose.accuracy) || !std::isfinite(pose.heading_accuracy)) {
     return;
   }
   if (!poses_.empty() && pose.stamp <= poses_.back().stamp) {
@@ -137,7 +152,7 @@ bool Tracker::PoseAt(double stamp, Pose* pose) const {
   if (std::min(stamp - a.stamp, b.stamp - stamp) > config_.pose_gap) return false;
   const double f = (stamp - a.stamp) / (b.stamp - a.stamp);
   *pose = {stamp, Interpolate(a.x, b.x, f), Interpolate(a.y, b.y, f), InterpolateAngle(a.heading, b.heading, f),
-           std::max(a.accuracy, b.accuracy)};
+           std::max(a.accuracy, b.accuracy), std::max(a.heading_accuracy, b.heading_accuracy)};
   return true;
 }
 
@@ -167,7 +182,10 @@ void Tracker::Update(Track& track, const Find& find, const Frame& frame, double 
   track.cov_xy = fused.spot.cov_xy;
   track.cov_yy = fused.spot.cov_yy;
   const bool moving = Living(track.kind) || Living(find.kind);
-  track.radius = moving ? find.radius : 0.5 * (track.radius + find.radius);
+  // A cut find never makes a thing smaller.
+  track.radius = moving ? find.radius
+                 : find.cut_bottom ? std::max(track.radius, find.radius)
+                                   : 0.5 * (track.radius + find.radius);
   if (std::isfinite(find.height)) {
     track.height = moving || !std::isfinite(track.height) ? find.height : 0.5 * (track.height + find.height);
   }
@@ -182,6 +200,7 @@ void Tracker::Update(Track& track, const Find& find, const Frame& frame, double 
   track.last_seen = frame.stamp;
   track.free_since = -1.0;
   track.in_view = true;
+  track.viewed_by = frame.source;
   track.window.push_back(true);
   while (static_cast<int>(track.window.size()) > config_.confirm_frames) track.window.pop_front();
   Shoot(track, find, frame);
@@ -205,6 +224,9 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
   if (!frame.sight) return result;
   Pose pose;
   if (!PoseAt(frame.stamp, &pose)) {
+    // A frame that cannot be put into the map sees nothing.
+    sensor->second.sight = false;
+    sensor->second.reason = "NO_SIGNAL";
     result.no_pose = true;
     return result;
   }
@@ -217,13 +239,19 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
     const Find* find;
     double x, y, cxx, cxy, cyy;
   };
+  std::vector<Find> reaching;
+  reaching.reserve(frame.finds.size());
+  for (const Find& find : frame.finds) reaching.push_back(Reaching(find, frame.view));
   std::vector<Mapped> finds;
-  for (const Find& find : frame.finds) {
+  for (const Find& find : reaching) {
     if (find.score < MinScore(find.kind)) continue;
+    // The error of the heading moves a find by its distance from base_link times that angle.
+    const double turned = pose.heading_accuracy * std::hypot(find.x, find.y);
+    const double spread2 = accuracy2 + turned * turned;
     finds.push_back({&find, pose.x + c * find.x - s * find.y, pose.y + s * find.x + c * find.y,
-                     c * c * find.cov_xx - 2.0 * c * s * find.cov_xy + s * s * find.cov_yy + accuracy2,
+                     c * c * find.cov_xx - 2.0 * c * s * find.cov_xy + s * s * find.cov_yy + spread2,
                      c * s * (find.cov_xx - find.cov_yy) + (c * c - s * s) * find.cov_xy,
-                     s * s * find.cov_xx + 2.0 * c * s * find.cov_xy + c * c * find.cov_yy + accuracy2});
+                     s * s * find.cov_xx + 2.0 * c * s * find.cov_xy + c * c * find.cov_yy + spread2});
   }
   std::stable_sort(finds.begin(), finds.end(),
                    [](const Mapped& a, const Mapped& b) { return a.find->score > b.find->score; });
@@ -262,6 +290,7 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
       track.class_name = mapped.find->class_name;
       track.score = mapped.find->score;
       track.in_view = true;
+      track.viewed_by = frame.source;
       track.window.push_back(true);
       Shoot(track, *mapped.find, frame);
       if (config_.confirm_hits <= 1) {
@@ -290,12 +319,17 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
     }
     const double dx = track.x - pose.x, dy = track.y - pose.y;
     const double spare = config_.view_margin + 2.0 * LargerSigma(track.cov_xx, track.cov_xy, track.cov_yy);
-    track.in_view = Inside(frame.view, c * dx + s * dy, -s * dx + c * dy, track.radius + spare);
-    if (!track.in_view) {
-      track.free_since = -1.0;
+    if (!Inside(frame.view, c * dx + s * dy, -s * dx + c * dy, track.radius + spare)) {
+      if (track.viewed_by.empty() || track.viewed_by == frame.source) {
+        track.in_view = false;
+        track.free_since = -1.0;
+        track.viewed_by.clear();
+      }
       ++it;
       continue;
     }
+    track.in_view = true;
+    track.viewed_by = frame.source;
     track.window.push_back(false);
     while (static_cast<int>(track.window.size()) > config_.confirm_frames) track.window.pop_front();
     if (track.free_since < 0.0) track.free_since = frame.stamp;
@@ -383,6 +417,11 @@ Status Tracker::StatusAt(double now) const {
   if (status.sight && !sources_.empty() && !body_known_) {
     status.sight = false;
     status.reason = "NOT_SET_UP";
+  }
+  // The zones need a recent pose.
+  if (status.sight && !sources_.empty() && (poses_.empty() || now - poses_.back().stamp > config_.stale)) {
+    status.sight = false;
+    status.reason = "NO_SIGNAL";
   }
   if (poses_.empty()) return status;
   double stop_ahead = std::numeric_limits<double>::infinity();
