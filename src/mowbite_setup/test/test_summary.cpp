@@ -51,7 +51,7 @@ struct Bench {
   }
 
   void Boot() {
-    program = std::make_unique<Program>(*ParseSteps(json::parse(kList), nullptr), "tron");
+    program = std::make_unique<Program>(*ParseSteps(json::parse(list), nullptr), "tron");
     EXPECT_TRUE(program->Load(record_text, kWall + now, nullptr));
     program->LoadLock(lock_text, kWall + now);
     Layer layer;
@@ -84,14 +84,14 @@ struct Bench {
       program->OnHardware(hardware, now);
       program->Tick(now, kWall + now);
       if (const auto lock = program->TakeLock()) {
-        lock_text = lock->empty() ? std::nullopt : lock;
-        program->LockWritten(true);
+        if (lock_ok) lock_text = lock->empty() ? std::nullopt : lock;
+        program->LockWritten(lock_ok);
         ++lock_writes;
       }
       if (program->TakeChanged()) record_text = program->Text();
       if (const auto layer = program->TakeLayer()) {
-        layer_text = *layer;
-        program->LayerWritten(true, now, kWall + now);
+        if (layer_ok) layer_text = *layer;
+        program->LayerWritten(layer_ok, now, kWall + now);
       }
       if (program->TakeRestart(now)) ++restarts;
     }
@@ -146,6 +146,9 @@ struct Bench {
   }
 
   std::unique_ptr<Program> program;
+  std::string list = kList;
+  bool lock_ok = true;
+  bool layer_ok = true;
   std::set<std::string> hand;
   std::string record_text;
   std::optional<std::string> lock_text;
@@ -329,6 +332,10 @@ TEST(Summary, StoppedOrWithoutRestartItGivesTheFileBack) {
   EXPECT_EQ(bench.Step("summary")["result"]["reason"], "RESTART_FAILED");
   EXPECT_TRUE(bench.Layered(mowbite_api::kSafetyDate).is_null());
   EXPECT_TRUE(bench.Resets());
+  // The restart that did not come blocks nothing: the step may start again.
+  bench.Run(0.2);
+  EXPECT_EQ(bench.Blocked(), std::vector<std::string>{});
+  EXPECT_EQ(bench.Start(), "");
 }
 
 TEST(Summary, AFailedSafetyStepOpensItAgainAndResetClosesTheLock) {
@@ -372,4 +379,91 @@ TEST(Summary, AFailedSafetyStepOpensItAgainAndResetClosesTheLock) {
   bench.Run(0.2);
   EXPECT_EQ(bench.Safety()["source"], "program");
   EXPECT_EQ(bench.Safety()["open"], false);
+}
+
+TEST(Summary, NoRestartBeforeTheLockIsWritten) {
+  Bench bench;
+  bench.lock_ok = false;
+  ASSERT_EQ(bench.Start(), "");
+  bench.Run(0.5);
+  // The reset is not on disk: a restart now would come up with the date and an open lock.
+  EXPECT_EQ(bench.restarts, 0);
+  bench.lock_ok = true;
+  bench.Run(5.5);
+  EXPECT_TRUE(bench.Resets());
+  EXPECT_EQ(bench.restarts, 1);
+}
+
+TEST(Summary, ASafetyStepThatIsNotOkAfterTheRestartFailsIt) {
+  Bench bench;
+  ASSERT_EQ(bench.Start(), "");
+  bench.Run(0.2);
+  ASSERT_EQ(bench.restarts, 1);
+  json record = json::parse(bench.record_text);
+  record["steps"]["stop"]["state"] = "open";
+  bench.record_text = record.dump();
+  bench.Boot();
+  EXPECT_EQ(bench.Step("summary")["state"], "failed");
+  EXPECT_EQ(bench.Step("summary")["result"]["reason"], "NOT_APPLIED");
+  EXPECT_EQ(bench.Safety()["open"], false);
+}
+
+TEST(Summary, AResetBeforeTheCapabilitiesClosesTheLockOfTheProgram) {
+  Bench bench;
+  ASSERT_EQ(bench.Start(), "");
+  bench.Run(0.2);
+  bench.Boot();
+  ASSERT_EQ(bench.Safety()["open"], true);
+  // The next start: hw/capabilities has not come yet, the driver runs with the date of the program.
+  bench.Boot();
+  bench.capabilities.safety_measurement_date = "";
+  bench.program->OnCapabilities(bench.capabilities);
+  ASSERT_FALSE(bench.program->Reset({{"version", bench.program->version()}}, kWall + bench.now));
+  bench.Run(0.2);
+  EXPECT_TRUE(bench.Resets());
+  EXPECT_TRUE(bench.Layered(mowbite_api::kSafetyDate).is_null());
+  bench.capabilities.safety_measurement_date = kToday;
+  bench.program->OnCapabilities(bench.capabilities);
+  EXPECT_EQ(bench.Safety()["open"], false);
+  EXPECT_EQ(bench.Safety()["source"], "program");
+}
+
+TEST(Summary, AResetWhoseFileIsNotWrittenIsTriedAgain) {
+  Bench bench;
+  ASSERT_EQ(bench.Start(), "");
+  bench.Run(0.2);
+  bench.Boot();
+  ASSERT_EQ(bench.Layered(mowbite_api::kSafetyDate), kToday);
+  bench.layer_ok = false;
+  ASSERT_FALSE(bench.program->Reset({{"version", bench.program->version()}}, kWall + bench.now));
+  bench.Run(0.2);
+  EXPECT_EQ(bench.Layered(mowbite_api::kSafetyDate), kToday);
+  EXPECT_EQ(bench.Blocked().at(0), "STORAGE_NOT_WRITABLE");
+  bench.layer_ok = true;
+  bench.Run(5.5);
+  EXPECT_TRUE(bench.Layered(mowbite_api::kSafetyDate).is_null());
+  EXPECT_TRUE(bench.Layered(mowbite_api::kFailsafeWithoutHost).is_null());
+  for (const auto& reason : bench.Blocked()) EXPECT_NE(reason, "STORAGE_NOT_WRITABLE");
+}
+
+TEST(Summary, TheDimensionsComeFirst) {
+  json list = json::parse(kList);
+  list["steps"].push_back({{"id", "dimensions"},
+                           {"stage", "dimensions"},
+                           {"check", "geometry"},
+                           {"params", {{"keys", {"track"}}}}});
+  Bench bench;
+  bench.list = list.dump();
+  bench.Boot();
+  EXPECT_EQ(bench.Blocked(), std::vector<std::string>{"LOCKED"});
+  EXPECT_EQ(bench.Step("summary")["blocked"][0]["needs"], json::array({"dimensions"}));
+  EXPECT_EQ(bench.Start(), "LOCKED");
+  World confirmed;
+  confirmed.state = "IDLE";
+  confirmed.confirmed = {"track"};
+  bench.program->OnWorld(confirmed);
+  bench.Run(0.2);
+  ASSERT_EQ(bench.Step("dimensions")["state"], "ok");
+  EXPECT_TRUE(bench.Blocked().empty());
+  EXPECT_EQ(bench.Start(), "");
 }

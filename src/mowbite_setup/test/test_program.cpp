@@ -877,6 +877,21 @@ TEST(Program, AShortLiftThatStopsFails) {
   EXPECT_EQ(bench.StepState("lift")["result"]["part"], "bump");
 }
 
+TEST(Program, AnInputThatStaysOnEndsOpenWithoutTheQuestion) {
+  Bench bench;
+  bench.PassBoard();
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.hardware.stop = true;
+  bench.Run(0.1);
+  bench.hardware.emergency_reason |= EmergencyBit("STOP");
+  bench.Run(10.5);
+  const json step = bench.StepState("stop");
+  EXPECT_EQ(step["state"], "open") << step.dump();
+  EXPECT_EQ(step["result"]["reason"], "NOT_DONE");
+  EXPECT_FALSE(bench.program.TakeLock());
+}
+
 TEST(Program, TheImuShowsEveryMoveWithItsSign) {
   Bench bench;
   ASSERT_EQ(bench.Refused(bench.Start("imu")), "");
@@ -1192,7 +1207,8 @@ TEST(Program, SkippingAbortingAndResetting) {
   ASSERT_EQ(bench.Refused(bench.Start("board")), "");
   EXPECT_EQ(skip("board", "later"), "BUSY");
   bench.Run(0.5);
-  EXPECT_EQ(bench.Refused(bench.program.Abort({{"step", "lift"}}, bench.now, kWall)), "");
+  // A client that stops another step than the one running is told which one runs.
+  EXPECT_EQ(bench.Refused(bench.program.Abort({{"step", "lift"}}, bench.now, kWall)), "BUSY");
   EXPECT_EQ(bench.StepState("board")["state"], "running");
   EXPECT_EQ(bench.Refused(bench.program.Abort(nullptr, bench.now, kWall)), "");
   step = bench.StepState("board");
@@ -1604,6 +1620,22 @@ TEST(Program, ANewTableOpensTheChecksOfTheInputsAgain) {
   bench.TakeBothParts();
   EXPECT_EQ(bench.StepState("stop")["state"], "open");
   EXPECT_TRUE(bench.StepState("stop")["result"].is_null());
+}
+
+TEST(Program, ANewTableClosesALockThatIsOpen) {
+  AssignBench bench;
+  bench.capabilities.safety_measurement_date = "2026-11-17";
+  bench.program.OnCapabilities(bench.capabilities);
+  ASSERT_EQ(bench.State()["safety"]["open"], true);
+  bench.ToTheParts();
+  bench.TakeBothParts();
+  // The checks of the inputs are open again: until they and a summary passed, a reset holds the lock.
+  const json safety = bench.State()["safety"];
+  EXPECT_EQ(safety["open"], false);
+  EXPECT_EQ(safety["why"], "RESET");
+  const auto text = bench.program.TakeLock();
+  ASSERT_TRUE(text && !text->empty());
+  EXPECT_TRUE(mowbite_hold::ParseSafetyLock(*text)->causes.at(0).reset);
 }
 
 TEST(Program, TheDelaysOfAFoundTableGetShorterOnly) {
@@ -2125,4 +2157,53 @@ TEST(Lock, AFileThatCannotBeWrittenBlocksEveryChange) {
   bench.program.LockWritten(true);
   EXPECT_FALSE(bench.program.TakeLock());
   EXPECT_EQ(bench.Refused(bench.Start("left")), "");
+}
+
+TEST(Lock, AFailureTheFileMissesClosesAgainAtTheStart) {
+  LockBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  ASSERT_EQ(bench.StepState("left")["state"], "failed");
+  // The record is on disk, the lock file is not: the next start finds the step failed and no file.
+  const std::string record = bench.program.Text();
+  Program next(*ParseSteps(json::parse(kList), nullptr), "tron");
+  ASSERT_TRUE(next.Load(record, kWall, nullptr));
+  next.OnCapabilities(bench.capabilities);
+  next.LoadLock(std::nullopt, kWall);
+  EXPECT_EQ(next.State(bench.now, {})["safety"]["open"], false);
+  const auto text = next.TakeLock();
+  ASSERT_TRUE(text && !text->empty());
+  const auto lock = mowbite_hold::ParseSafetyLock(*text);
+  ASSERT_TRUE(lock);
+  ASSERT_EQ(lock->causes.size(), 1u);
+  EXPECT_EQ(lock->causes[0].step, "left");
+  EXPECT_EQ(lock->causes[0].reason, "NO_EMERGENCY");
+  EXPECT_EQ(lock->failures, 1u);
+}
+
+TEST(Lock, TheCountOfFailuresOutlivesTheFileThatWent) {
+  LockBench bench;
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  bench.hardware.emergency_reason = 0;
+  ASSERT_EQ(mowbite_hold::ParseSafetyLock(*bench.program.TakeLock())->failures, 1u);
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(true);
+  ASSERT_EQ(bench.program.TakeLock(), std::optional<std::string>(""));
+  // Only the setup program starts again: the file is gone, the record keeps the count.
+  Program next(*ParseSteps(json::parse(kList), nullptr), "tron");
+  ASSERT_TRUE(next.Load(bench.program.Text(), kWall, nullptr));
+  next.OnCapabilities(bench.capabilities);
+  next.LoadLock(std::nullopt, kWall);
+  EXPECT_FALSE(next.TakeLock());
+  bench.program = std::move(next);
+  bench.hardware.emergency_reason = 0;
+  bench.Run(0.2);
+  ASSERT_EQ(bench.Refused(bench.Start("left")), "");
+  bench.Run(0.2);
+  bench.Bump(false);
+  EXPECT_EQ(mowbite_hold::ParseSafetyLock(*bench.program.TakeLock())->failures, 2u);
 }

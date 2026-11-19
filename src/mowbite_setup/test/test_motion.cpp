@@ -122,7 +122,7 @@ struct Mower {
     }
     const double kept = host ? (watchdog ? watchdog_s : 1e9) : hold_without_host;
     double left = 0, right = 0;
-    if (hardware.emergency_reason == 0 && setpoint_at >= 0 && now - setpoint_at <= kept) {
+    if (!stalled && hardware.emergency_reason == 0 && setpoint_at >= 0 && now - setpoint_at <= kept) {
       left = setpoint.linear - setpoint.angular * kTrack / 2;
       right = setpoint.linear + setpoint.angular * kTrack / 2;
       if (swapped) std::swap(left, right);
@@ -139,6 +139,7 @@ struct Mower {
         hardware.latch_count = 1;
         hardware.telemetry_ok = false;
         hearing_at = now + 0.8;
+        odom_from = now + odom_delay;
       } else {
         gone_until = 1e9;
       }
@@ -150,7 +151,7 @@ struct Mower {
     }
     if (gone_until < 0) {
       program.OnHardware(hardware, now);
-      program.OnWheels(left, right, now);
+      if (now >= odom_from) program.OnWheels(left, right, now);
     }
     if (on_ground) {
       // The mower moves as its wheels turn; the IMU and the antenna (at base_link) see it.
@@ -279,6 +280,7 @@ struct Mower {
     if (restarts_blade && hardware.emergency_reason == 0 && blade_off_since >= 0 && now - blade_off_since > 2.5) {
       rpm = 3000;
     }
+    if (blade_stalled) rpm = 0;
     hardware.blade_ok = true;
     hardware.blade_rpm = rpm;
   }
@@ -363,6 +365,11 @@ struct Mower {
   double blade_stop = 0.3;
   bool blade_runs_on = false;
   bool restarts_blade = false;
+  // The wheels or the blade stand whatever is asked; a new driver sends hw/wheel_odom odom_delay s after it began.
+  bool stalled = false;
+  bool blade_stalled = false;
+  double odom_delay = 0;
+  double odom_from = -1;
   int releases = 0;
   std::vector<std::string> release_reasons;
   int silences = 0;
@@ -520,6 +527,29 @@ TEST(Motion, StopMovingStopsReleasesAndTurnsAgain) {
   EXPECT_EQ(stand["ok"], true);
 }
 
+TEST(Motion, WheelsThatStoodBeforeTheTriggerMeasureNothing) {
+  Mower mower;
+  ASSERT_EQ(mower.Start("stop_moving"), "");
+  const auto turning = [&mower] {
+    const json progress = mower.StepState("stop_moving")["progress"];
+    return progress.is_object() && progress["n"] == 1 && std::abs(mower.setpoint.linear) > 0.01;
+  };
+  for (const double end = mower.now + 10; mower.now < end && !turning();) mower.Step();
+  mower.Run(0.5);
+  // The wheels stop for another reason, then the input comes.
+  mower.stalled = true;
+  mower.Run(0.6);
+  mower.hardware.stop = true;
+  mower.Latch(Bit("STOP"));
+  mower.Run(0.5);
+  mower.hardware.stop = false;
+  mower.stalled = false;
+  const json end = mower.RunToEnd(20);
+  ASSERT_FALSE(end.is_null());
+  EXPECT_EQ(end["reason"], "NO_START") << end.dump();
+  EXPECT_EQ(mower.StepState("stop_moving")["state"], "failed");
+}
+
 TEST(Motion, AnotherEmergencyEndsTheStepAndIsNotReleased) {
   Mower mower;
   ASSERT_EQ(mower.Start("stop_moving"), "");
@@ -584,6 +614,13 @@ TEST(Motion, DriverEndComesBackLatchedAndIsReleased) {
   // The latch came from the step, not from an input: the reason says so.
   ASSERT_FALSE(mower.release_reasons.empty());
   for (const auto& reason : mower.release_reasons) EXPECT_EQ(reason, "setup: the latch of the step was checked");
+
+  // The new driver sends its wheel speeds only after its status: the old speeds do not count.
+  Mower late;
+  late.odom_delay = 1.5;
+  ASSERT_EQ(late.Start("driver_end"), "");
+  end = late.RunToEnd(30);
+  EXPECT_EQ(end["state"], "ok") << end.dump();
 
   Mower gone;
   gone.comes_back = false;
@@ -995,6 +1032,43 @@ TEST(Blade, ABladeThatDoesNotStandOrRunsAgainClosesTheLock) {
     EXPECT_EQ(end["reason"], "STARTED_AGAIN") << end.dump();
     EXPECT_EQ(mower.program.State(mower.now, {})["safety"]["why"], "CHECK_FAILED");
   }
+}
+
+TEST(Blade, ABladeThatStoodBeforeTheTriggerMeasuresNothing) {
+  BladeMower mower;
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  const auto waits = [&mower] {
+    const json step = mower.StepState("blade");
+    return step["progress"].is_object() && step["progress"]["n"] == 4 && !step["ends_at"].is_null();
+  };
+  for (const double end = mower.now + 30; mower.now < end && !waits();) mower.Step();
+  ASSERT_TRUE(waits());
+  mower.blade_stalled = true;
+  mower.Run(0.6);
+  mower.hardware.stop = true;
+  mower.Latch(Bit("STOP"));
+  mower.Run(0.5);
+  mower.hardware.stop = false;
+  const json end = mower.RunToEnd(20);
+  ASSERT_FALSE(end.is_null());
+  EXPECT_EQ(end["reason"], "NO_START") << end.dump();
+}
+
+TEST(Blade, AStepThatMovesWaitsForARestartThatIsAskedFor) {
+  Mower mower(true, BladeList().c_str());
+  mower.program.SetLayer(Layer(), {});
+  mower.Run(0.2);
+  ASSERT_EQ(mower.Start("blade", kBladeConfirm), "");
+  EXPECT_EQ(mower.Start("no_command"), "BUSY");
+  ASSERT_TRUE(mower.program.TakeLayer());
+  mower.program.LayerWritten(true, mower.now, kWall);
+  mower.program.TakeChanged();
+  ASSERT_TRUE(mower.program.TakeRestart(mower.now));
+  EXPECT_EQ(mower.Start("no_command"), "BUSY");
+  // A restart that never comes does not block for good.
+  mower.Run(121);
+  EXPECT_EQ(mower.Start("blade", kBladeConfirm), "BLADE_NOT_ALLOWED");
+  EXPECT_EQ(mower.Start("no_command"), "");
 }
 
 TEST(Blade, ABladeThatDoesNotComeUpFailsWithoutClosing) {

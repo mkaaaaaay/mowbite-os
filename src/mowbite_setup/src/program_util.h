@@ -25,6 +25,13 @@ constexpr double kServiceWait = 2.0;
 constexpr double kLatchWait = 2.0;
 // The release of the program ends that emergency within this time (s).
 constexpr double kReleaseWithin = 10.0;
+// Wheels or a blade that stood this long already at the trigger did not stop by it: the pass measured nothing (s).
+constexpr double kStoodBefore = 0.3;
+
+// Whether what stands since since (below 0: it turns) stood kStoodBefore at the trigger.
+inline bool StoodBefore(double since, double trigger) {
+  return since >= 0 && trigger - since >= kStoodBefore;
+}
 
 inline uint32_t LatchBit() {
   static const uint32_t bit = EmergencyBit("LATCH");

@@ -169,7 +169,9 @@ class Program {
   // The lock of autonomous driving and mowing (mowbite_hold/lock.h): <data_dir>/safety_lock.json as the start found
   // it, nothing when it is not there, an empty text when it cannot be read (then a reset closes it). A cause of a
   // step the list does not have as a safety step becomes a reset. A safety step that fails with a reason that closes
-  // puts its cause in (failures + 1), passing it takes the cause out; skip and setup.reset leave them.
+  // puts its cause in (failures + 1), passing it takes the cause out; skip and setup.reset leave them. Called after
+  // Load: a step the record has failed with a reason that closes and the file has no cause of goes in again, and
+  // failures never falls below the count the record kept.
   void LoadLock(const std::optional<std::string>& text, double wall);
   // The file to write now, once, before setup.json and the events (empty: to remove); LockWritten tells how it went.
   std::optional<std::string> TakeLock();
@@ -221,8 +223,8 @@ class Program {
   // The parameter file to write now, once (empty: to remove); LayerWritten tells how it went.
   std::optional<std::string> TakeLayer();
   void LayerWritten(bool written, double now, double wall);
-  // Whether to restart the OS now, once: a step asked for it, record and parameter file are on disk, the mower
-  // stands in IDLE and no emergency is on but the one of learning.
+  // Whether to restart the OS now, once: a step asked for it, record, lock and parameter file are on disk, no step
+  // moves the wheels or the blade, the mower stands in IDLE and no emergency is on but the one of learning.
   bool TakeRestart(double now);
   const std::string& restart_way() const {
     return list_.restart;
@@ -414,6 +416,10 @@ class Program {
   // The cause of a failed safety step into the lock, and out again when it passes.
   void CloseLock(const Step& step, const std::string& reason, const json& fields, double wall);
   void ReleaseLock(const Step& step);
+  // A reset into the lock, unless one is there: only a passed summary takes it away.
+  void CloseWithReset(double wall);
+  // A safety step the record has failed with a reason that closes, without its cause in the lock: in again.
+  void RestoreCauses();
   bool LockOpen() const;
   json SafetyState() const;
   // The part of the running safety step saw nothing within its time: it asks pressed. On yes it fails with reason and
@@ -508,6 +514,8 @@ class Program {
   std::vector<Refusal> SummaryProblems(double now) const;
   // The safety steps of the list that are not ok, or that a cause in the lock names.
   std::vector<const Step*> SafetyStepsDue() const;
+  // The steps of the stage dimensions that are not ok: the summary comes only after the dimensions are confirmed.
+  json DimensionsDue() const;
   // The longest stand time a passed step silence measured; nothing without one.
   std::optional<double> LongestSilence() const;
   void BeginSummary(const Step& step, double wall);
@@ -522,6 +530,8 @@ class Program {
   void ReopenSummary();
   // setup.reset: the settings the program wrote come out of the parameter file, and a lock the program opened closes.
   void ResetSettings(double wall);
+  // Takes the settings of the program out of layer_; true when one was there. Again after a write that failed.
+  bool EraseSettings();
   // Who gave the date of hw/capabilities: hand, program, or empty without a date.
   std::string SafetySource() const;
   const Step* SummaryStep() const;
@@ -579,9 +589,11 @@ class Program {
   // The file differs from layer_; it is with the node to be written.
   bool layer_dirty_ = false;
   bool layer_pending_ = false;
-  // A restart is to be asked for; when it was (below 0: not yet).
+  // A restart is to be asked for; when it was (below 0: not yet, or one that did not come).
   bool restart_wanted_ = false;
   double restart_sent_ = -1;
+  // setup.reset took settings out that are not on disk yet: tried again until a write goes through.
+  bool settings_due_ = false;
   // A step inputs_assign ended without its table: the driver may still learn.
   bool leave_learning_ = false;
   Capabilities capabilities_;

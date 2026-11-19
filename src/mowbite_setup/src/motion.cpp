@@ -179,6 +179,7 @@ std::vector<Refusal> Program::DriveProblems(const Step& step, double now) const 
   }
   if (learning_) problems.push_back(Refuse("BUSY", "The driver learns its inputs"));
   if (hardware_.hold) problems.push_back(Refuse("BUSY", "An update holds the mower", {{"state", "HOLD"}}));
+  if (restart_wanted_ || restart_sent_ >= 0) problems.push_back(Refuse("BUSY", "The OS restarts", {{"state", "RESTART"}}));
   if (!Fresh(hardware_at_, now, kFresh) || !Fresh(wheels_at_, now, kFresh)) {
     problems.push_back(Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no wheel speeds"));
   } else {
@@ -468,7 +469,10 @@ void Program::TickDrive(double now, double wall) {
       }
       return;
     case Drive::kStop:
-      if (Standing(now)) {
+      if (Standing(now) && StoodBefore(still_since_, run.trigger)) {
+        DriveFail("NO_START", "The wheels stood already at the trigger: the stop was not measured", json::object(),
+                  now, wall);
+      } else if (Standing(now)) {
         const double stand = std::max(0.0, still_since_ - run.trigger);
         run.stood = still_since_;
         if (stop_moving) run.measured[run.part] = stand;
@@ -485,7 +489,8 @@ void Program::TickDrive(double now, double wall) {
       }
       return;
     case Drive::kReturn:
-      if (run.returned >= 0) {
+      // The speeds of the wheels count from the first hw/wheel_odom of the new driver on.
+      if (run.returned >= 0 && wheels_at_ > run.returned) {
         run.returned_after = run.returned - run.trigger;
         run.stood = run.returned;
         EnterDrive(Drive::kQuiet, now, wall);

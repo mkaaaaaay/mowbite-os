@@ -72,8 +72,20 @@ std::vector<const Step*> Program::SafetyStepsDue() const {
   return due;
 }
 
+json Program::DimensionsDue() const {
+  json due = json::array();
+  for (const Step& step : list_.steps) {
+    if (step.stage == "dimensions" && records_.at(step.id).state != "ok") due.push_back(step.id);
+  }
+  return due;
+}
+
 std::vector<Refusal> Program::SummaryProblems(double now) const {
   std::vector<Refusal> problems;
+  const json dimensions = DimensionsDue();
+  if (!dimensions.empty()) {
+    problems.push_back(Refuse("LOCKED", "The dimensions come first: " + dimensions.dump(), {{"needs", dimensions}}));
+  }
   if (!capabilities_known_ || !Fresh(hardware_at_, now, kFresh)) {
     problems.push_back(Refuse("DRIVER_MISSING", "The driver of the platform reports no status"));
   }
@@ -129,16 +141,7 @@ void Program::BeginSummary(const Step& step, double wall) {
   layer_.Set(node, mowbite_api::kSafetyDate, date);
   layer_.Set(node, mowbite_api::kFailsafeWithoutHost, failsafe);
   // The date the program writes counts only once the step passed: should it not, the reset keeps the lock closed.
-  const bool hand = shadowed_.count(node + "." + mowbite_api::kSafetyDate) != 0;
-  const bool reset = std::any_of(lock_.causes.begin(), lock_.causes.end(), [](const auto& c) { return c.reset; });
-  if (!hand && !reset) {
-    mowbite_hold::LockCause cause;
-    cause.reset = true;
-    cause.reason = "RESET";
-    cause.t = static_cast<int64_t>(std::floor(wall));
-    lock_.causes.push_back(std::move(cause));
-    lock_due_ = true;
-  }
+  if (!shadowed_.count(node + "." + mowbite_api::kSafetyDate)) CloseWithReset(wall);
   WantRestart();
 }
 
@@ -163,6 +166,7 @@ void Program::TickSummary(double now, double wall) {
   const double restart_time = step.Number("restart_time");
   if (!run.restarted) {
     if (restart_sent_ >= 0 && now - restart_sent_ > restart_time) {
+      restart_sent_ = -1;
       Fail("RESTART_FAILED", "The OS did not restart", {{"limit", restart_time}}, now, wall);
     }
     return;
@@ -180,6 +184,13 @@ void Program::TickSummary(double now, double wall) {
   const std::string failsafe_key = node + "." + mowbite_api::kFailsafeWithoutHost;
   const std::string& date = capabilities_.safety_measurement_date;
   const json written = ValueOf(applied, "date");
+  // What changed between the start and the restart: a safety step or a dimension that is not ok any more.
+  const json dimensions = DimensionsDue();
+  if (!SafetyStepsDue().empty() || !dimensions.empty()) {
+    Fail("NOT_APPLIED", "Safety steps or the dimensions " + dimensions.dump() + " are not ok any more",
+         json::object(), now, wall);
+    return;
+  }
   // A date the file kept by hand sets counts as it is; an empty one keeps the lock closed.
   if (shadowed_.count(date_key) ? date.empty() : written != date) {
     json fields = json::object();
@@ -236,30 +247,37 @@ std::string Program::SafetySource() const {
   return written || date == reset_date_ ? "program" : "hand";
 }
 
-void Program::ResetSettings(double wall) {
-  const bool program = SafetySource() == "program";
-  if (layer_set_) {
-    for (const Step& step : list_.steps) {
-      std::vector<const char*> keys;
-      if (IsSummary(step)) keys = {mowbite_api::kSafetyDate, mowbite_api::kFailsafeWithoutHost};
-      if (IsBlade(step)) keys = {mowbite_api::kAllowBlade};
-      for (const char* key : keys) {
-        if (layer_.Get(step.Word("node"), key).is_null()) continue;
-        layer_.Erase(step.Word("node"), key);
-        layer_dirty_ = true;
-      }
+bool Program::EraseSettings() {
+  if (!layer_set_) return false;
+  bool erased = false;
+  for (const Step& step : list_.steps) {
+    std::vector<const char*> keys;
+    if (IsSummary(step)) keys = {mowbite_api::kSafetyDate, mowbite_api::kFailsafeWithoutHost};
+    if (IsBlade(step)) keys = {mowbite_api::kAllowBlade};
+    for (const char* key : keys) {
+      if (layer_.Get(step.Word("node"), key).is_null()) continue;
+      layer_.Erase(step.Word("node"), key);
+      erased = layer_dirty_ = true;
     }
   }
+  return erased;
+}
+
+void Program::ResetSettings(double wall) {
+  // The date in the file of the program counts as its own also before hw/capabilities came, unless the file kept by
+  // hand overrules it.
+  const Step* summary = SummaryStep();
+  json written;
+  if (summary && !shadowed_.count(summary->Word("node") + "." + mowbite_api::kSafetyDate)) {
+    written = layer_.Get(summary->Word("node"), mowbite_api::kSafetyDate);
+  }
+  const bool program = SafetySource() == "program" || (written.is_string() && !written.get<std::string>().empty());
+  settings_due_ = EraseSettings();
   // A date of the file kept by hand: the lock stays as it is.
   if (!program) return;
-  reset_date_ = capabilities_.safety_measurement_date;
-  if (std::any_of(lock_.causes.begin(), lock_.causes.end(), [](const auto& c) { return c.reset; })) return;
-  mowbite_hold::LockCause cause;
-  cause.reset = true;
-  cause.reason = "RESET";
-  cause.t = static_cast<int64_t>(std::floor(wall));
-  lock_.causes.push_back(std::move(cause));
-  lock_due_ = true;
+  reset_date_ = capabilities_.safety_measurement_date.empty() ? written.get<std::string>()
+                                                              : capabilities_.safety_measurement_date;
+  CloseWithReset(wall);
 }
 
 }  // namespace mowbite_setup

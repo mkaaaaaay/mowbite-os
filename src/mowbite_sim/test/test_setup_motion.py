@@ -70,10 +70,12 @@ with open(layers.setup_file(DATA, PLATFORM), "w") as f:
     f.write("# Written by the setup program of MowBite OS, which writes it anew: values of your own go into the "
             "file of this\n# mower beside it, which is read after this one.\n"
             f"{BLADE_NODE}:\n  ros__parameters:\n    allow_blade: true\n")
-# The steps of the inputs passed: the rule of the program lets no wheel turn before; imu as well, for summary.
+# The steps of the inputs passed: the rule of the program lets no wheel turn before; imu and the dimensions as well,
+# for summary.
+DIMENSIONS = tuple(step for step, entry in STEPS.items() if entry["stage"] == "dimensions")
 write_json(os.path.join(DATA, "setup.json"),
            {"schema": 1, "platform": SETUP["platform"],
-            "steps": {step: {"state": "ok"} for step in ("stop", "lift", "bumper", "imu")}})
+            "steps": {step: {"state": "ok"} for step in ("stop", "lift", "bumper", "imu") + DIMENSIONS}})
 write_json(FLAGS, {"gps_fix": "fix"})
 
 

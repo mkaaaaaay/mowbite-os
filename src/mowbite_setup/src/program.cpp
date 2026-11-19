@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <utility>
 
 #include "mowbite_api/catalog.h"
@@ -34,6 +35,8 @@ constexpr double kReleaseAfter = 10.0;
 constexpr double kAssignSettle = 0.3;
 // The learning is taken back again this long after the parameter file could not be written (s).
 constexpr double kLayerRetry = 5.0;
+// A restart asked for that no step waits for counts as lost after this time (s).
+constexpr double kRestartLost = 120.0;
 constexpr double kDegrees = 180.0 / M_PI;
 
 constexpr const char* kStepEvent = "SETUP_STEP";
@@ -136,6 +139,9 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
   records_ = std::move(records);
   reset_date_ = file.contains("reset_date") && file["reset_date"].is_string() ? file["reset_date"].get<std::string>()
                                                                               : "";
+  if (file.contains("lock_failures") && file["lock_failures"].is_number_unsigned()) {
+    lock_.failures = static_cast<uint32_t>(std::min<uint64_t>(file["lock_failures"].get<uint64_t>(), UINT32_MAX));
+  }
   run_.reset();
   if (file.contains("version") && file["version"].is_number_integer()) {
     version_ = static_cast<int>(std::clamp<int64_t>(file["version"].get<int64_t>(), 0, 1000000000)) + 1;
@@ -198,6 +204,8 @@ std::string Program::Text() const {
                {"version", version_},
                {"steps", std::move(steps)}};
   if (!reset_date_.empty()) file["reset_date"] = reset_date_;
+  // The lock file goes while it is open; its count of failures stays here.
+  file["lock_failures"] = lock_.failures;
   // Texts of a board (firmware) may hold bytes that are no UTF-8.
   return file.dump(2, ' ', false, json::error_handler_t::replace) + "\n";
 }
@@ -500,6 +508,7 @@ void Program::LayerWritten(bool written, double now, double wall) {
   if (written) {
     layer_disk_ = layer_;
     layer_failed_ = -1;
+    settings_due_ = false;
     if (!allow_step.empty()) events_.push_back({"SETUP", {{"what", "blade_allowed"}, {"step", allow_step}}});
     return;
   }
@@ -532,7 +541,8 @@ void Program::WantRestart() {
 }
 
 bool Program::TakeRestart(double now) {
-  if (!restart_wanted_ || layer_dirty_ || layer_pending_ || changed_ || !writable_ || !RestartAllowed(now)) {
+  if (!restart_wanted_ || layer_dirty_ || layer_pending_ || changed_ || !writable_ || lock_due_ || !lock_writable_ ||
+      (run_ && IsDrive(StepOf(*run_))) || !RestartAllowed(now)) {
     return false;
   }
   restart_wanted_ = false;
@@ -644,42 +654,72 @@ void Program::Fail(const std::string& reason, const std::string& message, json f
 }
 
 void Program::LoadLock(const std::optional<std::string>& text, double wall) {
+  const uint32_t kept = lock_.failures;
   lock_ = mowbite_hold::LockRecord();
-  if (!text) return;
-  const auto record = mowbite_hold::ParseSafetyLock(*text);
+  lock_.failures = kept;
+  const auto record = text ? mowbite_hold::ParseSafetyLock(*text) : std::nullopt;
   mowbite_hold::LockCause reset;
   reset.reset = true;
   reset.t = static_cast<int64_t>(std::floor(wall));
-  if (!record) {
+  if (text && !record) {
     // Nothing tells which check failed: closed until a summary passes.
     reset.reason = "UNREADABLE";
     lock_.causes.push_back(reset);
     lock_due_ = true;
-    return;
   }
-  lock_.failures = record->failures;
-  bool reset_due = false;
-  bool changed = false;
-  for (const auto& cause : record->causes) {
-    if (cause.reset) {
-      reset_due = true;
-      reset.reason = cause.reason;
-      reset.t = cause.t;
-      continue;
+  if (record) {
+    lock_.failures = std::max(kept, record->failures);
+    bool reset_due = false;
+    bool changed = kept > record->failures;
+    for (const auto& cause : record->causes) {
+      if (cause.reset) {
+        reset_due = true;
+        reset.reason = cause.reason;
+        reset.t = cause.t;
+        continue;
+      }
+      const Step* step = list_.Find(cause.step);
+      const mowbite_api::SetupCheck* check = step ? mowbite_api::FindSetupCheck(step->check) : nullptr;
+      if (!check || !check->safety) {
+        // No step of the list can take it out: the step list changed under a failed check.
+        reset_due = changed = true;
+        continue;
+      }
+      lock_.causes.push_back(cause);
     }
-    const Step* step = list_.Find(cause.step);
-    const mowbite_api::SetupCheck* check = step ? mowbite_api::FindSetupCheck(step->check) : nullptr;
-    if (!check || !check->safety) {
-      // No step of the list can take it out: the step list changed under a failed check.
-      reset_due = changed = true;
-      continue;
+    if (reset_due) {
+      if (reset.reason.empty()) reset.reason = "RESET";
+      lock_.causes.push_back(reset);
     }
-    lock_.causes.push_back(cause);
+    lock_due_ = changed;
   }
-  if (!reset_due) return;
-  if (reset.reason.empty()) reset.reason = "RESET";
-  lock_.causes.push_back(reset);
-  lock_due_ = changed;
+  RestoreCauses();
+}
+
+// The cause of a failure whose lock file was not written before the OS stopped, or that a way back took away. The
+// count of the record has the failure already; a record without one counts it once.
+void Program::RestoreCauses() {
+  for (const Step& step : list_.steps) {
+    const Record& record = records_.at(step.id);
+    if (record.state != "failed" || !record.result.is_object()) continue;
+    const json reason = record.result.value("reason", json());
+    if (!reason.is_string() || !mowbite_api::SetupClosesLock(step.check, reason.get<std::string>())) continue;
+    const bool there = std::any_of(lock_.causes.begin(), lock_.causes.end(),
+                                   [&step](const auto& cause) { return !cause.reset && cause.step == step.id; });
+    if (there) continue;
+    mowbite_hold::LockCause cause;
+    cause.step = step.id;
+    cause.reason = reason.get<std::string>();
+    const json part = record.result.value("part", json());
+    if (part.is_string()) cause.part = part.get<std::string>();
+    const json t = record.result.value("t", json());
+    if (t.is_number()) cause.t = static_cast<int64_t>(t.get<double>());
+    const json firmware = record.result.value("firmware", json());
+    if (firmware.is_string()) cause.firmware = firmware.get<std::string>();
+    lock_.causes.push_back(std::move(cause));
+    lock_.failures = std::max<uint32_t>(lock_.failures, 1);
+    lock_due_ = true;
+  }
 }
 
 std::optional<std::string> Program::TakeLock() {
@@ -733,6 +773,16 @@ void Program::ReleaseLock(const Step& step) {
   causes.erase(end, causes.end());
   lock_due_ = true;
   if (LockOpen()) events_.push_back({"SETUP", {{"what", "safety_opened"}}});
+}
+
+void Program::CloseWithReset(double wall) {
+  if (std::any_of(lock_.causes.begin(), lock_.causes.end(), [](const auto& c) { return c.reset; })) return;
+  mowbite_hold::LockCause cause;
+  cause.reset = true;
+  cause.reason = "RESET";
+  cause.t = static_cast<int64_t>(std::floor(wall));
+  lock_.causes.push_back(std::move(cause));
+  lock_due_ = true;
 }
 
 bool Program::LockOpen() const {
@@ -1078,7 +1128,10 @@ std::optional<Refusal> Program::Abort(const json& params, double now, double wal
   if (!run_) return std::nullopt;
   if (params.is_object() && params.contains("step")) {
     if (!params["step"].is_string()) return BadParam("step", "step is no text");
-    if (params["step"].get<std::string>() != StepOf(*run_).id) return std::nullopt;
+    const std::string& running = StepOf(*run_).id;
+    if (params["step"].get<std::string>() != running) {
+      return Refuse("BUSY", running + " is running, not " + params["step"].get<std::string>(), {{"step", running}});
+    }
   }
   Fail("STOPPED", "Stopped by setup.abort", json::object(), now, wall);
   return std::nullopt;
@@ -1159,6 +1212,10 @@ void Program::Tick(double now, double wall) {
     if (check == "inputs_assign") TickAssign(now, wall);
     if (check == "summary") TickSummary(now, wall);
     if (run_ && IsDrive(StepOf(*run_))) TickDrive(now, wall);
+  }
+  if (restart_sent_ >= 0 && !run_ && now - restart_sent_ > kRestartLost) restart_sent_ = -1;
+  if (settings_due_ && !layer_dirty_ && !layer_pending_ && now - layer_failed_ >= kLayerRetry) {
+    settings_due_ = EraseSettings();
   }
   TickLearning(now);
   TickRelease(now);
@@ -1242,6 +1299,10 @@ void Program::TickInput(double now, double wall) {
         if (!run.lines.count(line->name)) silent.push_back(line->name);
       }
       Fail("LINE_SILENT", "Only lines of the parts before switched, not " + silent.dump(), {{"lines", silent}}, now,
+           wall);
+    } else if (run.phase == Phase::kSwitched || run.phase == Phase::kWatch) {
+      // The input came but did not end its part in time: nothing to ask, the part stays open.
+      Fail("NOT_DONE", "The input " + part.role + " or its emergency did not come back in time", json::object(), now,
            wall);
     } else if (run.other.empty()) {
       AskPressed("NOT_SEEN", json::object(), now, wall);
@@ -1514,10 +1575,13 @@ void Program::FinishAssign(double now, double wall) {
     return;
   }
   layer_.Erase(node, mowbite_api::kInputsLearn);
-  // The table is another one from the next start on: only a check of the inputs with it counts.
+  // The table is another one from the next start on: only a check of the inputs with it counts, and a lock that
+  // is open with a date stays closed until those checks and the summary passed again.
   for (const Step& other : list_.steps) {
     if (other.check == "input") RecordOf(other) = Record();
   }
+  ReopenSummary();
+  if (!capabilities_.safety_measurement_date.empty()) CloseWithReset(wall);
   record.assign["phase"] = "apply";
   EnterAssign(Assign::kRestart, now);
   WantRestart();
@@ -1542,6 +1606,7 @@ void Program::TickAssign(double now, double wall) {
     case Assign::kRestart:
       // Still here that long after the restart was asked for: it did not come.
       if (restart_sent_ >= 0 && now - restart_sent_ > restart_time) {
+        restart_sent_ = -1;
         Fail("RESTART_FAILED", "The OS did not restart", {{"limit", restart_time}}, now, wall);
       }
       break;
@@ -1698,6 +1763,9 @@ json Program::Blocked(const Step& step, double now) const {
   };
   if (!writable_) add("STORAGE_NOT_WRITABLE", "setup.json cannot be written");
   if (!lock_writable_) add("STORAGE_NOT_WRITABLE", std::string(mowbite_hold::kSafetyLockFile) + " cannot be written");
+  if (settings_due_ && layer_failed_ >= 0) {
+    add("STORAGE_NOT_WRITABLE", "The parameter file of the setup program cannot be written: setup.reset is not done");
+  }
   // A step that asks pressed waits for the answer alone.
   if (IsRun(step) && run_->pressed_at >= 0) return blocked;
   if (IsRun(step) && (IsAssign(step) || IsSummary(step))) {

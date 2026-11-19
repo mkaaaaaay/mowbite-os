@@ -59,11 +59,8 @@ std::vector<Refusal> Program::BladeProblems(const Step& step) const {
     problems.push_back(Refuse("STORAGE_NOT_WRITABLE", "No data_dir for allow_blade", {{"file", "setup.yaml"}}));
     return problems;
   }
-  // The restart with allow_blade is asked for or under way.
-  if (restart_wanted_ || restart_sent_ >= 0) {
-    problems.push_back(Refuse("BUSY", "The OS restarts with the blade allowed", {{"state", "RESTART"}}));
-    return problems;
-  }
+  // The restart with allow_blade is asked for or under way: DriveProblems names it.
+  if (restart_wanted_ || restart_sent_ >= 0) return problems;
   const std::string& node = step.Word("node");
   const std::string key = node + "." + mowbite_api::kAllowBlade;
   // The program set it and the driver still says no: the file kept by hand or the driver itself overrules it.
@@ -172,7 +169,10 @@ void Program::TickBlade(double now, double wall) {
       return;
     case Drive::kStop: {
       const double limit = BladeLimit(step, part.id);
-      if (!BladeTurns(step) && blade_still_since_ >= 0) {
+      if (!BladeTurns(step) && StoodBefore(blade_still_since_, run.trigger)) {
+        DriveFail("NO_START", "The blade stood already at the trigger: its stop was not measured", json::object(), now,
+                  wall);
+      } else if (!BladeTurns(step) && blade_still_since_ >= 0) {
         const double stand = std::max(0.0, blade_still_since_ - run.trigger);
         run.ground[part.id] = stand;
         run.stood = blade_still_since_;

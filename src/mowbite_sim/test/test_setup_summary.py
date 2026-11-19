@@ -57,7 +57,9 @@ exec ros2 launch mowbite_bringup mowbite.launch.py platform:=nx60i interface:=lo
   datum_long:={DATUM[1]} datum_height:={DATUM[2]} mqtt_port:={random.randint(18000, 18999)}
 """)
 os.makedirs(DATA, exist_ok=True)
-records = {step: {"state": "ok"} for step in SAFETY}
+# The dimensions come before the summary.
+DIMENSIONS = tuple(step["id"] for step in LIST["steps"] if step["stage"] == "dimensions")
+records = {step: {"state": "ok"} for step in SAFETY + DIMENSIONS}
 records["silence"]["values"] = [{"id": f"round_{n + 1}", "value": value} for n, value in enumerate(ROUNDS)]
 write_json(os.path.join(DATA, "setup.json"), {"schema": 1, "platform": SETUP["platform"], "steps": records})
 # The file kept by hand, read after the one of the program: an empty date.

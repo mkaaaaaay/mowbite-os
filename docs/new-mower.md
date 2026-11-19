@@ -576,14 +576,18 @@ needs nothing for it; a new reader of the date has to take `SafetyMeasured` and 
 
 Instead of the date by hand the setup program can open the lock with its step `summary` (stage `safety`, kind
 `confirm`, confirm `seen_myself`, after a `silence` in the list). It starts only when every safety step of the list
-passed and the lock holds no cause of one (`SAFETY_STEPS`, skipped ones named apart) and `time/clock` is safe
-(`CLOCK_UNSAFE`). It writes today's date (UTC) and the longest stand time of `silence` as `safety_measurement_date`
+passed and the lock holds no cause of one (`SAFETY_STEPS`, skipped ones named apart), every step of the stage
+`dimensions` passed (`LOCKED` with `needs`; values a platform took over from another mower belong there as a step the
+user confirms once they are measured, as `tron_values` of the NX60i) and `time/clock` is safe (`CLOCK_UNSAFE`). It writes today's date (UTC) and the longest stand time of `silence` as `safety_measurement_date`
 and `failsafe_without_host` for `node` into the file of the setup program, closes the lock with a reset meanwhile and
 restarts the OS. After the restart it holds `hw/capabilities` against what it wrote: the same, the step passes and
 takes the reset away (`safety.source` `program`); else `NOT_APPLIED` (also for an empty date of the file kept by
 hand, which has the last word), `RESTART_FAILED` or `NO_DATA`, the file gets its old values back and the lock stays
 closed until a summary passes. The driver only has to take both parameters and show them in `hw/capabilities`. A
-safety step that fails later sets `summary` open again. `setup.reset` takes date, stand time and `allow_blade` out of
+safety step that fails later sets `summary` open again; so does a new table of `inputs_assign` (or new delays), which
+also closes a lock open with a date by a reset until the checks of the inputs and a summary passed again. A failed
+step whose cause did not reach the file before the OS stopped goes into it again at the next start, and
+`safety_lock.json` stays as it is through a way back of the data (`data_store.py`). `setup.reset` takes date, stand time and `allow_blade` out of
 the file of the setup program and, when the program had opened the lock, closes it with a reset until the next
 summary passes; a date of the file kept by hand stays as it is.
 

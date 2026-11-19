@@ -39,6 +39,8 @@ SESSION_FILE = "os-session.json"
 # Written by tron_mcu before STOP is cleared on the MCU during an emergency, removed once it is released; a start with
 # it latches. It outlives an update and a way back.
 STOP_CLEAR_MARK_FILE = "stop-clear-mark"
+# Written by the setup program (mowbite_hold/lock.h): a lock closed under a newer image stays closed after a way back.
+SAFETY_LOCK_FILE = "safety_lock.json"
 BACKUP = "backup-"
 TEMP = ".tmp"
 OLD = ".old"
@@ -80,7 +82,7 @@ def image_schema():
 def kept_out(name):
     """Not data: never backed up, never replaced by a way back."""
     return (name in (LOCK_FILE, HOLD_FILE, SCHEMA_FILE, ROLLBACK_NOTE, RESTART_HOLD_FILE, SESSION_FILE,
-                     STOP_CLEAR_MARK_FILE)
+                     STOP_CLEAR_MARK_FILE, SAFETY_LOCK_FILE)
             or name.startswith(BACKUP) or name.endswith(TEMP))
 
 

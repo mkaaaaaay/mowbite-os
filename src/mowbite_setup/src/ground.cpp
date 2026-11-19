@@ -116,6 +116,10 @@ bool Program::GroundStood(double max_time, double max_way, double now, double wa
     }
     return false;
   }
+  if (StoodBefore(still_since_, run.trigger)) {
+    DriveFail("NO_START", "The mower stood already at the stop: it was not measured", json::object(), now, wall);
+    return false;
+  }
   const double stand = std::max(0.0, still_since_ - run.trigger);
   run.ground[id + "_stand"] = stand;
   run.ground[id + "_way"] = run.way;

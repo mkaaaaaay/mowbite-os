@@ -127,6 +127,9 @@ class SetupNode : public rclcpp::Node {
     methods.node_id = "mowbite_setup";
     if (steps.empty()) {
       RCLCPP_INFO(get_logger(), "The platform has no step list: setup.* is not offered");
+    } else if (data_dir_.empty()) {
+      // Without a place for the lock a failed safety check could not close it.
+      RCLCPP_WARN(get_logger(), "No data_dir: setup.* is not offered");
     } else {
       std::string why;
       const std::optional<StepList> list = ParseSteps(json::parse(steps, nullptr, false), &why);
@@ -284,10 +287,6 @@ class SetupNode : public rclcpp::Node {
   }
 
   void LoadRecord() {
-    if (data_dir_.empty()) {
-      RCLCPP_WARN(get_logger(), "No data_dir: the setup program forgets its state with every start");
-      return;
-    }
     std::string text, error;
     const auto read = mowbite_hold::ReadSmallFile(RecordPath(), 4 * 1024 * 1024, &text, &error);
     if (read == mowbite_hold::FileRead::kMissing) return;
@@ -301,7 +300,6 @@ class SetupNode : public rclcpp::Node {
 
   // The lock as the last start left it; one that cannot be read closes with a reset.
   void LoadLock() {
-    if (data_dir_.empty()) return;
     std::string text, error;
     const auto read = mowbite_hold::ReadSmallFile(LockPath(), 1024 * 1024, &text, &error);
     if (read == mowbite_hold::FileRead::kMissing) return;
@@ -315,7 +313,7 @@ class SetupNode : public rclcpp::Node {
 
   // Writes or removes the lock; a failure keeps it due and blocks every change. Called with the mutex held.
   void WriteLock(double now) {
-    if (data_dir_.empty() || (!program_->lock_writable() && now - lock_tried_ < kLockRetry)) return;
+    if (!program_->lock_writable() && now - lock_tried_ < kLockRetry) return;
     const auto text = program_->TakeLock();
     if (!text) return;
     std::string error;
@@ -378,7 +376,6 @@ class SetupNode : public rclcpp::Node {
 
   // Saves the record; a failure blocks every change until a write goes through again. Called with the mutex held.
   void Save(double now) {
-    if (data_dir_.empty()) return;
     std::string error;
     const bool written = mowbite_hold::WriteFileSafely(RecordPath(), program_->Text(), &error);
     const bool before = program_->writable();
@@ -471,7 +468,6 @@ class SetupNode : public rclcpp::Node {
   // How often the start would start an ended driver again from now on, by the note of its last end: none, the
   // restarts of the platform; down, none; older than its stable_s, all again.
   int RestartsLeft(double now) const {
-    if (data_dir_.empty()) return driver_restarts_;
     std::string text, error;
     const auto read = mowbite_hold::ReadSmallFile(data_dir_ + "/" + kDriverExitFile, 64 * 1024, &text, &error);
     if (read == mowbite_hold::FileRead::kMissing) return driver_restarts_;
@@ -481,7 +477,8 @@ class SetupNode : public rclcpp::Node {
       return note.contains(key) && note[key].is_number() ? note[key].get<double>() : -1.0;
     };
     const double max = number("max_restarts");
-    if (note.value("down", false) || max < 0) return 0;
+    // A note without its times may be of a driver that is down already.
+    if (note.value("down", false) || max < 0 || number("mono") < 0 || number("stable_s") < 0) return 0;
     if (now - number("mono") > number("stable_s") + kStableMargin) return static_cast<int>(max);
     return std::max(0, static_cast<int>(max - number("restart")));
   }
@@ -490,14 +487,7 @@ class SetupNode : public rclcpp::Node {
   // active false at its end, its command with every tick, hw/silence and hw/end when it asks for them. Called with the
   // mutex held.
   void Drive(double now) {
-    if (const auto step = program_->TakeMotionEnd()) {
-      mowbite_msgs::msg::SetupMotion msg;
-      msg.stamp = get_clock()->now();
-      msg.active = false;
-      msg.step = *step;
-      motion_pub_->publish(msg);
-      motion_sent_ = -1;
-    }
+    EndMotion();
     if (const auto motion = program_->MotionNow()) {
       if (motion_sent_ < 0 || now - motion_sent_ >= kMotionPeriod || motion->blade != motion_blade_) {
         motion_sent_ = now;
@@ -548,6 +538,19 @@ class SetupNode : public rclcpp::Node {
             });
       }
     }
+  }
+
+  // A step that ended: a zero on setup/cmd_vel, then setup/motion with active false. Called with the mutex held.
+  void EndMotion() {
+    const auto step = program_->TakeMotionEnd();
+    if (!step) return;
+    cmd_pub_->publish(geometry_msgs::msg::Twist());
+    mowbite_msgs::msg::SetupMotion msg;
+    msg.stamp = get_clock()->now();
+    msg.active = false;
+    msg.step = *step;
+    motion_pub_->publish(msg);
+    motion_sent_ = -1;
   }
 
   // The answer is only logged: whether the emergency ended shows in hw/status alone.
@@ -678,6 +681,8 @@ class SetupNode : public rclcpp::Node {
         return;
       }
       if (!refusal) {
+        // A step that moves ends before any file is written.
+        EndMotion();
         Flush(now);
         state = State(now);
       }

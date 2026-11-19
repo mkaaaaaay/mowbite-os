@@ -522,6 +522,9 @@ std::string CheckImage(const std::string& svg) {
                              "<!doctype", "<!entity", "<use"}) {
     if (text.find(banned) != std::string::npos) return std::string("it has ") + banned;
   }
+  // An attribute that runs something (onload, onclick, ...).
+  static const std::regex handler(R"([\s"'/]on[a-z]+\s*=)");
+  if (std::regex_search(text, handler)) return "it has an attribute on...";
   static const std::regex paint(R"((fill|stroke)\s*=\s*["']([^"']*)["'])");
   std::set<std::string> colours;
   for (std::sregex_iterator it(text.begin(), text.end(), paint), end; it != end; ++it) {

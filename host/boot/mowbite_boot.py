@@ -122,12 +122,15 @@ def choose(service):
     if pending is not None and not service:
         return _library(pending.get("from")) or _path(SEED)
     if pending is not None:
-        if pending.get("tried") is True or not _library(pending.get("to")):
+        # An empty to is the seed, tried like any other; a revision without its library goes back at once.
+        to = pending.get("to")
+        seed = to == ""
+        if pending.get("tried") is True or not (seed or _library(to)):
             return _back(pending)
         _write(pending_file, json.dumps({**pending, "tried": True}) + "\n")
         signal.alarm(TRIAL)
-        log(f"trying {pending['to']} for {TRIAL} s")
-        return _library(pending["to"])
+        log(f"trying {to or 'the seed'} for {TRIAL} s")
+        return _path(SEED) if seed else _library(to)
     if service:
         unsettled = _unsettled()
         _write(_path(UNSETTLED), f"{unsettled + 1}\n")

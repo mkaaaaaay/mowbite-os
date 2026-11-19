@@ -1,7 +1,7 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 6
+catalog: 7
 # inputs_assign, blade and summary restart the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
@@ -246,6 +246,34 @@ steps:
     check: geometry
     params:
       keys: [robot_width, robot_front, robot_rear, mower_width, blade_ahead, blade_offset, antenna_x, antenna_y, track]
+  # What this mower took over from the Tron ("Of the Tron" in platform.yaml) and the assumptions of geometry.yaml: the
+  # summary waits until the user says they are measured on this mower.
+  - id: tron_values
+    stage: dimensions
+    check: choice
+    params: {name: tron_values, values: [measured]}
+    skippable: false
+    value_texts:
+      measured:
+        de: {name: An diesem Mäher gemessen}
+        en: {name: Measured on this mower}
+    texts:
+      de:
+        name: Werte der Tron
+        help: >-
+          Einige Werte hat dieser Mäher von der Tron übernommen und nie selbst gemessen: Kippgrenze, Rampen und
+          Bremswerte, Werte des Pfadfolgers, des Andockens und der Lokalisierung, dazu Radradius, Radbreite und die
+          Lage der Ladekontakte. Erst wenn sie an diesem Mäher gemessen sind, gibt die Zusammenfassung die Sicherheit
+          frei.
+        fix: Die gemessenen Werte in die Datei dieses Mähers eintragen (nx60i.yaml im Datenordner), dann bestätigen.
+      en:
+        name: Values of the Tron
+        help: >-
+          This mower took some values over from the Tron and never had them measured: the tilt limit, ramps and
+          braking, values of the path follower, of docking and of the localization, and the wheel radius, the width
+          of the wheels and where the charging contacts sit. Only once they are measured on this mower does the
+          summary release the safety.
+        fix: Put the measured values into the file of this mower (nx60i.yaml in the data folder), then confirm.
   - id: station
     stage: station
     check: done_when

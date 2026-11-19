@@ -92,6 +92,17 @@ class BootTest(unittest.TestCase):
         self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
         self.assertEqual(self.alarms, [])
 
+    def test_a_way_back_to_the_seed_is_tried_once(self):
+        self.pending(to="", **{"from": A}, by_hand_from=A, tried=False)
+        self.assertEqual(mowbite_boot.choose(True), self.seed)
+        self.assertEqual(self.alarms, [mowbite_boot.TRIAL])
+        self.assertEqual(self.read_pending()["tried"], True)
+        self.assertEqual(self.read_pending()["by_hand_from"], A)
+        self.assertFalse(os.path.lexists(os.path.join(self.opt, "current")))
+        # The seed did not confirm itself: back to the one before.
+        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
+        self.assertEqual(os.readlink(os.path.join(self.opt, "current")), A)
+
     def test_unreadable_pending_goes_back(self):
         self.link("current", B)
         with open(os.path.join(self.opt, "pending"), "w") as f:
