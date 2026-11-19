@@ -4,6 +4,7 @@
 
 #include "mowbite_follower/guard.h"
 
+using mowbite_follower::CapAngular;
 using mowbite_follower::CapLinear;
 using mowbite_follower::CheckGuard;
 using mowbite_follower::DistanceToRing;
@@ -56,6 +57,10 @@ TEST(Geofence, MarginObstaclesAndProblems) {
   EXPECT_NE(fence.Check(4.5, 2.5).find("in an obstacle"), std::string::npos);
   EXPECT_EQ(Geofence({}, {}, 0.5).Problem(), "no allowed area");
   EXPECT_EQ(Geofence({{{0, 0}, {1, 1}}}, {}, 0.5).Problem(), "an allowed area has fewer than 3 points");
+  // A point that is no number would make the area or obstacle what it is not.
+  const Ring broken = {{4, 2}, {5, std::nan("")}, {5, 3}, {4, 3}};
+  EXPECT_NE(Geofence({kLawn}, {broken}, 0.5).Problem(), "");
+  EXPECT_NE(Geofence({broken}, {}, 0.5).Problem(), "");
   // Two areas side by side: the gap between them is outside.
   const Ring other = {{12, 0}, {20, 0}, {20, 6}, {12, 6}};
   const Geofence two({kLawn, other}, {}, 0.5);
@@ -191,6 +196,26 @@ TEST(Gate, APathWithGateMovesOnlyOnAFreshGo) {
   EXPECT_FALSE(GateOpen(true, 0.1, false, 0.5));
   EXPECT_FALSE(GateOpen(true, 0.51, true, 0.5));
   EXPECT_FALSE(GateOpen(true, -1.0, true, 0.5));
+}
+
+TEST(Guard, APoseThatIsNoNumberStops) {
+  for (int i = 0; i < 3; i++) {
+    GuardInput in = Healthy();
+    (i == 0 ? in.pose.x : i == 1 ? in.pose.y : in.pose.yaw) = std::nan("");
+    EXPECT_EQ(CheckGuard(GuardConfig(), in, Geofence({kLawn}, {}, 0.5)).reason, StopReason::kPoseLost) << i;
+  }
+}
+
+TEST(Gate, TheDriversTurnLimitKeepsTheCurve) {
+  double linear = 0.3, angular = 0.6;
+  CapAngular(0.4, &linear, &angular);
+  EXPECT_NEAR(angular, 0.4, 1e-12);
+  EXPECT_NEAR(linear, 0.2, 1e-12);
+  linear = 0.0;
+  angular = -0.7;
+  CapAngular(0.5, &linear, &angular);
+  EXPECT_NEAR(angular, -0.5, 1e-12);
+  EXPECT_EQ(linear, 0.0);
 }
 
 TEST(Gate, SlowKeepsTheCurve) {

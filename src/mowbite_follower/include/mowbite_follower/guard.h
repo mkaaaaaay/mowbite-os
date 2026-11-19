@@ -105,6 +105,8 @@ bool TurnFixFresh(double fix_age, double pose_age, double limit);
 bool GateOpen(bool gate, double age, bool go, double timeout);
 // The command at most max_linear fast forwards or backwards, scaled down whole so the curve stays.
 void CapLinear(double max_linear, double* linear, double* angular);
+// The same for the rate of turn, at most max_angular either way.
+void CapAngular(double max_angular, double* linear, double* angular);
 
 }  // namespace mowbite_follower
 

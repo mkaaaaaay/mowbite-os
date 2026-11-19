@@ -123,18 +123,20 @@ class PathFollower {
   std::string Start(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, size_t start_index);
   // The command for the pose of base_link, dt s after the last step; wheel_turn is the rad the wheels turned the
   // base by since then, by their odometry, NaN without. Without a fresh fix behind the pose the mower does not turn
-  // on the spot: wheels that slip there move it unseen. It stands until the fix is back, which is no part of
-  // phase_timeout.
+  // on the spot: wheels that slip there move it unseen. It stands until the fix is back, at most phase_timeout, which
+  // counts neither for the turn nor as a lack of progress.
   Command Step(const Pose2& pose, double dt, double wheel_turn = std::numeric_limits<double>::quiet_NaN(),
                bool fresh_fix = true);
   void Cancel();
+  // The mower stood for the gate of the logic: it starts again from the floor of the speed plan, with its ramp.
+  void Halted() { speed_ = 0; }
 
   Phase phase() const { return phase_; }
   Failure failure_kind() const { return failure_kind_; }
   const std::string& failure() const { return failure_; }
   // The pose the mower got to: a path started from here goes on where this one stopped.
   size_t index() const;
-  // The mower came onto the path and has not left it by finishing or failing.
+  // The mower came onto the path (a straight one from its start) and has not left it by finishing or failing.
   bool OnPath() const;
   // m beside the path, left positive.
   double CrossTrack(const Pose2& pose) const;
@@ -180,6 +182,8 @@ class PathFollower {
   double along_ = 0;
   double time_ = 0;
   double phase_start_ = 0;
+  // s a turn on the spot has waited for a fresh fix.
+  double fix_wait_ = 0;
   double speed_ = 0;
   double step_dt_ = 0;
   // Of this step: the pose, the turn of the wheels and a fresh fix behind the pose.

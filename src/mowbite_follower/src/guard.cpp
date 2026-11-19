@@ -55,6 +55,16 @@ Geofence::Geofence(std::vector<Ring> allowed, std::vector<Ring> obstacles, doubl
 
 std::string Geofence::Problem() const {
   if (allowed_.empty()) return "no allowed area";
+  const auto finite = [](const Ring& ring) {
+    return std::all_of(ring.begin(), ring.end(),
+                       [](const Point2& p) { return std::isfinite(p.x) && std::isfinite(p.y); });
+  };
+  for (const auto& ring : allowed_) {
+    if (!finite(ring)) return "a point of an allowed area is no number";
+  }
+  for (const auto& ring : obstacles_) {
+    if (!finite(ring)) return "a point of an obstacle is no number";
+  }
   for (const auto& ring : allowed_) {
     if (OpenSize(ring) < 3) return "an allowed area has fewer than 3 points";
   }
@@ -89,6 +99,9 @@ GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Ge
   }
   if (in.hw_age > config.hw_timeout) return {StopReason::kEmergency, "no hw/status from the driver"};
   if (in.emergency) return {StopReason::kEmergency, "emergency"};
+  if (!std::isfinite(in.pose.x) || !std::isfinite(in.pose.y) || !std::isfinite(in.pose.yaw)) {
+    return {StopReason::kPoseLost, "the pose has a value that is no number"};
+  }
   if (in.pose_age > config.pose_timeout) {
     return {StopReason::kPoseLost, Format("no pose for %.1f s (limit %.1f s)", in.pose_age, config.pose_timeout)};
   }
@@ -120,6 +133,13 @@ bool TurnFixFresh(double fix_age, double pose_age, double limit) {
 
 bool GateOpen(bool gate, double age, bool go, double timeout) {
   return !gate || (go && age >= 0 && age <= timeout);
+}
+
+void CapAngular(double max_angular, double* linear, double* angular) {
+  if (!(std::abs(*angular) > max_angular) || !(max_angular >= 0)) return;
+  const double scale = max_angular / std::abs(*angular);
+  *linear *= scale;
+  *angular *= scale;
 }
 
 void CapLinear(double max_linear, double* linear, double* angular) {

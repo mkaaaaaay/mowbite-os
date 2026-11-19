@@ -209,7 +209,8 @@ size_t PathFollower::index() const {
 }
 
 bool PathFollower::OnPath() const {
-  return joined_ && (phase_ == Phase::kFollowing || phase_ == Phase::kCornerTurn || phase_ == Phase::kRealign ||
+  // A straight path does not steer onto its line: it counts from its start.
+  return (joined_ || config_.straight) && (phase_ == Phase::kFollowing || phase_ == Phase::kCornerTurn || phase_ == Phase::kRealign ||
                      phase_ == Phase::kGoalTurn);
 }
 
@@ -255,6 +256,11 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
   if (std::abs(error) <= config_.turn_tolerance) return std::nullopt;
   if (!fresh_fix_) {
     phase_start_ += step_dt_;
+    progress_since_ += step_dt_;
+    fix_wait_ += step_dt_;
+    if (fix_wait_ > config_.phase_timeout) {
+      return Fail(Failure::kTimeout, Format("no fresh fix for a turn on the spot for %.0f s", config_.phase_timeout));
+    }
     turn_command_ = {};
     return turn_command_;
   }
@@ -306,7 +312,8 @@ double PathFollower::TurnBoost(double sign) const {
 double PathFollower::HoldSpeed(double rate) {
   if (!(config_.turn_hold_gain > 0) || !(config_.wheel_distance > 0)) return 0.0;
   // The slower wheel of the turn runs at rate * wheel_distance / 2 less what the mower drives.
-  const double room = std::abs(rate) * config_.wheel_distance / 2.0 - config_.wheel_min_speed;
+  const double room =
+      std::min(std::abs(rate) * config_.wheel_distance / 2.0 - config_.wheel_min_speed, config_.speed.max_linear);
   if (!(room > 0)) return 0.0;
   const double along = std::cos(at_.yaw) * (pivot_->x - at_.x) + std::sin(at_.yaw) * (pivot_->y - at_.y);
   // Uneven slip pushes at a steady speed: the sum takes it, damped like the offset itself.
@@ -329,6 +336,7 @@ void PathFollower::Enter(Phase phase) {
   turn_command_ = {};
   turn_missing_ = 0;
   hold_sum_ = 0;
+  fix_wait_ = 0;
   phase_ = phase;
   phase_start_ = time_;
 }

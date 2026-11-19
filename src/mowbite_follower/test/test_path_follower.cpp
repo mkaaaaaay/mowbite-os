@@ -1120,6 +1120,19 @@ TEST(PathFollower, HoldsOnlyAsFarAsTheSlowerWheelKeepsItsSpeed) {
   EXPECT_GE(tight.slowest_wheel, 0.13 - 1e-9);
 }
 
+// What holds the place of a turn never drives faster than max_linear, whatever track the driver reports.
+TEST(PathFollower, HoldsAtMostAtMaxLinear) {
+  Robot robot;
+  robot.slip_left = 0.5;
+  FollowerConfig config = HoldConfig(2.0);
+  config.wheel_distance = 20.0;
+  config.speed.max_linear = 0.02;
+  PathFollower follower{config};
+  TurnAtTheStart(follower, robot, 2.0);
+  EXPECT_GT(robot.max_linear, 0.0);
+  EXPECT_LE(robot.max_linear, 0.02 + 1e-9);
+}
+
 // Every turn on the spot leaves a record: the angles by command, wheels and heading, and how far base_link got.
 TEST(PathFollower, RecordsWhatATurnOnTheSpotDid) {
   Robot robot;
@@ -1178,7 +1191,8 @@ TEST(PathFollower, DoesNotTurnOnTheSpotWithoutAFreshFix) {
   ASSERT_EQ(follower.phase(), Phase::kStartTurn);
   const double turned = robot.pose.yaw;
   EXPECT_GT(turned, 0.3);
-  for (double t = 0; t < 30.0; t += kDt) {
+  // Up to phase_timeout; the wait counts not for the turn.
+  for (double t = 0; t < 4.5; t += kDt) {
     const auto cmd = follower.Step(robot.pose, kDt, robot.wheel_turn, false);
     EXPECT_EQ(cmd.linear, 0.0);
     EXPECT_EQ(cmd.angular, 0.0);
@@ -1194,6 +1208,48 @@ TEST(PathFollower, DoesNotTurnOnTheSpotWithoutAFreshFix) {
   Robot other;
   const auto cmd = straight.Step(other.pose, kDt, 0.0, false);
   EXPECT_GT(cmd.linear, 0.0);
+}
+
+// A fix that does not come back ends the turn after phase_timeout, not never.
+TEST(PathFollower, WaitsForAFreshFixAtMostThePhaseTimeout) {
+  FollowerConfig config;
+  config.phase_timeout = 5.0;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0, 2.0, 2.0), {}, 0), "");
+  Robot robot;
+  double t = 0;
+  for (; t < 10.0 && Running(follower); t += kDt) robot.Move(follower.Step(robot.pose, kDt, 0.0, false), kDt);
+  EXPECT_EQ(follower.phase(), Phase::kFailed);
+  EXPECT_EQ(follower.failure_kind(), Failure::kTimeout);
+  EXPECT_NEAR(t, 5.0, 0.2);
+}
+
+// After the gate of the logic held it the mower starts from creep speed again, not at the speed it had.
+TEST(PathFollower, AfterAHaltItSpeedsUpFromTheFloorAgain) {
+  PathFollower follower{FollowerConfig()};
+  ASSERT_EQ(follower.Start(Line(0, 0, 0, 10.0), {}, 0), "");
+  Robot robot;
+  PathFollower::Command cmd;
+  for (int i = 0; i < 80; i++) {
+    cmd = follower.Step(robot.pose, kDt);
+    robot.Move(cmd, kDt);
+  }
+  ASSERT_GT(cmd.linear, 0.25);
+  follower.Halted();
+  cmd = follower.Step(robot.pose, kDt);
+  EXPECT_NEAR(cmd.linear, 0.06, 1e-9);
+}
+
+// A straight path counts how far it is off its line from its first step.
+TEST(PathFollower, AStraightPathIsOnItsLineFromTheStart) {
+  FollowerConfig config;
+  config.straight = true;
+  PathFollower follower{config};
+  ASSERT_EQ(follower.Start(Line(0, 0.3, 0, 2.0), {}, 0), "");
+  Robot robot;
+  follower.Step(robot.pose, kDt);
+  EXPECT_TRUE(follower.OnPath());
+  EXPECT_NEAR(follower.CrossTrack(robot.pose), -0.3, 1e-9);
 }
 
 // The way from the place of a turn on the spot counts while it turns, not before and not after.

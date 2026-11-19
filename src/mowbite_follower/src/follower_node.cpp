@@ -1,7 +1,9 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
+#include <initializer_list>
 #include <memory>
 #include <mowbite_component/node_options.h>
 #include <mowbite_hold/lock.h>
@@ -130,6 +132,21 @@ class FollowerNode : public rclcpp::Node {
     }
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
     const double rate = declare_parameter("control_rate", 20.0);
+    // Every limit a number in its range: one that is no number would switch its check off.
+    const auto above = [](std::initializer_list<double> values) {
+      return std::all_of(values.begin(), values.end(), [](double x) { return std::isfinite(x) && x > 0; });
+    };
+    if (!above({c.max_angular, v.max_linear, v.speed_fast, v.speed_slow, v.speed_turn, v.creep_speed, v.turn_rate,
+                c.steering.approach_distance, c.steering.heading_gain, guard_config_.pose_timeout,
+                guard_config_.hw_timeout, guard_config_.max_cross_track, guard_config_.max_position_accuracy,
+                gate_timeout_, rate, c.phase_timeout, c.progress_timeout, c.max_start_distance, c.goal_tolerance}) ||
+        !(geofence_margin_ >= 0) || !std::isfinite(geofence_margin_)) {
+      throw std::invalid_argument(
+          "mowbite_follower: max_angular, max_linear, speed_fast, speed_slow, speed_turn, creep_speed, turn_rate, "
+          "approach_distance, heading_gain, pose_timeout, hw_status_timeout, max_cross_track, max_position_accuracy, "
+          "gate_timeout, control_rate, phase_timeout, progress_timeout, max_start_distance and goal_tolerance above 0, "
+          "geofence_margin from 0 needed");
+    }
     // The lock of the setup program, looked at with every step of a path; empty without data_dir.
     const std::string data_dir = declare_parameter("data_dir", std::string());
     lock_watch_ = std::make_unique<mowbite_hold::SafetyLockWatch>(
@@ -329,7 +346,9 @@ class FollowerNode : public rclcpp::Node {
     in.driver_moves = driver_moves_;
     in.hw_age = hw_time_ ? now - *hw_time_ : 1e9;
     in.emergency = emergency_;
-    in.pose_age = pose.time ? now - *pose.time : 1e9;
+    // Since it came, or since its stamp when it came late.
+    const double stamp_age = pose.stamp > 0 ? this->now().seconds() - pose.stamp : 0.0;
+    in.pose_age = pose.time ? std::max(now - *pose.time, stamp_age) : 1e9;
     in.pose = pose.pose;
     in.position_accuracy = pose.accuracy;
     in.heading_valid = pose.heading_valid;
@@ -351,6 +370,7 @@ class FollowerNode : public rclcpp::Node {
                                                                   ? "the logic holds the mower"
                                                                   : "no gate from the logic");
       gated_ = true;
+      follower_->Halted();
       wheel_step_.reset();
       CmdPublisher().publish(geometry_msgs::msg::Twist());
       return;
@@ -379,6 +399,13 @@ class FollowerNode : public rclcpp::Node {
     twist.linear.x = cmd.linear;
     twist.angular.z = cmd.angular;
     if (gate_ && gate_slow_) CapLinear(speed_slow_, &twist.linear.x, &twist.angular.z);
+    // The driver's limits as they are now, also when they fell since the path began.
+    CapLinear(driver_max_linear_, &twist.linear.x, &twist.angular.z);
+    CapAngular(driver_max_angular_, &twist.linear.x, &twist.angular.z);
+    if (!std::isfinite(twist.linear.x) || !std::isfinite(twist.angular.z)) {
+      Finish(FollowPath::Result::REASON_INVALID, "a command that is no number", follower_->index());
+      return;
+    }
     CmdPublisher().publish(twist);
     if (now - last_feedback_ >= 0.5) {
       last_feedback_ = now;
@@ -450,9 +477,12 @@ class FollowerNode : public rclcpp::Node {
     bool heading_valid = false;
     float fix_age = 999;
     std::optional<double> time;
+    // The stamp of the localization, s of the ROS clock.
+    double stamp = 0;
 
     void Set(const mowbite_msgs::msg::RobotPose& msg, double now) {
       pose = Pose2{msg.x, msg.y, msg.heading};
+      stamp = rclcpp::Time(msg.header.stamp).seconds();
       accuracy = msg.position_accuracy;
       heading_valid = msg.heading_valid;
       fix_age = msg.fix_age;
