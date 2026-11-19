@@ -355,19 +355,23 @@ class ScheduleNode : public rclcpp::Node {
         });
   }
 
+  // A pause that does not reach the logic, or that it refuses, goes again with the next phase of the run.
   void Drop(const DropRequest& drop) {
     if (!drop_client_->service_is_ready()) {
       RCLCPP_ERROR(get_logger(), "Schedule: cannot pause areas of %s, logic/drop_tasks is not there",
                    drop.run_id.c_str());
+      core_.Call<&Scheduler::OnDropAnswer>(drop.run_id, false);
       return;
     }
     auto request = std::make_shared<mowbite_msgs::srv::DropTasks::Request>();
     request->run_id = drop.run_id;
     request->area_ids = drop.area_ids;
+    const std::string run_id = drop.run_id;
     drop_client_->async_send_request(
-        request, [this](rclcpp::Client<mowbite_msgs::srv::DropTasks>::SharedFuture future) {
+        request, [this, run_id](rclcpp::Client<mowbite_msgs::srv::DropTasks>::SharedFuture future) {
           const auto& answer = future.get();
           if (!answer->accepted) RCLCPP_WARN(get_logger(), "Schedule: pause refused: %s", answer->message.c_str());
+          core_.Call<&Scheduler::OnDropAnswer>(run_id, static_cast<bool>(answer->accepted));
         });
   }
 

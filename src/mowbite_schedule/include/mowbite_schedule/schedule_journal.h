@@ -56,7 +56,7 @@ struct mowbite_journal::CoreTraits<mowbite_schedule::Scheduler> {
   static constexpr const char* kName = "schedule";
   using Config = mowbite_schedule::SchedulerStart;
   MOWBITE_JOURNAL_METHODS(&S::Tick, &S::OnWeather, &S::OnStartAnswer, &S::StartFailed, &S::OnRunStatus, &S::SetSchedule,
-                          &S::SetLeftovers, &S::TakeOutput);
+                          &S::SetLeftovers, &S::TakeOutput, &S::OnDropAnswer);
 
   // Every call with a place or the wall clock, for a copy of a journal without its place (mowbite_replay anonymize).
   template <typename A>
@@ -83,6 +83,7 @@ struct mowbite_journal::CoreTraits<mowbite_schedule::Scheduler> {
     });
     a.template Args<&S::StartFailed>(
         [](const auto& o, std::string& run_id, std::string&) { run_id = o.ShiftDates(run_id); });
+    a.template Args<&S::OnDropAnswer>([](const auto& o, std::string& run_id, bool&) { run_id = o.ShiftDates(run_id); });
     a.template Args<&S::OnRunStatus>([](const auto& o, RunStatus& status) {
       status.run_id = o.ShiftDates(status.run_id);
     });

@@ -153,6 +153,9 @@ class Scheduler {
   // The start did not reach the logic (detail: storage, service).
   void StartFailed(const std::string& run_id, const std::string& detail);
   void OnRunStatus(const RunStatus& status);
+  // The answer of the logic to the areas left out of a run (DropTasks); one refused or not sent goes again with the
+  // next phase of the run.
+  void OnDropAnswer(const std::string& run_id, bool accepted);
   // schedule.set and schedule.leftovers; a pause during a run of the schedule leaves its areas out.
   std::optional<Invalid> SetSchedule(const json& change, int64_t now);
   std::optional<Invalid> SetLeftovers(const json& change);
@@ -197,6 +200,7 @@ class Scheduler {
     std::vector<std::string> area_ids;
     bool asked = false;  // StartRun sent, no answer yet
     bool mowing = false;
+    bool drop_open = false;  // DropTasks sent, not accepted yet
     Phase phase = Phase::kNone;
     double last_word = 0;  // mono
   };

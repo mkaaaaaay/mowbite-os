@@ -858,6 +858,27 @@ TEST_F(SchedulerTest, PauseDuringARunLeavesItsAreasOut) {
   EXPECT_FALSE(scheduler_->TakeOutput().drop);
 }
 
+// A pause the logic refuses (or that does not reach it) goes again with the next phase of the run, until accepted.
+TEST_F(SchedulerTest, ARefusedPauseGoesAgainWithTheNextPhase) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}, {"areas", {"a", "b"}}}}}}));
+  const RunRequest run = StartAndAccept();
+  Status(run.run_id, Phase::kAnnouncing);
+  scheduler_->TakeOutput();
+  ASSERT_FALSE(scheduler_->SetSchedule({{"pause", {{"until", "2026-06-15"}, {"areas", {"b"}}}}},
+                                       At(kMonday, "10:00", 5)));
+  ASSERT_TRUE(scheduler_->TakeOutput().drop);
+  scheduler_->OnDropAnswer(run.run_id, false);
+  Status(run.run_id, Phase::kAnnouncing);
+  EXPECT_FALSE(scheduler_->TakeOutput().drop);
+  Status(run.run_id, Phase::kUndocking);
+  const Output again = scheduler_->TakeOutput();
+  ASSERT_TRUE(again.drop);
+  EXPECT_EQ(again.drop->area_ids, (std::vector<std::string>{"b"}));
+  scheduler_->OnDropAnswer(run.run_id, true);
+  Status(run.run_id, Phase::kMowing);
+  EXPECT_FALSE(scheduler_->TakeOutput().drop);
+}
+
 TEST_F(SchedulerTest, PauseWhileTheStartIsAskedComesWithTheAnswer) {
   Make(File());
   const Output out = TickAt(kMonday, "10:00");

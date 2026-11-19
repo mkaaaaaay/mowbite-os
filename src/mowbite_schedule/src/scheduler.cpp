@@ -504,7 +504,9 @@ void Scheduler::OnRunStatus(const RunStatus& status) {
   if (!run_ || status.run_id != run_->run_id) return;
   run_->asked = false;
   run_->last_word = facts_.mono;
+  const bool next_phase = status.phase != run_->phase;
   run_->phase = status.phase;
+  if (next_phase && run_->drop_open && status.phase != Phase::kEnded) DropPaused();
   const PlanKey key = run_->key;
   if (status.phase == Phase::kMowing && !run_->mowing) {
     run_->mowing = true;
@@ -531,6 +533,7 @@ void Scheduler::DropPaused() {
   const Date today = schedule.zone.ToLocal(facts_.wall).date;
   if (PausedAll(schedule, today)) {
     out_.drop = DropRequest{run_->run_id, {}};
+    run_->drop_open = true;
     return;
   }
   std::vector<std::string> list = run_->area_ids;
@@ -541,7 +544,14 @@ void Scheduler::DropPaused() {
   for (const std::string& id : list) {
     if (PausedArea(schedule, today, id)) drop.area_ids.push_back(id);
   }
-  if (!drop.area_ids.empty()) out_.drop = std::move(drop);
+  if (!drop.area_ids.empty()) {
+    out_.drop = std::move(drop);
+    run_->drop_open = true;
+  }
+}
+
+void Scheduler::OnDropAnswer(const std::string& run_id, bool accepted) {
+  if (run_ && run_->run_id == run_id) run_->drop_open = !accepted;
 }
 
 std::optional<Invalid> Scheduler::SetSchedule(const json& change, int64_t now) {
