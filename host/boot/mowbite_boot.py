@@ -4,8 +4,9 @@ The library is an installation /opt/mowbite-host/<revision> (current, previous, 
 in the rootfs, /usr/lib/mowbite-host; each holds bundle.json and mowbite_host/. The old host switches by writing
 pending {to, from, ...} and current -> to, then it ends and systemd starts the service again.
 
-At a start of the service: pending that was tried already goes back to from (the seed without one) and leaves a note
-for the result; pending not yet tried is marked tried and gets TRIAL s to confirm, else SIGALRM ends it. After
+At a start of the service: pending tried MAX_TRIES times already goes back to from (the seed without one) and leaves a
+note for the result; else its try is counted and current set to it, and it gets TRIAL s to confirm, else SIGALRM ends
+it (a try cut off by a power cut or a restart counts as well, but alone blocks nothing). After
 MAX_UNSETTLED starts in this boot that never ran SETTLE s the seed runs. The command line never tries a pending one.
 """
 import json
@@ -27,6 +28,8 @@ UNSETTLED = RUN + "/unsettled"
 TRIAL = 180
 SETTLE = 60
 MAX_UNSETTLED = 3
+# Tries of a new host before it goes back.
+MAX_TRIES = 2
 
 
 def log(text):
@@ -91,16 +94,24 @@ def _set_current(revision):
     _sync_dir(_path(OPT))
 
 
-def _back(pending):
+# The way back first, then its note: a full disk may keep the note from being written, never the seed from running.
+def _back(pending, why):
     to, before = pending.get("to") or None, pending.get("from") or None
     if not _library(before):
         before = None
-    _set_current(before)
-    _write(_path(BACK), json.dumps({"to": to, "from": before, "t": int(time.time()),
-                                    "message": "the new host did not confirm itself within its trial"}) + "\n")
-    os.remove(os.path.join(_path(OPT), "pending"))
-    _sync_dir(_path(OPT))
-    log(f"{to} did not confirm itself: back to {before or 'the seed'}")
+    try:
+        _set_current(before)
+        os.remove(os.path.join(_path(OPT), "pending"))
+        _sync_dir(_path(OPT))
+    except OSError as error:
+        log(f"{to or 'the seed'} {why}, but current cannot be set back ({error}): the seed runs")
+        return _path(SEED)
+    try:
+        _write(_path(BACK), json.dumps({"to": to, "from": before, "t": int(time.time()),
+                                        "message": f"the new host {why}"}) + "\n")
+    except OSError as error:
+        log(f"the note {BACK} cannot be written: {error}")
+    log(f"{to or 'the seed'} {why}: back to {before or 'the seed'}")
     return _library(before) or _path(SEED)
 
 
@@ -125,11 +136,22 @@ def choose(service):
         # An empty to is the seed, tried like any other; a revision without its library goes back at once.
         to = pending.get("to")
         seed = to == ""
-        if pending.get("tried") is True or not (seed or _library(to)):
-            return _back(pending)
-        _write(pending_file, json.dumps({**pending, "tried": True}) + "\n")
+        if not (seed or _library(to)):
+            return _back(pending, "is not installed")
+        tries = pending.get("tries")
+        if not isinstance(tries, int) or isinstance(tries, bool):
+            tries = 1 if pending.get("tried") is True else 0
+        if tries >= MAX_TRIES:
+            return _back(pending, f"did not confirm itself in {tries} tries")
+        try:
+            _write(pending_file, json.dumps({**pending, "tried": True, "tries": tries + 1}) + "\n")
+            # A switch cut off between pending and current: the try runs what confirm expects as current.
+            if _target(os.path.join(_path(OPT), "current")) != (to or None):
+                _set_current(to or None)
+        except OSError as error:
+            return _back(pending, f"cannot be tried ({error})")
         signal.alarm(TRIAL)
-        log(f"trying {to or 'the seed'} for {TRIAL} s")
+        log(f"trying {to or 'the seed'} for {TRIAL} s, try {tries + 1} of {MAX_TRIES}")
         return _path(SEED) if seed else _library(to)
     if service:
         unsettled = _unsettled()

@@ -57,13 +57,15 @@ class BootTest(unittest.TestCase):
         self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
         self.assertEqual(self.alarms, [])
 
-    def test_a_new_one_is_tried_once(self):
+    # A try cut off (power, restart) alone blocks nothing: MAX_TRIES of them, then back.
+    def test_a_new_one_is_tried_twice(self):
         self.link("current", B)
         self.pending(to=B, **{"from": A}, broker=True, tried=False)
-        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, B))
-        self.assertEqual(self.alarms, [mowbite_boot.TRIAL])
-        self.assertEqual(self.read_pending()["tried"], True)
-        self.assertEqual(self.read_pending()["broker"], True)
+        for tries in range(1, mowbite_boot.MAX_TRIES + 1):
+            self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, B))
+            self.assertEqual(self.alarms, [mowbite_boot.TRIAL] * tries)
+            self.assertEqual((self.read_pending()["tried"], self.read_pending()["tries"]), (True, tries))
+            self.assertEqual(self.read_pending()["broker"], True)
         # It did not confirm itself: the next start goes back.
         self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
         self.assertEqual(os.readlink(os.path.join(self.opt, "current")), A)
@@ -71,17 +73,42 @@ class BootTest(unittest.TestCase):
         note = files.read_json(self.root + mowbite_boot.BACK)
         self.assertEqual((note["to"], note["from"]), (B, A))
 
+    # Pending of a boot before the count: tried once.
+    def test_tried_without_a_count_is_one_try(self):
+        self.link("current", B)
+        self.pending(to=B, **{"from": A}, tried=True)
+        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, B))
+        self.assertEqual(self.read_pending()["tries"], 2)
+
+    # A switch cut off between pending and current: the try sets current, so the new host can confirm itself.
+    def test_a_switch_cut_before_current_is_tried_with_it(self):
+        self.link("current", A)
+        self.pending(to=B, **{"from": A}, tried=False)
+        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, B))
+        self.assertEqual(os.readlink(os.path.join(self.opt, "current")), B)
+
+    # Without room for the note the way back still happens.
+    def test_back_without_its_note(self):
+        self.link("current", B)
+        self.pending(to=B, **{"from": A}, tries=mowbite_boot.MAX_TRIES)
+        os.makedirs(os.path.dirname(os.path.dirname(self.root + mowbite_boot.BACK)))
+        with open(os.path.dirname(self.root + mowbite_boot.BACK), "w") as f:
+            f.write("not a folder")
+        self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
+        self.assertEqual(os.readlink(os.path.join(self.opt, "current")), A)
+        self.assertFalse(os.path.lexists(os.path.join(self.opt, "pending")))
+
     def test_going_back_over_a_left_new_link(self):
         self.link("current", B)
         self.link("current.new", B)
-        self.pending(to=B, **{"from": A}, tried=True)
+        self.pending(to=B, **{"from": A}, tried=True, tries=mowbite_boot.MAX_TRIES)
         self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
         self.assertEqual(os.readlink(os.path.join(self.opt, "current")), A)
         self.assertFalse(os.path.lexists(os.path.join(self.opt, "current.new")))
 
     def test_back_to_the_seed_without_one_before(self):
         self.link("current", B)
-        self.pending(to=B, **{"from": ""}, tried=True)
+        self.pending(to=B, **{"from": ""}, tried=True, tries=mowbite_boot.MAX_TRIES)
         self.assertEqual(mowbite_boot.choose(True), self.seed)
         self.assertFalse(os.path.lexists(os.path.join(self.opt, "current")))
         self.assertIsNone(files.read_json(self.root + mowbite_boot.BACK)["from"])
@@ -92,10 +119,11 @@ class BootTest(unittest.TestCase):
         self.assertEqual(mowbite_boot.choose(True), os.path.join(self.opt, A))
         self.assertEqual(self.alarms, [])
 
-    def test_a_way_back_to_the_seed_is_tried_once(self):
+    def test_a_way_back_to_the_seed_is_tried_as_well(self):
         self.pending(to="", **{"from": A}, by_hand_from=A, tried=False)
-        self.assertEqual(mowbite_boot.choose(True), self.seed)
-        self.assertEqual(self.alarms, [mowbite_boot.TRIAL])
+        for _ in range(mowbite_boot.MAX_TRIES):
+            self.assertEqual(mowbite_boot.choose(True), self.seed)
+        self.assertEqual(self.alarms, [mowbite_boot.TRIAL] * mowbite_boot.MAX_TRIES)
         self.assertEqual(self.read_pending()["tried"], True)
         self.assertEqual(self.read_pending()["by_hand_from"], A)
         self.assertFalse(os.path.lexists(os.path.join(self.opt, "current")))
