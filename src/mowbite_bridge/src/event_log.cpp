@@ -6,6 +6,7 @@
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #include "mowbite_bridge/text.h"
 
@@ -21,12 +22,14 @@ bool IsDay(const std::string& text) {
   return text.size() == 8 && std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
-// The day a request names: "" for none given, "-" for one that cannot be a day.
+// The day a request names: "" for none given (no params, {} or []), "-" for any other form or a text that cannot be
+// a day, so that a mistyped request never counts as "all days".
 std::string AskedDay(const Json& params) {
+  if (params.is_null() || ((params.is_object() || params.is_array()) && params.empty())) return "";
   const Json* date = nullptr;
-  if (params.is_object() && params.contains("date")) date = &params["date"];
-  if (params.is_array() && !params.empty()) date = &params[0];
-  if (!date) return "";
+  if (params.is_object() && params.size() == 1 && params.contains("date")) date = &params["date"];
+  if (params.is_array() && params.size() == 1) date = &params[0];
+  if (!date) return "-";
   if (!date->is_string() || !IsDay(date->get<std::string>())) return "-";
   return date->get<std::string>();
 }
@@ -136,6 +139,7 @@ Json EventLog::List() const {
 
 Json EventLog::Erase(const Json& params) {
   const std::string day = AskedDay(params);
+  if (day == "-") throw std::invalid_argument("params: none for every day, or {\"date\": \"YYYYMMDD\"}");
   int deleted = 0;
   std::error_code ec;
   for (const auto& d : Scan()) {

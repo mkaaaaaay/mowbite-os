@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <limits>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_bridge/app_json.h"
@@ -45,6 +46,9 @@ TEST(Teleop, AnythingElseGivesNothing) {
   EXPECT_FALSE(ReadTeleop(""));
   EXPECT_FALSE(ReadTeleop("garbage"));
   EXPECT_FALSE(ReadTeleop(Bson({{"vx", 1.0}})));
+  // Not finite: no limit downstream has to catch it.
+  EXPECT_FALSE(ReadTeleop(Bson({{"vx", std::numeric_limits<double>::quiet_NaN()}, {"vz", 0.0}})));
+  EXPECT_FALSE(ReadTeleop(Bson({{"vx", 0.0}, {"vz", std::numeric_limits<double>::infinity()}})));
   EXPECT_FALSE(ReadTeleop(Bson({{"vx", "1"}, {"vz", 0.0}})));
   EXPECT_FALSE(ReadTeleop(Bson({{"vx", 0.1}, {"vz", 0.0}, {"pad", std::string(1100, 'x')}})));
   std::string cut = Bson({{"vx", 0.2}, {"vz", -0.1}});

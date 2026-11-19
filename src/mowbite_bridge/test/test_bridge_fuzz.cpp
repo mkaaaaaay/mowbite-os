@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <fstream>
 #include <random>
+#include <stdexcept>
 
 #include "mowbite_bridge/bridge_core.h"
 #include "mowbite_bridge/event_log.h"
@@ -235,8 +236,15 @@ TEST(BridgeFuzz, HistoryAndTrackTakeAnyInput) {
           (void)track->List().dump();
           break;
         case 6:
-          if (m.Pick(4) == 0) (void)events.Erase(Loose(a));
-          if (m.Pick(4) == 0) (void)track->Erase(m.Pick(2) ? Json{{"job_id", ids[m.Pick(ids.size())]}} : Loose(a));
+          // A form that names no day or job is refused with -32602.
+          try {
+            if (m.Pick(4) == 0) (void)events.Erase(Loose(a));
+          } catch (const std::invalid_argument&) {
+          }
+          try {
+            if (m.Pick(4) == 0) (void)track->Erase(m.Pick(2) ? Json{{"job_id", ids[m.Pick(ids.size())]}} : Loose(a));
+          } catch (const std::invalid_argument&) {
+          }
           break;
         case 7: {
           // A broken line in some file of either store.

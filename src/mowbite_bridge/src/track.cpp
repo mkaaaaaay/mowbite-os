@@ -5,6 +5,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #include "mowbite_bridge/text.h"
 
@@ -31,12 +32,14 @@ std::string TextField(const Json& j, const char* key) {
   return it != j.end() && it->is_string() ? it->get<std::string>() : "";
 }
 
-// The job a request names: "" for none given, "-" for one that cannot be a job.
+// The job a request names: "" for none given (no params, {} or []), "-" for any other form or a text that cannot be
+// a job, so that a mistyped request never counts as "all jobs".
 std::string AskedJob(const Json& params) {
+  if (params.is_null() || ((params.is_object() || params.is_array()) && params.empty())) return "";
   const Json* job = nullptr;
-  if (params.is_object() && params.contains("job_id")) job = &params["job_id"];
-  if (params.is_array() && !params.empty()) job = &params[0];
-  if (!job) return "";
+  if (params.is_object() && params.size() == 1 && params.contains("job_id")) job = &params["job_id"];
+  if (params.is_array() && params.size() == 1) job = &params[0];
+  if (!job) return "-";
   if (!job->is_string() || !SafeJobId(job->get<std::string>())) return "-";
   return job->get<std::string>();
 }
@@ -329,6 +332,7 @@ Json MowTrack::List() const {
 
 Json MowTrack::Erase(const Json& params) {
   const std::string job = AskedJob(params);
+  if (job == "-") throw std::invalid_argument("params: none for all, or {\"job_id\": a job}");
   int deleted = 0;
   std::error_code ec;
   for (const auto& f : Scan()) {

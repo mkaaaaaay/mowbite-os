@@ -5,6 +5,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #include "mowbite_bridge/event_log.h"
 
@@ -116,7 +117,11 @@ TEST_F(EventLogTest, ListNewestFirstAndDelete) {
   EXPECT_EQ(log.List(), Json::array({today, "20200103", "20200101"}));
   EXPECT_EQ(log.Erase(Json{{"date", "20200101"}}), Deleted(1));
   EXPECT_EQ(log.Erase(Json{{"date", "20200101"}}), Deleted(0));
-  EXPECT_EQ(log.Erase(Json{{"date", "../x"}}), Deleted(0));
+  EXPECT_THROW(log.Erase(Json{{"date", "../x"}}), std::invalid_argument);
+  // A form that names no day deletes nothing.
+  EXPECT_THROW(log.Erase(Json{{"day", "20200101"}}), std::invalid_argument);
+  EXPECT_THROW(log.Erase(Json("20200101")), std::invalid_argument);
+  EXPECT_THROW(log.Erase(Json(true)), std::invalid_argument);
   EXPECT_EQ(log.Erase(nullptr), Deleted(2));
   EXPECT_EQ(log.List(), Json::array());
   // Today starts again with the next event.

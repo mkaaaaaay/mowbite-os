@@ -4,6 +4,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <stdexcept>
 
 #include "mowbite_bridge/track.h"
 
@@ -252,6 +253,8 @@ TEST_F(TrackTest, DeleteNeverTakesTheCurrentJob) {
   track.Close();
   EXPECT_EQ(track.Erase(Json{{"job_id", "job2"}}), Deleted(0));
   EXPECT_EQ(track.Erase(Json{{"job_id", "nope"}}), Deleted(0));
+  EXPECT_THROW(track.Erase(Json{{"job", "job2"}}), std::invalid_argument);
+  EXPECT_THROW(track.Erase(Json(true)), std::invalid_argument);
   EXPECT_EQ(track.Erase(nullptr), Deleted(1));
   EXPECT_EQ(Files(), (std::vector<std::string>{"1793600100_job2.jsonl"}));
 }

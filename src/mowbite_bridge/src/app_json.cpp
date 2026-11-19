@@ -1,5 +1,6 @@
 #include "mowbite_bridge/app_json.h"
 
+#include <cmath>
 #include <cstdio>
 
 #include "mowbite_api/catalog.h"
@@ -27,7 +28,9 @@ std::optional<Teleop> ReadTeleop(std::string_view payload) {
   const auto vx = doc.find("vx");
   const auto vz = doc.find("vz");
   if (vx == doc.end() || vz == doc.end() || !vx->is_number() || !vz->is_number()) return std::nullopt;
-  return Teleop{vx->get<double>(), vz->get<double>()};
+  const Teleop teleop{vx->get<double>(), vz->get<double>()};
+  if (!std::isfinite(teleop.vx) || !std::isfinite(teleop.vz)) return std::nullopt;
+  return teleop;
 }
 
 std::string RobotStateText(const RobotStateView& s) {
