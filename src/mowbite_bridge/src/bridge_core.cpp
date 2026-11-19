@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_bridge/event_builder.h"
@@ -641,9 +642,18 @@ std::string RollbackWarning(std::string_view note) {
     if (text) return j[key].is_string() ? CleanUtf8(j[key].get<std::string>()) : "?";
     return j[key].is_number_integer() ? std::to_string(j[key].get<long long>()) : "?";
   };
+  std::string made;
+  if (j.is_object() && j.contains("backup_of") && j["backup_of"].is_number_integer()) {
+    const auto t = static_cast<std::time_t>(j["backup_of"].get<long long>());
+    std::tm utc{};
+    char date[16];
+    if (gmtime_r(&t, &utc) && std::strftime(date, sizeof(date), "%Y-%m-%d", &utc) > 0) {
+      made = std::string(" of ") + date + " (UTC, map included)";
+    }
+  }
   return "MowBite OS went back to an older image: data_dir is back at schema " + value("to", false) +
-         " from its backup, the changes since the update (schema " + value("from", false) + ") are in " +
-         value("backup", true);
+         " from its backup" + made + ", the changes since the update (schema " + value("from", false) +
+         ") are in " + value("backup", true);
 }
 
 }  // namespace mowbite_bridge

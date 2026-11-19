@@ -874,6 +874,9 @@ TEST(RollbackWarning, TextOfTheNote) {
   EXPECT_EQ(RollbackWarning(R"({"from": 3, "to": 2, "backup": "backup-3", "t": 1.0})"),
             "MowBite OS went back to an older image: data_dir is back at schema 2 from its backup, the changes since "
             "the update (schema 3) are in backup-3");
+  EXPECT_EQ(RollbackWarning(R"({"from": 3, "to": 2, "backup": "backup-3", "t": 1.0, "backup_of": 1767225600})"),
+            "MowBite OS went back to an older image: data_dir is back at schema 2 from its backup of 2026-01-01 (UTC, "
+            "map included), the changes since the update (schema 3) are in backup-3");
   EXPECT_EQ(RollbackWarning("broken"),
             "MowBite OS went back to an older image: data_dir is back at schema ? from its backup, the changes since "
             "the update (schema ?) are in ?");

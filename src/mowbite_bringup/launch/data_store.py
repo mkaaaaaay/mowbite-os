@@ -318,12 +318,15 @@ def _prepare(data_dir, schema, version, steps, besides=()):
             raise Halt("SCHEMA_NEWER", f"The data is newer than this image and there is no {BACKUP}{schema} "
                        "to go back to.", current)
         need_room(data_dir, max(data_size(data_dir), data_size(backup_path(data_dir, schema))), current)
+        # When the backup that comes back was made: it may be months old, with the map of then.
+        backup_of = int(os.path.getmtime(backup_path(data_dir, schema)))
         make_backup(data_dir, current)
         write_json(data_dir, SCHEMA_FILE, {"schema": current, "by": state.get("by", "unknown"),
                                            "pending": {"to": schema}})
         restore(data_dir, schema)
         # Before the schema, so that a cut in between does the way back once more, note included.
-        note = {"from": current, "to": schema, "backup": f"{BACKUP}{current}", "t": time.time()}
+        note = {"from": current, "to": schema, "backup": f"{BACKUP}{current}", "t": time.time(),
+                "backup_of": backup_of}
         write_json(data_dir, ROLLBACK_NOTE, note)
     if state is None or current != schema:
         write_json(data_dir, SCHEMA_FILE, {"schema": schema, "by": version})

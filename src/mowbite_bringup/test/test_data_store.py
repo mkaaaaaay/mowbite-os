@@ -193,7 +193,10 @@ def test_newer_data_goes_back_to_the_backup_of_the_update(data_dir):
     write(os.path.join(data_dir, "os-session.json"), '{"state": "MOWING"}')
     write(os.path.join(data_dir, "safety_lock.json"), '{"failures": 1}')
     newer = tree(data_dir)
+    os.utime(os.path.join(data_dir, "backup-2"), (1767225600, 1767225600))
     note = start(data_dir, 2)
+    # It names when the backup that came back was made.
+    assert note["backup_of"] == 1767225600
     assert schema_of(data_dir) == {"schema": 2, "by": "v2"}
     assert tree(data_dir) == old
     assert tree(os.path.join(data_dir, "backup-3")) == newer

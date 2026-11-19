@@ -105,8 +105,10 @@ def prepare_data_dir(data_dir, logger, besides=()):
         line = data_store.Halt("DATA_ERROR", f"The data schema of the image cannot be read: {error}.").line(schema)
     else:
         if note:
-            logger.warning(f"data_dir went back from schema {note['from']} to {note['to']}, the changes since the "
-                           f"update are in {os.path.join(data_dir, note['backup'])}")
+            made = time.strftime("%Y-%m-%d", time.gmtime(note["backup_of"]))
+            logger.warning(f"data_dir went back from schema {note['from']} to {note['to']} with the backup of {made} "
+                           f"(UTC), map included; the changes since the update are in "
+                           f"{os.path.join(data_dir, note['backup'])}")
         return None
     return halt_actions(line, logger)
 
