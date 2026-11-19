@@ -65,7 +65,9 @@ bool VideoFeed::Begun(std::string& detail) {
 
 std::string VideoFeed::Encode(const CapturedFrame& frame) {
   std::string error;
-  return stream_.Send(frame, error) == H264Stream::Sent::kEncoderFailed ? Failed(error) : "";
+  if (stream_.Send(frame, error) == H264Stream::Sent::kEncoderFailed) return Failed(error);
+  if (stream_.RunningFor() >= kFailuresForgetS) failures_ = 0;
+  return "";
 }
 
 std::string VideoFeed::Failed(const std::string& detail) {

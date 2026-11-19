@@ -362,26 +362,30 @@ void RearLoop::StepCamera(double now, bool asked, bool viewer) {
     Fault(DockReason::kTooHot, kHot);
     return;
   }
-  const bool first = last_good_ < 0.0;
-  const double limit = first ? config_.first_frame_s : config_.frame_gap_s;
-  const double deadline = (first ? started_ : last_good_) + limit;
-  if (now >= deadline) {
-    Fault(DockReason::kNoSignal, "no usable image within " + Fixed(limit) + " s");
-    return;
-  }
   if (state_ == DockState::kStarting) ReportIfDue(now);
+  // Frames the driver holds after a long step still count: the gap is judged only after asking for them.
   CapturedFrame frame;
   std::string error;
-  const auto wait_ms = static_cast<int>(std::ceil(std::min(deadline - now, kFrameStepS) * 1000.0));
+  const auto wait_ms = static_cast<int>(std::ceil(std::clamp(GoodBy() - now, 0.0, kFrameStepS) * 1000.0));
   const int got = camera_.Next(wait_ms, frame, error);
   if (got < 0) {
     Fault(DockReason::kNoSignal, error);
     return;
   }
-  if (got != 1) return;
-  Evaluate(frame, now_());
+  if (got == 1) Evaluate(frame, now_());
+  if (state_ == DockState::kFault) return;
+  if (now_() >= GoodBy()) {
+    const double limit = last_good_ < 0.0 ? config_.first_frame_s : config_.frame_gap_s;
+    Fault(DockReason::kNoSignal, "no usable image within " + Fixed(limit) + " s");
+    return;
+  }
   // The picture comes after the report of its frame, so it never delays a measurement; a broken image gives none.
-  if (viewer && state_ != DockState::kFault) ShowFrame(frame, now_(), error);
+  if (got == 1 && viewer) ShowFrame(frame, now_(), error);
+}
+
+// By when the next usable image has to be there.
+double RearLoop::GoodBy() const {
+  return last_good_ < 0.0 ? started_ + config_.first_frame_s : last_good_ + config_.frame_gap_s;
 }
 
 void RearLoop::Evaluate(const CapturedFrame& frame, double now) {

@@ -232,6 +232,7 @@ class StereoLoop {
   void StepIdleCapture(double now);
   void StartCapture(double now);
   void StepCapture(double now);
+  bool NextFrame(double now, CapturedFrame& frame);
   void StepVideo(double now);
   void PrepareVideo(double now);
   void VideoFailed(double now, const std::string& error);

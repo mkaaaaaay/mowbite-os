@@ -16,7 +16,8 @@ namespace tron_vision {
 struct TronCameraConfig {
   std::string sysfs = "/sys/class/video4linux";
   std::string sensor_name = "m01_b_gc2093";
-  std::string video_device = "/dev/video53";
+  // The video node: the one named video_name of this platform device (the ISP the sensor sits behind).
+  std::string capture_device = "rkisp1-vir0";
   std::string video_name = "rkisp_mainpath";
   uint32_t width = 1920;
   uint32_t height = 1080;
@@ -29,9 +30,9 @@ struct TronCameraConfig {
   ProcessesUsing processes_using;
 };
 
-// Sensor and video node of the right side camera, the same hardware as the left one.
+// Sensor and ISP of the right side camera, the same hardware as the left one.
 constexpr char kRightSensorName[] = "m00_b_gc2093";
-constexpr char kRightVideoDevice[] = "/dev/video44";
+constexpr char kRightCaptureDevice[] = "rkisp0-vir0";
 
 class TronCamera : public Camera {
  public:

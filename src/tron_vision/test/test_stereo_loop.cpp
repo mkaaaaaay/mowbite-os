@@ -657,6 +657,19 @@ TEST(StereoLoop, GapEndsStreamingForThisBoot) {
   EXPECT_EQ(rig.camera.starts, 2);
 }
 
+// A step that took longer than the gap (encoder, analysis) is no stall while the driver holds frames.
+TEST(StereoLoop, ALongStepIsNoStallWhileFramesWait) {
+  Rig rig;
+  rig.Ready();
+  Client client(rig.server.Port());
+  ASSERT_TRUE(rig.Play(client));
+  rig.Steps(5);
+  rig.clock += 1.5;
+  rig.Steps(3);
+  EXPECT_EQ(rig.State(), StereoState::kStreaming);
+  EXPECT_EQ(rig.Marker("failed-stereo"), "");
+}
+
 TEST(StereoLoop, StreamWithoutAFirstFrameEndsStreamingForThisBoot) {
   Rig rig;
   rig.Ready();

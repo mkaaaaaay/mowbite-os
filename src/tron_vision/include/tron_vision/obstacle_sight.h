@@ -28,10 +28,12 @@ struct SightLimits {
   // No frame for this long, or this many analysed frames in a row with a bit-equal check field.
   double no_frame_s = 0.5;
   int still_frames = 5;
-  // Too dark: mean luma of the lower half below dark_luma at the highest gain for dark_s; back from dark_back.
+  // Too dark: mean luma of the lower half below dark_luma for dark_s at the highest gain, for dark_any_s at any gain
+  // (the gain follows the whole picture, a bright sky keeps it low over a dark ground); back from dark_back.
   double dark_luma = 35.0;
   double dark_back = 45.0;
   double dark_s = 2.0;
+  double dark_any_s = 10.0;
   // Too bright: of the pixels at bright_value or more, bright_low of the lower half or bright_all of the image, for
   // bright_s; back once both are below bright_back.
   int bright_value = 245;

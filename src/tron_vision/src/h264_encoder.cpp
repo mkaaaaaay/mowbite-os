@@ -102,8 +102,9 @@ bool MppEncoder::Open(const EncoderSettings& settings, std::string& error) {
     context_ = nullptr;
     return Fail("mpp_create " + std::to_string(ret), error);
   }
-  // The wait has to be set before the context is initialised.
-  int64_t wait = mpp::kWaitForever;
+  // The wait has to be set before the context is initialised; a packet later than this counts as a failure of the
+  // encoder, which ends only the stream, before the watch of the loop would end the process.
+  int64_t wait = kEncoderOutputWaitMs;
   ret = api_->control(context_, mpp::kSetOutputTimeout, &wait);
   if (ret != 0) return Fail("output timeout " + std::to_string(ret), error);
   ret = init_(context_, mpp::kContextEncoder, mpp::kCodingAvc);

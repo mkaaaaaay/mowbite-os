@@ -291,14 +291,16 @@ TEST_F(StereoNodeTest, ReportsTheCameraLatched) {
   EXPECT_EQ(c.detail.rfind("encoder_missing: ", 0), 0U) << c.detail;
 }
 
-TEST_F(StereoNodeTest, TakenPortIsNoSignal) {
+// A taken port is no signal, and the camera comes once the port is free again.
+TEST_F(StereoNodeTest, TakenPortIsNoSignalUntilItIsFree) {
   test::TempDir dir;
   RtspConfig taken;
   taken.port = 0;
-  RtspServer other(taken, [] { return 0.0; });
+  auto other = std::make_unique<RtspServer>(taken, [] { return 0.0; });
   std::string error;
-  ASSERT_TRUE(other.Listen(error));
-  auto node = std::make_shared<StereoNode>(Options(dir.Path(), other.Port(), "/nonexistent/librockchip_mpp.so.1"));
+  ASSERT_TRUE(other->Listen(error));
+  const int port = other->Port();
+  auto node = std::make_shared<StereoNode>(Options(dir.Path(), port, "/nonexistent/librockchip_mpp.so.1"));
   Spinner spinner;
   spinner.Add(node);
   spinner.Start();
@@ -306,7 +308,11 @@ TEST_F(StereoNodeTest, TakenPortIsNoSignal) {
   ASSERT_TRUE(spinner.WaitForCamera([](const Camera&) { return true; }, 10.0, &c));
   EXPECT_FALSE(c.available);
   EXPECT_EQ(c.reason, Camera::REASON_NO_SIGNAL);
-  EXPECT_EQ(c.detail.rfind("failed: RTSP port " + std::to_string(other.Port()), 0), 0U) << c.detail;
+  EXPECT_EQ(c.detail.rfind("failed: RTSP port " + std::to_string(port), 0), 0U) << c.detail;
+  other.reset();
+  EXPECT_TRUE(spinner.WaitForCamera(
+      [](const Camera& camera) { return camera.detail.rfind("failed: RTSP port", 0) != 0; }, 10.0, &c))
+      << c.detail;
 }
 
 TEST_F(StereoNodeTest, RefusesAPortOutOfRange) {

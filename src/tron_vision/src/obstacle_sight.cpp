@@ -119,7 +119,8 @@ void SightCheck::Add(const SightSample& s) {
     dark_ = s.luma_low < limits_.dark_back;
     if (!dark_) dark_since_ = -1.0;
   } else {
-    dark_ = Held(s.luma_low < limits_.dark_luma && s.at_max_gain, s.taken, limits_.dark_s, dark_since_);
+    dark_ = Held(s.luma_low < limits_.dark_luma, s.taken, s.at_max_gain ? limits_.dark_s : limits_.dark_any_s,
+                 dark_since_);
   }
 
   if (bright_) {

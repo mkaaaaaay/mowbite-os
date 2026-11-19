@@ -24,8 +24,6 @@ constexpr int kRateControlCbr = 1;
 // SPS and PPS in front of every IDR picture.
 constexpr int kHeaderEachIdr = 1;
 constexpr int kSeiOff = 0;
-// Output wait that blocks until the packet is there.
-constexpr int64_t kWaitForever = -1;
 
 enum Command : int {
   kSetOutputTimeout = 0x200007,

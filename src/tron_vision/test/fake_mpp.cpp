@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 
+#include "tron_vision/h264_encoder.h"
 #include "tron_vision/h264_rtp.h"
 #include "tron_vision/mpp_abi.h"
 
@@ -138,8 +139,8 @@ int PutFrame(Handle context, Handle frame) {
 int GetPacket(Handle context, Handle* packet) {
   auto* c = static_cast<Context*>(context);
   *packet = nullptr;
-  // A wait that was not set to blocking before the init gives the packet too late.
-  if (Fails("packet") || !c->wait_before_init || c->output_wait != tron_vision::mpp::kWaitForever) return 0;
+  // A wait other than the bounded one set before the init gives no packet.
+  if (Fails("packet") || !c->wait_before_init || c->output_wait != tron_vision::kEncoderOutputWaitMs) return 0;
   auto* p = new Packet;
   p->own = c->pending;
   p->pos = p->own.data();

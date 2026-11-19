@@ -34,7 +34,7 @@ void SideCamera(const std::string& id, mowbite_msgs::msg::Camera& entry, TronCam
     entry.name = "Right camera";
     entry.position = Camera::POSITION_RIGHT;
     camera.sensor_name = kRightSensorName;
-    camera.video_device = kRightVideoDevice;
+    camera.capture_device = kRightCaptureDevice;
   } else {
     throw std::invalid_argument("camera_id is '" + id + "', not oa_left or oa_right");
   }
@@ -114,7 +114,7 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
   camera_entry_.process = declare_parameter("process", std::string("vision"));
   camera_entry_.kind = mowbite_msgs::msg::Camera::KIND_OBSTACLE;
   hardware.sensor_name = declare_parameter("sensor_name", hardware.sensor_name);
-  hardware.video_device = declare_parameter("video_device", hardware.video_device);
+  hardware.capture_device = declare_parameter("capture_device", hardware.capture_device);
   hardware.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", hardware.vertical_blanking));
   hardware.processes_using = mowbite_serial::ProcessesUsing;
   video_ = std::make_unique<VideoOut>(*this, int64_t{8556});
