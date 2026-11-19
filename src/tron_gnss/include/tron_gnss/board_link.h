@@ -17,8 +17,10 @@ struct BoardConfig {
   double keepalive_s = 4.0;
   // Network RTK is wanted while RTCM came within this many s; then the keep-alive stops and the board returns to LoRa.
   double active_window_s = 10.0;
-  // The board reports ON -> OFF while RTCM is wanted: RTKRESET before the next ON, as the vendor does.
+  // The board reports ON -> OFF while RTCM is wanted: RTKRESET before the next ON, as the vendor does, at most once
+  // per min_reset_gap_s (a reset costs about 25 s of float); until then the keep-alive ON goes on.
   bool reset_on_off = true;
+  double min_reset_gap_s = 60.0;
   // RTCM goes to the port only while the board reports ON (in LoRa mode it does not pass the host's bytes).
   bool gate = true;
 };
@@ -44,7 +46,11 @@ class BoardLink {
   BoardState state() const {
     return state_;
   }
-  // s since RTCM was last let through, nullopt if never: the host's own age of the corrections.
+  // RTCM went to the port without a write error.
+  void OnWritten(double now) {
+    last_forward_ = now;
+  }
+  // s since RTCM last went to the port, nullopt if never: the host's own age of the corrections.
   std::optional<double> host_correction_age(double now) const;
   uint64_t forwarded_bytes() const {
     return forwarded_bytes_;
@@ -64,6 +70,7 @@ class BoardLink {
   double next_on_ = 0;
   std::optional<double> last_rtcm_;
   std::optional<double> last_forward_;
+  std::optional<double> last_reset_;
   uint64_t forwarded_bytes_ = 0;
   uint64_t dropped_bytes_ = 0;
   uint64_t resets_ = 0;

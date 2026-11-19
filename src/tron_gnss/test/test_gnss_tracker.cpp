@@ -235,6 +235,7 @@ TEST_F(TrackerTest, MissingCourseGivesNoMotion) {
 }
 
 TEST_F(TrackerTest, HostAgeOfTheCorrectionsCountsWhenLarger) {
+  tracker.SetHostCorrectionsRequired(true);
   tracker.SetHostCorrectionAge(31.0);
   auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
   ASSERT_TRUE(p);
@@ -284,6 +285,25 @@ TEST_F(TrackerTest, WithoutNtripFixedNeedsNoCorrectionsFromTheHost) {
   ASSERT_TRUE(p);
   EXPECT_EQ(p->solution, Solution::kRtkFixed);
   EXPECT_EQ(tracker.fixed_before_host(), 0u);
+}
+
+// Corrections the host passed while NTRIP was set up do not age a fix over LoRa once the access is removed.
+TEST_F(TrackerTest, AfterNtripDeleteTheOldHostAgeNoLongerCounts) {
+  tracker.SetHostCorrectionsRequired(true);
+  tracker.SetHostCorrectionAge(0.5);
+  auto p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
+  tracker.SetHostCorrectionsRequired(false);
+  tracker.SetHostCorrectionAge(120.0);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 120.0);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->solution, Solution::kRtkFixed);
+  // Set up again: the old age counts until fresh corrections come.
+  tracker.SetHostCorrectionsRequired(true);
+  p = tracker.Update(Gga(4, 52.0, 9.0, 60.0, -1.0, 1.0), 120.2);
+  ASSERT_TRUE(p);
+  EXPECT_EQ(p->solution, Solution::kRtkFloat);
 }
 
 TEST_F(TrackerTest, BoardReportGivesNoPose) {
