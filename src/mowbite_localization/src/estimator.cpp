@@ -355,10 +355,13 @@ bool Estimator::RecentGps(double t) const {
 
 double Estimator::PositionAccuracy(double t) const {
   if (!gate_.initialized()) return kNoAccuracy;
-  // Never better than the spread of the estimate itself, with that of the heading over the lever of the antenna.
+  // Never better than the spread of the estimate itself, with that of a valid heading over the lever of the antenna
+  // (at most twice the lever). Without a valid heading that part is left out: heading_valid says it instead, and the
+  // mower stands on its station or drives the straight undock line, which needs none.
   const Covariance& p = filter_.covariance();
-  const double spread = std::sqrt(std::max(p(0, 0), p(1, 1))) + std::sqrt(std::max(0.0, p(2, 2))) * lever_.norm();
-  return std::max(accuracy_.Value(t), spread);
+  const double lever = lever_.norm();
+  const double turn = heading_valid_ ? std::min(std::sqrt(std::max(0.0, p(2, 2))) * lever, 2.0 * lever) : 0.0;
+  return std::max(accuracy_.Value(t), std::sqrt(std::max(p(0, 0), p(1, 1))) + turn);
 }
 
 double Estimator::FixAge(double t) const {

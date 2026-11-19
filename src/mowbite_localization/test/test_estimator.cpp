@@ -427,7 +427,8 @@ TEST(L5Outliers, ContradictingFixesSetThePositionAfterFiveInARow) {
   EXPECT_LT(w.PositionError(), 0.03);
   EXPECT_TRUE(w.est.gps_valid());
   EXPECT_TRUE(w.est.heading_valid());
-  EXPECT_LT(w.est.PositionAccuracy(w.t), 0.05);
+  // The fix, and the loosened heading over the lever of 0.1 m.
+  EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02 + EstimatorConfig().disturbed_heading_sigma * 0.1, 1e-9);
   const auto jump = w.est.TakeJump();
   ASSERT_TRUE(jump);
   EXPECT_EQ(jump->reason, WarmupReason::kOutliers);
@@ -484,10 +485,11 @@ TEST(L6Jumps, AfterAGapOnlyIfTheEstimateMoved) {
   EXPECT_NEAR(jump->distance(), 0.5, 0.01);
 }
 
-// L7: the accuracy of the last fix grows with the way and the time and expires after gps_timeout.
+// L7: the accuracy of the last fix grows with the way and the time and expires after gps_timeout. The antenna on
+// base_link and a heading: the spread of the estimate stays below it.
 TEST(L7Accuracy, GrowsWithWayAndTime) {
-  World w;
-  w.Ready();
+  World w({}, Eigen::Vector2d::Zero());
+  w.Aligned();
   EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02, 1e-9);
   w.gnss = false;
   w.Run(2.0, 0.0, 0.0);
@@ -586,6 +588,19 @@ TEST(L9Courses, CorrectTheHeadingOnly) {
   w.Run(10.0, 0.3, 0.0);
   EXPECT_LT(std::abs(w.HeadingError()), 0.5 * kDeg);
   EXPECT_LT(w.PositionError(), 0.02);
+}
+
+// Without a valid heading its part is left out (the station, the undock line); a valid one adds its spread over the
+// lever.
+TEST(L7Accuracy, TheHeadingCountsOnlyWhenValid) {
+  World w;
+  w.Ready();
+  EXPECT_FALSE(w.est.heading_valid());
+  EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02, 1e-9);
+  World aligned;
+  aligned.Aligned();
+  EXPECT_TRUE(aligned.est.heading_valid());
+  EXPECT_LT(aligned.est.PositionAccuracy(aligned.t), 0.02 + 2 * 0.1);
 }
 
 // L10: the antenna offset moves base_link behind the last fix.
@@ -687,7 +702,8 @@ TEST(L12SetHeading, PutsBaseLinkBehindTheAntennaOfTheLastFix) {
   EXPECT_NEAR(w.est.pose().x, 10.4, 1e-9);
   EXPECT_NEAR(w.est.pose().heading, M_PI / 2, 1e-12);
   EXPECT_TRUE(w.est.heading_valid());
-  EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02, 1e-9);
+  // The fix, and the heading set (0.02 rad) over the lever.
+  EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02 + 0.02 * std::hypot(0.3, 0.1), 1e-9);
   EXPECT_NEAR(w.est.HeadingAccuracy(), 0.02, 1e-9);
 }
 
