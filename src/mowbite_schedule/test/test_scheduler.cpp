@@ -594,6 +594,7 @@ TEST_F(SchedulerTest, T15_RowsAgainAfterTheWeather) {
   weather.id = out.weather->id;
   weather.ok = true;
   weather.has_rain = true;
+  weather.rain_hour_mm = {0.0};
   scheduler_->OnWeather(weather);
   Facts facts = Good(At(kMonday, "10:00", 2));
   facts.state = "RECORDING";
@@ -1092,6 +1093,7 @@ TEST_F(SchedulerTest, ADuePlanWaitsWhileTheWeatherIsAsked) {
   weather.id = asked.weather->id;
   weather.ok = true;
   weather.has_rain = true;
+  weather.rain_hour_mm = {0.0};
   scheduler_->OnWeather(weather);
   facts.wall += 1;
   const Output started = Tick(facts);
