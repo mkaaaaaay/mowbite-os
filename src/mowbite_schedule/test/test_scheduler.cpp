@@ -639,6 +639,29 @@ TEST_F(SchedulerTest, T18_StartedWithTheBattery) {
   EXPECT_EQ(Words(), (Lines{"started 97"}));
 }
 
+// A phase before mowing longer than kRunSilence: the run stays while the logic is busy and mows after it.
+TEST_F(SchedulerTest, ALongPhaseBeforeMowingIsNoFailure) {
+  Make(File());
+  const RunRequest run = StartAndAccept();
+  Status(run.run_id, Phase::kUndocking);
+  Facts busy = Good(At(kMonday, "10:05"));
+  busy.state = "UNDOCKING";
+  Tick(busy);
+  EXPECT_TRUE(Words().empty());
+  Status(run.run_id, Phase::kMowing);
+  EXPECT_EQ(Words(), (Lines{"started 100"}));
+}
+
+// The logic restarted while it mowed: idle and silent, the run is gone and the next plan starts.
+TEST_F(SchedulerTest, ARunTheLogicNoLongerHasEnds) {
+  Make(File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "12:00"}}}}}));
+  const RunRequest run = StartAndAccept();
+  Status(run.run_id, Phase::kMowing);
+  TickAt(kMonday, "11:00");
+  EXPECT_TRUE(TickAt(kMonday, "12:00").start);
+  EXPECT_EQ(Words(), (Lines{"started 100"}));
+}
+
 TEST_F(SchedulerTest, T19_EndedBeforeMowing) {
   Make(File());
   RunRequest run = StartAndAccept();

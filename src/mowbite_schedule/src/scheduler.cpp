@@ -206,10 +206,16 @@ void Scheduler::Decide(const PlanKey& key, const std::string& what, json detail)
 void Scheduler::Tick(const Facts& facts) {
   facts_ = facts;
   ticked_ = true;
-  if (run_ && !run_->mowing && facts_.mono - run_->last_word > kRunSilence) {
+  // A start without an answer fails after kRunSilence. An accepted run stays while the logic is busy (a long phase
+  // before mowing goes on to mow); idle and silent that long, the logic no longer has it (restarted, or its end was
+  // overwritten on the latched topic).
+  if (run_ && facts_.mono - run_->last_word > kRunSilence &&
+      (run_->asked || (facts_.logic_fresh && facts_.state == kIdle))) {
     const PlanKey key = run_->key;
+    const bool mowed = run_->mowing;
     run_.reset();
-    Log("start_failed", "timeout", nullptr, key);
+    out_.state_changed = true;
+    if (!mowed) Log("start_failed", "timeout", nullptr, key);
   }
   if (facts_.clock_ok) {
     // Only a safe clock prunes: the marks of other days than today and yesterday fall out.

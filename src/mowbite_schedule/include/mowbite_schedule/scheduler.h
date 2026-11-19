@@ -24,7 +24,8 @@ constexpr int64_t kWaitLimit = int64_t{2} * 3600;
 constexpr double kWeatherDeadline = 15.0;
 // Weather older than this counts as none.
 constexpr double kWeatherMaxAge = 30 * 60.0;
-// A start that has not reached mowing fails after this long without word of the logic.
+// A start without an answer fails after this long; an accepted run ends after this long without word while the logic
+// is idle.
 constexpr double kRunSilence = 120.0;
 constexpr size_t kLogEntries = 100;
 // Rain now from this (mm), or in one of the coming hours from this (mm), skips the start.
