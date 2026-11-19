@@ -117,9 +117,9 @@ class ObstaclePart {
   bool Holding() const {
     return hold_;
   }
-  // A person or animal lies ahead in the zone to go slow.
+  // A person or animal lies ahead in the zone to go slow; a stale status keeps what the last one said.
   bool Slow() const {
-    return Armed() && fresh_ && slow_;
+    return Armed() && slow_;
   }
   // OBSTACLE with kind (the most of what held it: PERSON, ANIMAL, then OBJECT, UNKNOWN).
   Reason Why() const;

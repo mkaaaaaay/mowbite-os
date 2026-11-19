@@ -360,7 +360,7 @@ Reason DockingPart::GateProblem(CoreAccess core) {
     return text.empty() ? Reason() : Reason("dock_failed", "Docking failed: " + text);
   };
   if (!marker_docking_) {
-    if (!mower) return failed("at the gate there was no position");
+    if (!mower || !mower->orientation_valid) return failed("at the gate there was no position with a heading");
     return failed(docking_.CheckGate(docking_.Across(mower->x, mower->y), mower->heading,
                                      mower->position_accuracy, core.DockAccuracyLimit()));
   }

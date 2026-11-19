@@ -5,13 +5,23 @@
 
 namespace mowbite_logic {
 
-// Every 100 ms: first the follower's sign of life (G22), then the lease of hw/blade, kept alive while the logic
-// wants the blade and switched off at once when not.
+// Every 100 ms: the timeouts of hw/status and the pose, the follower's sign of life (G22), then the lease of hw/blade,
+// kept alive while the logic wants the blade and switched off at once when not.
 void LogicNode::UpdateBlade() {
   bool stalled;
   bool ended;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    const double t = MonotonicSeconds();
+    // Once when the timeout passes, between the ticks of the state timer, which goes on telling it every second.
+    const auto passed = [&](const std::optional<double>& last, double timeout) {
+      return last && t - *last > timeout && fast_tick_s_ - *last <= timeout;
+    };
+    if (passed(last_hw_, hw_timeout_s_)) core_.Call<&LogicCore::OnHardwareTimeout>();
+    if (passed(last_pose_, pose_timeout_s_)) core_.Call<&LogicCore::OnPoseTimeout>();
+    fast_tick_s_ = t;
+    // Poses of the dock marker age between the ticks of the state timer too.
+    if (core_.View().Docking()) core_.Call<&LogicCore::AgeDockPose>(t);
     stalled = CheckFollowerLocked();
     // The calibration program's sign of life and the battery while it drives.
     ended = core_.Call<&LogicCore::TickCalibration>(MonotonicSeconds());

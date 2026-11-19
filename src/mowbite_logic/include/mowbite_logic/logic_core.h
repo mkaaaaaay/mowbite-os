@@ -156,6 +156,13 @@ class LogicCore {
   // without a recent fix or without an answer (message says which). Empty when the check passed and undocking
   // starts, else why mowing or the drive does not start, which also goes out as MOWING_REFUSED or DRIVE_REFUSED.
   Reason OnDockCheck(bool ok, double x, double y, float accuracy, const std::string& message);
+  // The node cannot go on with the check that came back (planner or follower gone meanwhile): the start or the drive
+  // is refused with why, as OnDockCheck refuses it.
+  Reason RefuseDockCheck(const Reason& why);
+  // A reference check for mowing is on its way.
+  bool MowingDockCheck() const;
+  // Monotonic s for the age of the poses of the dock marker, between the ticks.
+  void AgeDockPose(double now_s);
   // UNDOCKING: first charging off where the driver can stop it (ChargeOff, whose answer goes to OnChargeOff), then
   // the UndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED mowing or the drive starts like
   // away from the station. Charging is allowed again (ChargeOn) when undocking ends otherwise, as the mower may still

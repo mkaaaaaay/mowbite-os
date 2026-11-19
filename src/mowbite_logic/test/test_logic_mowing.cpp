@@ -118,6 +118,7 @@ TEST(LogicMowing, StartRefusedWithAReasonAndAnEvent) {
       {"NO_DOCK", [](TestCore& c) { auto hw = Healthy(); hw.dock_contact = true; c.OnHardwareStatus(hw); }},
       {"RAIN", [](TestCore& c) { auto hw = Healthy(); hw.rain = true; c.OnHardwareStatus(hw); }},
       {"BATTERY_LOW", [](TestCore& c) { auto hw = Healthy(); hw.battery_voltage = 20; c.OnHardwareStatus(hw); }},
+      {"BATTERY_LOW", [](TestCore& c) { auto hw = Healthy(); hw.battery_ok = false; c.OnHardwareStatus(hw); }},
       {"NO_POSITION", [](TestCore& c) { c.OnPoseTimeout(); }},
       {"POSITION_ACCURACY", [](TestCore& c) { c.OnPose(PoseAt(1, 2, 0.5f)); }},
       {"NO_HEADING", [](TestCore& c) { auto p = PoseAt(1, 2); p.orientation_valid = false; c.OnPose(p); }},
@@ -230,6 +231,24 @@ TEST(LogicMowing, PlansEachMowableAreaFollowsItsPathsAndCompletesTheJob) {
   EXPECT_EQ(saved->job_id, "");
   EXPECT_EQ(saved->area, 0);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "reset_job"));
+}
+
+// An area taken out of the map while it is mowed: the plan goes, the mower waits for the user.
+TEST(LogicMowing, AMapChangeOfTheAreaMowedPausesAndPlansAnew) {
+  TestCore core = Following();
+  std::vector<JobArea> areas = Garden();
+  areas.erase(areas.begin());
+  core.OnMowMap(areas, Reason());
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(core.RobotState().pause_reason, "MAP_CHANGED");
+  EXPECT_TRUE(core.TakeDriveCancel());
+  core.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  // The same areas again change nothing more.
+  core.OnMowMap(areas, Reason());
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  const JobStep next = core.NextJobStep(0);
+  ASSERT_EQ(next.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(next.area_id, "back");
 }
 
 // A continue before the follower ended the leg the pause stopped: neither blade nor follower until it did.
@@ -394,6 +413,36 @@ TEST(LogicMowing, TheGpsPauseCarriesTheAccuracyAndTheLimit) {
   EXPECT_NEAR(state->details["limit"].get<double>(), config.max_position_accuracy, 1e-6);
 }
 
+// The follower loses the position each time it goes on, without getting further: after kGpsResumes the user decides.
+TEST(LogicMowing, GpsLostAgainAndAgainWithoutGettingOnWaitsForTheUser) {
+  LogicConfig config;
+  config.gps_wait_time = 10;
+  TestCore core = Following(config);
+  core.OnPose(PoseAt(2, 2));
+  double t = 100;
+  for (int i = 0; i < kGpsResumes; i++) {
+    core.OnLegEnded(LegEnd::kGps, 2, Reason("POSE_LOST", "No recent pose"));
+    ASSERT_EQ(core.RobotState().pause_reason, "POSE_LOST") << i;
+    core.OnTick(t);
+    core.OnTick(t + 10);
+    t += 20;
+    ASSERT_EQ(core.RobotState().state, "MOWING") << i;
+    ASSERT_EQ(core.NextJobStep(t).kind, JobStep::Kind::kFollow) << i;
+  }
+  core.OnLegEnded(LegEnd::kGps, 2, Reason("POSE_LOST", "No recent pose"));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(core.RobotState().pause_reason, "POSITION_UNSTABLE");
+  core.OnTick(t);
+  core.OnTick(t + 30);
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  // Getting on counts anew.
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(t + 31).kind, JobStep::Kind::kFollow);
+  core.OnJobProgress(3);
+  core.OnLegEnded(LegEnd::kGps, 3, Reason("POSE_LOST", "No recent pose"));
+  EXPECT_EQ(core.RobotState().pause_reason, "POSE_LOST");
+}
+
 TEST(LogicMowing, AfterBadGpsItGoesOnByItselfOnceThePositionIsGoodLongEnough) {
   LogicConfig config;
   config.gps_wait_time = 10;
@@ -452,6 +501,25 @@ TEST(LogicMowing, GpsWaitTimeOfTheSettings) {
   EXPECT_EQ(core.RobotState().state, "MOWING");
 }
 
+// A contact of the station while mowing pauses for the user: the blade does not come back on its own.
+TEST(LogicMowing, AContactOfTheStationPausesMowing) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  TestCore core = Following(config);
+  core.OnJobProgress(1);
+  ASSERT_TRUE(core.BladeWanted());
+  auto hw = Healthy();
+  hw.dock_contact = true;
+  core.OnHardwareStatus(hw);
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(core.RobotState().pause_reason, "DOCK_CONTACT");
+  EXPECT_TRUE(core.TakeDriveCancel());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+}
+
 TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   TestCore off = Following();
   off.OnJobProgress(2);
@@ -463,12 +531,6 @@ TEST(LogicMowing, TheBladeOnlyOnMowSegmentsAndOnlyWhenAllowed) {
   // Index 0 starts the transit to the lane.
   EXPECT_FALSE(core.BladeWanted());
   core.OnJobProgress(1);
-  EXPECT_TRUE(core.BladeWanted());
-  auto hw = Healthy();
-  hw.dock_contact = true;
-  core.OnHardwareStatus(hw);
-  EXPECT_FALSE(core.BladeWanted());
-  core.OnHardwareStatus(Healthy());
   EXPECT_TRUE(core.BladeWanted());
   core.OnHardwareTimeout();
   EXPECT_FALSE(core.BladeWanted());

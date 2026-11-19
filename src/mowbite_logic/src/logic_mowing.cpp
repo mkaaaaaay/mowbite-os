@@ -84,6 +84,16 @@ void MowingPart::PrepareStart(CoreAccess core) {
   cutting_added_.clear();
   recut_ = detour_ = hold_on_lane_ = avoid_failed_ = false;
   cut_retries_ = 0;
+  gps_resumes_ = 0;
+}
+
+void MowingPart::DropPlan() {
+  if (leg_ == Leg::kPlanning || leg_ == Leg::kCutting) leg_ = Leg::kNone;
+  job_.Restore(job_.progress());
+  cut_.reset();
+  cutting_added_.clear();
+  recut_ = detour_ = false;
+  approached_ = false;
 }
 
 void MowingPart::ApplySkips(CoreAccess core) {
@@ -122,6 +132,13 @@ void MowingPart::ApplySkips(CoreAccess core) {
 
 void MowingPart::Pause(CoreAccess core, int why, const Reason& reason) {
   if (core.state() != State::kMowing) return;
+  if (why == kPauseGps && gps_resumes_ >= kGpsResumes) {
+    Pause(core, kPauseFault,
+          Reason("POSITION_UNSTABLE", "The position was lost again after " + std::to_string(gps_resumes_) +
+                                          " waits without getting on (" + reason.message + ")")
+              .With("times", gps_resumes_));
+    return;
+  }
   const bool was_paused = pause_ != 0;
   for (size_t bit = 0; bit < pause_reasons_.size(); ++bit) {
     if ((why & (1 << bit)) && !(pause_ & (1 << bit))) pause_reasons_[bit] = reason;
@@ -456,6 +473,7 @@ void MowingPart::JobWithoutPlanner(CoreAccess core, const Reason& silent, const 
 
 void MowingPart::OnJobProgress(CoreFacts core, size_t index) {
   if (core.state() != State::kMowing || leg_ != Leg::kFollow) return;
+  if (static_cast<int>(index) > job_.progress().index) gps_resumes_ = 0;
   job_.OnIndex(index);
 }
 
@@ -484,6 +502,7 @@ void MowingPart::OnLegEnded(CoreAccess core, LegEnd end, size_t index, const Rea
   if (approach && end != LegEnd::kCanceled) planner_silent_ = 0;
   switch (end) {
     case LegEnd::kDone:
+      gps_resumes_ = 0;
       if (follow) {
         const JobPath* path = job_.CurrentPath();
         if (cut_ && !cut_->empty() && path && cut_->front().path == job_.progress().path &&
@@ -599,6 +618,7 @@ void MowingPart::Leave(CoreAccess core) {
   core.obstacle_part().ClearCircles();
   spinup_since_.reset();
   gps_good_since_.reset();
+  gps_resumes_ = 0;
 }
 
 void MowingPart::TickGpsWait(CoreAccess core, double now_s) {
@@ -609,6 +629,7 @@ void MowingPart::TickGpsWait(CoreAccess core, double now_s) {
       gps_good_since_ = now_s;
     } else if (now_s - *gps_good_since_ >= core.config().gps_wait_time) {
       gps_good_since_.reset();
+      ++gps_resumes_;
       Unpause(core, kPauseGps);
     }
   }

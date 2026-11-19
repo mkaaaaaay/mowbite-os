@@ -39,6 +39,7 @@ void HomeWatch::OnSample(const HomeSample& sample) {
     window_since_.reset();
     window_.clear();
   }
+  Track(&unreported_since_, !sample.battery_ok, now_);
   Track(&motor_hot_since_, sample.blade_ok && sample.blade_temperature >= config_.motor_hot_temperature, now_);
   Track(&wet_since_, config_.rain_mode != 0 && sample.rain, now_);
 }
@@ -48,7 +49,8 @@ bool HomeWatch::Holds(HomeReason reason) const {
     case HomeReason::kBatteryCritical: return Held(critical_since_, now_, config_.critical_time);
     case HomeReason::kBatteryHot: return Held(battery_hot_since_, now_, config_.hot_time);
     case HomeReason::kBatteryLow:
-      return Held(window_since_, now_, config_.low_window) && WindowVoltage() < config_.empty_voltage;
+      return BatteryUnreported() ||
+             (Held(window_since_, now_, config_.low_window) && WindowVoltage() < config_.empty_voltage);
     case HomeReason::kMotorHot: return Held(motor_hot_since_, now_, config_.hot_time);
     case HomeReason::kRain: return Held(wet_since_, now_, config_.rain_check_seconds);
   }
@@ -64,6 +66,10 @@ std::vector<HomeReason> HomeWatch::Due() const {
   return due;
 }
 
+bool HomeWatch::BatteryUnreported() const {
+  return Held(unreported_since_, now_, config_.low_window);
+}
+
 double HomeWatch::WindowVoltage() const {
   double highest = 0;
   for (const auto& sample : window_) highest = std::max(highest, sample.second);
@@ -76,6 +82,7 @@ void HomeWatch::Reset() {
   battery_hot_since_.reset();
   motor_hot_since_.reset();
   wet_since_.reset();
+  unreported_since_.reset();
   window_since_.reset();
   window_.clear();
 }

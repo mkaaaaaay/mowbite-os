@@ -285,8 +285,8 @@ void DockingPart::DockingWithoutPlanner(CoreAccess core, const Reason& silent) {
 void DockingPart::DockingTryFailed(CoreAccess core, const Reason& why) {
   core.Notify(why.message);
   if (marker_docking_) return MarkerTryFailed(core, why);
-  // Out to the approach point first; the try counts once the mower got there.
-  if (core.pose() && docking_last_kind_ != DockingLeg::Kind::kOut &&
+  // Out to the approach point first, by a good pose; the try counts once the mower got there.
+  if (core.PoseGood() && docking_last_kind_ != DockingLeg::Kind::kOut &&
       docking_.OnLine(core.pose()->x, core.pose()->y, core.pose()->heading)) {
     docking_failure_ = why;
     SetDockingLeg(core, docking_.Out(core.pose()->x, core.pose()->y, core.pose()->heading));
@@ -429,7 +429,7 @@ void DockingPart::WaitForDockingGps(CoreAccess core) {
 void DockingPart::TickDocking(CoreAccess core, double now_s) {
   const auto& mower = core.pose();
   // Poses of the marker age also while a leg in the map drives.
-  marker_clock_ = std::max(marker_clock_, now_s);
+  AgeDockPose(now_s);
   if (docking_charge_) {
     OnChargeResult(core, docking_charge_->OnTick(now_s));
     return;

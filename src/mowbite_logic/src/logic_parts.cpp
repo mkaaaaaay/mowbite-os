@@ -181,6 +181,18 @@ Reason LogicCore::OnDockCheck(bool ok, double x, double y, float accuracy, const
   return undocking_.OnDockCheck(CoreAccess(*this), ok, x, y, accuracy, message);
 }
 
+Reason LogicCore::RefuseDockCheck(const Reason& why) {
+  return undocking_.RefuseDockCheck(CoreAccess(*this), why);
+}
+
+void LogicCore::AgeDockPose(double now_s) {
+  docking_part_.AgeDockPose(now_s);
+}
+
+bool LogicCore::MowingDockCheck() const {
+  return undocking_.dock_check() == DockCheck::kMowing;
+}
+
 bool LogicCore::UndockingForDrive() const {
   return undocking_.UndockingForDrive(CoreFacts(*this));
 }

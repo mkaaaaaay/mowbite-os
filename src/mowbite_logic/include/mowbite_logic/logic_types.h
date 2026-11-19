@@ -392,6 +392,8 @@ constexpr double kReleaseSourceS = 2.0;
 
 // A job asks the planner again this often in a row when it gave no answer; then mowing ends and the mower goes home.
 constexpr int kPlannerRetries = 3;
+// Pauses for GPS in a row that ended on their own without the job getting on: the next one waits for the user.
+constexpr int kGpsResumes = 3;
 
 // A cut of the plan (cut_plan) that found no way in the planner's time is asked for once more.
 constexpr int kCutRetries = 1;

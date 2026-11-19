@@ -89,9 +89,8 @@ std::vector<geometry_msgs::msg::Polygon> LogicNode::CirclePolygons(bool inner) c
 }
 
 void LogicNode::Detour(const JobStep& step) {
-  Reason why = PlanWay(Purpose::kApproach, step.goal.x, step.goal.y, step.goal.heading, step.area_id,
-                       core_.View().AvoidSpeed());
-  if (why.code == "PLANNER_MISSING") why = Reason("APPROACH_FAILED", why.message);
+  const Reason why = PlanWay(Purpose::kApproach, step.goal.x, step.goal.y, step.goal.heading, step.area_id,
+                             core_.View().AvoidSpeed());
   if (!why.empty()) {
     core_.Call<&LogicCore::OnLegEnded>(LegEnd::kFailed, 0, why);
     return;

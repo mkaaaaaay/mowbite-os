@@ -25,6 +25,11 @@ Reason GoingHomePart::HomeWhy(CoreFacts core, HomeReason reason) const {
           .With("temperature", static_cast<int>(core.hw().battery_temperature))
           .With("limit", core.config().battery_hot_temperature);
     case HomeReason::kBatteryLow:
+      if (home_.BatteryUnreported()) {
+        std::snprintf(text, sizeof(text), "no battery level from the driver for %.0f s",
+                      core.config().battery_low_window);
+        return Reason("BATTERY_LOW", text);
+      }
       std::snprintf(text, sizeof(text), "the battery stayed below %.1f V for %.0f s (at most %.1f V)",
                     core.config().battery_empty_voltage, core.config().battery_low_window, home_.WindowVoltage());
       return Reason("BATTERY_LOW", text)

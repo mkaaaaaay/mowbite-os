@@ -46,13 +46,35 @@ bool UndockingPart::DockCheckPending() const {
   return dock_check_ != DockCheck::kNone;
 }
 
-Reason UndockingPart::OnDockCheck(CoreAccess core, bool ok, double x, double y, float accuracy,
-                                  const std::string& message) {
-  const DockCheck purpose = dock_check_;
-  if (purpose == DockCheck::kNone) return Reason("STOPPED", "No reference check was on its way");
-  dock_check_ = DockCheck::kNone;
+DockCheck UndockingPart::TakeDockCheck(CoreAccess core) {
+  const DockCheck purpose = std::exchange(dock_check_, DockCheck::kNone);
+  if (purpose == DockCheck::kNone) return purpose;
   core.effects().Drop<ReferenceCheck>();
   core.effects().SetDue<ActionsChanged>(true);
+  return purpose;
+}
+
+void UndockingPart::RefuseFor(CoreAccess core, DockCheck purpose, const Reason& why) {
+  if (purpose == DockCheck::kMowing) {
+    core.RefuseStart(why);
+    core.RunEnds("REFUSED", why.code);
+    core.FinishRun();
+  } else {
+    core.RefuseDrive(why);
+  }
+}
+
+Reason UndockingPart::RefuseDockCheck(CoreAccess core, const Reason& why) {
+  const DockCheck purpose = TakeDockCheck(core);
+  if (purpose == DockCheck::kNone) return Reason("STOPPED", "No reference check was on its way");
+  RefuseFor(core, purpose, why);
+  return why;
+}
+
+Reason UndockingPart::OnDockCheck(CoreAccess core, bool ok, double x, double y, float accuracy,
+                                  const std::string& message) {
+  const DockCheck purpose = TakeDockCheck(core);
+  if (purpose == DockCheck::kNone) return Reason("STOPPED", "No reference check was on its way");
   // What changed meanwhile comes first: an emergency, the contact, then the rest of a start or a drive.
   Reason why = core.Unsafe();
   if (why.empty() && !core.DockContact()) {
@@ -93,13 +115,7 @@ Reason UndockingPart::OnDockCheck(CoreAccess core, bool ok, double x, double y, 
     StartUndocking(core, purpose, x, y);
     return why;
   }
-  if (purpose == DockCheck::kMowing) {
-    core.RefuseStart(why);
-    core.RunEnds("REFUSED", why.code);
-    core.FinishRun();
-  } else {
-    core.RefuseDrive(why);
-  }
+  RefuseFor(core, purpose, why);
   return why;
 }
 

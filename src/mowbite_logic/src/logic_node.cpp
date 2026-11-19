@@ -928,7 +928,7 @@ void LogicNode::PlanJobArea(const std::string& area_id) {
     return;
   }
   if (!plan_client_->service_is_ready()) {
-    core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", "The planner is not running"));
+    core_.Call<&LogicCore::OnJobPlanFailed>(PlannerMissing());
     return;
   }
   RCLCPP_INFO(get_logger(), "Mowing: planning area %s", area_id.c_str());
@@ -965,8 +965,7 @@ void LogicNode::OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::P
 
 // Drives to the start of a path over the drivable areas, the blade off. Called with the mutex held.
 void LogicNode::Approach(const JobPose& goal) {
-  Reason why = PlanWay(Purpose::kApproach, goal.x, goal.y, goal.heading);
-  if (why.code == "PLANNER_MISSING") why = Reason("APPROACH_FAILED", why.message);
+  const Reason why = PlanWay(Purpose::kApproach, goal.x, goal.y, goal.heading);
   if (!why.empty()) {
     core_.Call<&LogicCore::OnLegEnded>(LegEnd::kFailed, 0, why);
     return;
@@ -2297,7 +2296,10 @@ void LogicNode::SendDockCheck(double heading) {
 // Called with the mutex held.
 void LogicNode::FinishDockCheck(bool ok, double x, double y, float accuracy, const std::string& message) {
   dock_check_sent_.reset();
-  const Reason why = core_.Call<&LogicCore::OnDockCheck>(ok, x, y, accuracy, message);
+  // Planner and follower are asked again before the mower leaves the station for mowing.
+  const Reason node = core_.View().MowingDockCheck() ? NodeProblemLocked("mowing.start") : Reason();
+  const Reason why = node.empty() ? core_.Call<&LogicCore::OnDockCheck>(ok, x, y, accuracy, message)
+                                  : core_.Call<&LogicCore::RefuseDockCheck>(node);
   const bool drive = dock_drive_.has_value();
   if (why.empty()) {
     RCLCPP_INFO(get_logger(), "%s from the docking station: reference check passed, undocking",

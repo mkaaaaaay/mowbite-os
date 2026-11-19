@@ -17,7 +17,8 @@ struct HomeConfig {
   // Below critical_voltage for critical_time s without a break.
   double critical_voltage = 19.7;
   double critical_time = 2.0;
-  // The highest voltage of the last low_window s below empty_voltage, with samples over the whole window.
+  // The highest voltage of the last low_window s below empty_voltage, with samples over the whole window; or no
+  // battery level for low_window s.
   double empty_voltage = 21.0;
   double low_window = 20.0;
   double battery_hot_temperature = 0;
@@ -56,6 +57,8 @@ class HomeWatch {
   bool Holds(HomeReason reason) const;
   // The highest voltage of the window, for BATTERY_LOW.
   double WindowVoltage() const;
+  // BATTERY_LOW holds because the driver gave no battery level for low_window s.
+  bool BatteryUnreported() const;
   // Starts every rule anew.
   void Reset();
   const HomeConfig& config() const {
@@ -71,6 +74,7 @@ class HomeWatch {
   std::optional<double> battery_hot_since_;
   std::optional<double> motor_hot_since_;
   std::optional<double> wet_since_;
+  std::optional<double> unreported_since_;
   // The samples of the battery since window_since_, without a gap, the last low_window s of them.
   std::optional<double> window_since_;
   std::deque<std::pair<double, double>> window_;

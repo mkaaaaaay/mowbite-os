@@ -393,6 +393,8 @@ class LogicNode : public rclcpp::Node {
   // MonotonicSeconds() of the last hw/status and localization/pose: a step of the system clock moves no limit.
   std::optional<double> last_hw_;
   std::optional<double> last_pose_;
+  // The last run of the 100 ms timer: hw/status and the pose that pass their timeout are told there at once.
+  double fast_tick_s_ = 0;
   double hw_timeout_s_;
   double pose_timeout_s_;
   double follower_timeout_s_ = 2.0;

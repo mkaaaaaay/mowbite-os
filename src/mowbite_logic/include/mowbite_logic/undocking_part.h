@@ -17,6 +17,7 @@ class UndockingPart {
   void CheckDockBeforeDrive(CoreAccess core, double x, double y);
   bool DockCheckPending() const;
   Reason OnDockCheck(CoreAccess core, bool ok, double x, double y, float accuracy, const std::string& message);
+  Reason RefuseDockCheck(CoreAccess core, const Reason& why);
   // Undocking from base_link at (x, y) for mowing or the drive: charging off first.
   void StartUndocking(CoreAccess core, DockCheck purpose, double x, double y);
   bool UndockingForDrive(CoreFacts core) const;
@@ -40,6 +41,10 @@ class UndockingPart {
   }
 
  private:
+  // Ends the check on its way and gives what it was for, kNone without one.
+  DockCheck TakeDockCheck(CoreAccess core);
+  // MOWING_REFUSED and the end of a run, or DRIVE_REFUSED.
+  static void RefuseFor(CoreAccess core, DockCheck purpose, const Reason& why);
   // The reference check on its way and what for.
   DockCheck dock_check_ = DockCheck::kNone;
   // The goal of a drive from the station, for after undocking.

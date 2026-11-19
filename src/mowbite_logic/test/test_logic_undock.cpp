@@ -176,6 +176,24 @@ TEST(UndockPlan, TheCourseCountsOnlyFarEnoughOut) {
   EXPECT_NEAR(CourseError(0, 0, M_PI, -0.4, -0.01, 0.3).value_or(99), 0.01 / 0.4, 1e-3);
 }
 
+// The planner gone during the reference check: the mower stays on the station.
+TEST(Undock, TheNodeRefusesAStartWhoseCheckCameBack) {
+  TestCore core = Docked();
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_TRUE(core.TakeDockCheck());
+  EXPECT_TRUE(core.MowingDockCheck());
+  core.TakeEvents();
+  EXPECT_EQ(core.RefuseDockCheck(Reason("PLANNER_MISSING", "The planner is not running")).code, "PLANNER_MISSING");
+  EXPECT_FALSE(core.MowingDockCheck());
+  EXPECT_TRUE(core.Idle());
+  EXPECT_FALSE(core.TakeChargeOff());
+  const auto events = core.TakeEvents();
+  const Event* refused = Find(events, "MOWING_REFUSED");
+  ASSERT_TRUE(refused);
+  EXPECT_EQ(refused->details["reason"], "PLANNER_MISSING");
+  EXPECT_EQ(core.RefuseDockCheck(Reason("PLANNER_MISSING", "")).code, "STOPPED");
+}
+
 TEST(Undock, ACheckThatPassesStartsWithChargingOff) {
   TestCore core = Docked();
   StartUndocking(core);

@@ -175,6 +175,10 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   recording_.recorder().SetDockContact(DockContact());
   UpdateEmergency();
   if (state_ == State::kDocking) OnDockingContact();
+  // Mowing never touches the station: a contact stops it for the user, the blade stays off until continue.
+  if (state_ == State::kMowing && DockContact()) {
+    Pause(kPauseFault, Reason("DOCK_CONTACT", "Contact with the docking station while mowing"));
+  }
   WatchCharge();
   // From the rpm the MCU reports, not from what was asked for.
   const bool running = hw.telemetry_ok && hw.blade.ok && std::abs(hw.blade.rpm) >= config_.blade_running_rpm;
@@ -840,9 +844,17 @@ std::vector<SensorReading> LogicCore::Readings() const {
 }
 
 void LogicCore::OnMowMap(std::vector<JobArea> areas, const Reason& problem) {
-  mowing_.job().SetAreas(std::move(areas));
+  MowingJob& job = mowing_.job();
+  job.SetAreas(std::move(areas));
   mow_map_problem_ = problem;
-  if (state_ == State::kMowing && !problem.empty()) Pause(kPauseFault, problem);
+  if (state_ != State::kMowing) return;
+  if (!problem.empty()) Pause(kPauseFault, problem);
+  // The plan is for an area that is no longer where it was, or no longer mowed: it goes, continue plans anew.
+  const JobArea* area = job.CurrentArea();
+  if (job.HasPlan() && (!area || area->id != job.progress().area_id || !area->mowable)) {
+    Pause(kPauseFault, Reason("MAP_CHANGED", "The mowing areas changed while mowing: continue plans anew"));
+    mowing_.DropPlan();
+  }
 }
 
 void LogicCore::RestoreJob(const JobProgress& progress) {
@@ -906,6 +918,7 @@ Reason LogicCore::MowProblem(const std::vector<std::string>& tasks) const {
   Reason why = Unsafe();
   if (!why.empty()) return why;
   if (hw_.rain) return Reason("RAIN", "Rain detected");
+  if (!hw_.battery_ok) return Reason("BATTERY_LOW", "No battery level from the driver");
   char text[160];
   // Below empty mowing would go home at once.
   if (hw_.battery_ok && hw_.battery_voltage < config_.battery_empty_voltage) {

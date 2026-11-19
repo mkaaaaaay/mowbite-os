@@ -111,7 +111,10 @@ TEST(ObstaclePart, ALivingThingAheadSlowsTheMower) {
   EXPECT_TRUE(part.Slow());
   EXPECT_FALSE(part.Holding());
   EXPECT_EQ(part.TakeNotes()[0].action, "slowed");
+  // A stale status keeps it slow; a new one without the animal ahead ends it.
   part.Tick(1.2);
+  EXPECT_TRUE(part.Slow());
+  part.OnStatus(Seen({}), 1.3, true);
   EXPECT_FALSE(part.Slow());
 }
 

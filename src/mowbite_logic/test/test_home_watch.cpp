@@ -97,6 +97,25 @@ TEST(HomeWatch, AGapStartsEveryRuleAnew) {
   EXPECT_FALSE(late.Holds(HomeReason::kBatteryCritical));
 }
 
+TEST(HomeWatch, NoBatteryLevelForAFullWindowCountsAsLow) {
+  HomeWatch watch;
+  for (int t = 0; t < 20; ++t) {
+    HomeSample s = Good(t);
+    s.battery_ok = false;
+    watch.OnSample(s);
+  }
+  EXPECT_FALSE(watch.Holds(HomeReason::kBatteryLow));
+  HomeSample s = Good(20);
+  s.battery_ok = false;
+  watch.OnSample(s);
+  EXPECT_TRUE(watch.Holds(HomeReason::kBatteryLow));
+  EXPECT_TRUE(watch.BatteryUnreported());
+  // A report ends it.
+  watch.OnSample(Good(21));
+  EXPECT_FALSE(watch.Holds(HomeReason::kBatteryLow));
+  EXPECT_FALSE(watch.BatteryUnreported());
+}
+
 TEST(HomeWatch, HotForItsTimeOnlyWithAReportAndALimit) {
   HomeConfig config;
   config.motor_hot_temperature = 70;

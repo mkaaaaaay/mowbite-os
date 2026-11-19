@@ -212,7 +212,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
       &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
-      &L::SetObstacleMode, &L::OnCutAnswer);
+      &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
@@ -267,6 +267,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
     a.template Result<&L::StartDocking>([](const auto& o, Reason& why) { AnonymizeReason(o, why); });
     a.template Result<&L::OnDockCheck>(
         [](const auto& o, Reason& why, bool&, double&, double&, float&, std::string&) { AnonymizeReason(o, why); });
+    a.template Result<&L::RefuseDockCheck>([](const auto& o, Reason& why, Reason&) { AnonymizeReason(o, why); });
     a.template Result<&L::TakeEffects>([](const auto& o, std::vector<mowbite_logic::Effect>& effects) {
       for (auto& effect : effects) {
         if (auto* event = std::get_if<mowbite_logic::Event>(&effect)) {

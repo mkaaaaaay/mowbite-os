@@ -569,6 +569,25 @@ TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
   EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"DOCKED"}));
 }
 
+// At the gate without a heading: the gate fails, and no way out is planned from that pose.
+TEST(Docking, AtTheGateWithoutAHeadingNothingDrivesOutByIt) {
+  TestCore core = AtTheGate();
+  PoseSnapshot pose = PoseAt(-0.74, 0.0, 0.0);
+  pose.orientation_valid = false;
+  core.OnPose(pose);
+  core.TakeEvents();
+  core.OnDockingLegEnded(LegEnd::kDone, Reason("DONE", "done"));
+  const auto events = core.TakeEvents();
+  const Event* retry = nullptr;
+  for (const auto& e : events) {
+    if (e.type == "DOCKING_RETRY" || e.type == "DOCKING_FAILED") retry = &e;
+  }
+  ASSERT_TRUE(retry);
+  EXPECT_NE(retry->details["message"].get<std::string>().find("heading"), std::string::npos) << retry->details;
+  const auto leg = core.TakeDockingLeg();
+  EXPECT_TRUE(!leg || leg->kind != DockingLeg::Kind::kOut);
+}
+
 TEST(Docking, MissingTheGateDrivesOutAndTriesAgain) {
   TestCore core = AtTheGate();
   // 3 cm beside the line at the gate.

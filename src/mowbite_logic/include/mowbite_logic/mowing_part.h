@@ -23,6 +23,8 @@ class MowingPart {
   // The job StartMowing continues or begins, before the state changes.
   void PrepareStart(CoreAccess core);
   void ApplySkips(CoreAccess core);
+  // The plan, its cut and a plan or cut on its way go; the place stays for the next plan.
+  void DropPlan();
   void Pause(CoreAccess core, int why, const Reason& reason);
   void Unpause(CoreAccess core, int why);
   JobStep NextJobStep(CoreAccess core, double now_s);
@@ -132,6 +134,7 @@ class MowingPart {
   std::string announced_area_;
   std::optional<double> spinup_since_;
   std::optional<double> gps_good_since_;
+  int gps_resumes_ = 0;
   // obstacle_mode avoid: the pieces of the plan left to mow while the mower keeps out of the circles, in order (none:
   // the plan as it is); the circles the cut on its way adds and the area and plan it is for; the circles changed or a
   // plan came while there are some (the plan is cut anew before the next leg); poses were left out (the next leg drives
