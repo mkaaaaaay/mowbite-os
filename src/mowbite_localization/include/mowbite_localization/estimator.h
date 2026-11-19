@@ -3,7 +3,6 @@
 
 #include <Eigen/Core>
 #include <cmath>
-#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -201,9 +200,6 @@ class Estimator {
   CourseAlignment course_;
   CourseTrack track_;
   int course_rejections_ = 0;
-  // The fix time of the last course a run took, and of the last course at all: windows that overlap share positions.
-  double course_window_end_ = -std::numeric_limits<double>::infinity();
-  double last_course_time_ = -std::numeric_limits<double>::infinity();
   FixAccuracy accuracy_;
   Eigen::Vector2d lever_ = Eigen::Vector2d::Zero();
   Tilt tilt_;

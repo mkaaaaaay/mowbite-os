@@ -228,20 +228,12 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
     case TrackCheck::kAgrees:
       break;
   }
-  // A course over a window shares its positions with the courses whose windows overlap it: a run takes one per
-  // window, and a single update counts as much less as its window overlaps the course before.
-  const double window = fix.motion_window;
-  const bool independent = t - window >= course_window_end_;
-  // At least 1 ms between courses keeps the weight finite.
-  const double overlap = std::max(1.0, window / std::max(t - last_course_time_, 1e-3));
-  if (independent) course_window_end_ = t;
-  last_course_time_ = t;
+  // A chord of positions carries the noise of its two ends only: courses over overlapping windows count each.
   const std::optional<double> heading = course.heading;
   const double variance = CourseVariance(velocity.norm(), config_.course);
   const double heading_variance = filter_.covariance()(2, 2);
   // On the gyro alone the courses of a run agree whatever the estimate did meanwhile.
-  const std::optional<double> run =
-      independent ? course_.Add(WrapAngle(*heading - then.gyro_heading), t) : std::nullopt;
+  const std::optional<double> run = course_.Add(WrapAngle(*heading - then.gyro_heading), t);
   if (run) {
     // The heading the run says for now, against the estimate.
     const double from_run = WrapAngle(gyro_heading_ + *run);
@@ -265,7 +257,7 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
     return false;
   }
   const State before = filter_.state();
-  filter_.UpdateHeading(difference, variance * overlap);
+  filter_.UpdateHeading(difference, variance);
   ShiftHistory(before);
   return false;
 }
