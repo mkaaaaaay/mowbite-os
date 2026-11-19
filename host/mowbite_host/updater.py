@@ -446,14 +446,15 @@ class Updater:
                 why = ("BUSY", "MowBite OS is starting or stopping")
             else:
                 active = state == "active"
-                still = active and gate.off(self.paths, started) is not None
+                # Given up by systemd after its crashes it is down as well: nobody could release a restart hold.
+                still = state == "failed" or (active and gate.off(self.paths, started) is not None)
                 why = self._closed(jobs, active, still)
-                if why is None and (still or not active):
-                    return
-                if why is None:
+                if why is None and active and not still:
                     why = self._ask_hold(jobs)
-                    if why is None:
-                        return
+                if why is None:
+                    if until is not None and time.monotonic() >= until:
+                        raise Refused("BUSY", "the window of the automatic update ended before the switch")
+                    return
             self._set_phase("waiting_gate", why[0])
             if time.monotonic() >= deadline:
                 raise Refused(why[0], f"the gate stayed closed: {why[1]}")

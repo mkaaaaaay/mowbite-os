@@ -197,6 +197,16 @@ class InboxTest(Base):
         self.updater.check()
         self.assertIsNone(self.updater.status()["components"][0]["available"])
 
+    # A bundle checked before its .sig arrived is read again with it.
+    def test_signature_after_the_bundle(self):
+        path = self.bundle(A)
+        os.rename(path + ".sig", path + ".later")
+        self.updater.check()
+        self.assertIsNone(self.updater.status()["components"][0]["available"])
+        os.rename(path + ".later", path + ".sig")
+        self.updater.check()
+        self.assertEqual(self.updater.status()["components"][0]["available"]["revision"], A)
+
     def index(self, entries, namespace="mowbite-index"):
         path = os.path.join(self.paths.inbox, origin.INDEX)
         with open(path, "w") as f:
@@ -710,6 +720,27 @@ class FlowTest(Base):
         self.assertNotIn(900, self.fake.holds[asked:])
         self.assertTrue(os.path.exists(self.paths.restart_hold))
 
+    # Given up by systemd after its crashes, with the restart hold no one can release.
+    def test_back_out_of_failed(self):
+        self.install(A)
+        self.install(B)
+        self.fake.stop()
+        self.fake.state = "failed"
+        self.write(self.paths.restart_hold, "{}")
+        self.updater.rollback("os")
+        self.assertEqual(self.updater.join()["result"], "installed")
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertTrue(os.path.exists(self.paths.restart_hold))
+
+    # The gate opened after the end of the window: no switch.
+    def test_no_switch_after_the_window(self):
+        self.install(A)
+        self.bundle(B)
+        self.updater.check()
+        last = self.run_update("os", B, by_hand=False, gate_until=time.monotonic() - 1)
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
     def test_library_missing_blocks(self):
         self.write(self.paths.os_setup, "return 1\n")
         self.bundle(A, extra={"lib/x.so": b"\x7fELF" + bytes(60)})
@@ -1025,6 +1056,16 @@ class HelpersTest(unittest.TestCase):
     # Tools of the rootfs take the lock by this path (mowbite-measure); a bundle of the host does not renew them.
     def test_the_lock_keeps_its_path(self):
         self.assertEqual(paths.Paths().lock, "/run/mowbite-host.lock")
+
+    # The environment files as systemd reads them: quotes, blanks and both kinds of comments.
+    def test_env_as_systemd_reads_it(self):
+        root = tempfile.mkdtemp(prefix="mowbite-host-")
+        self.addCleanup(shutil.rmtree, root)
+        where = paths.Paths(root)
+        os.makedirs(os.path.dirname(where.env_files[1]))
+        with open(where.env_files[1], "w") as f:
+            f.write('MOWBITE_MQTT_PORT="1884"\n; note\n# note\n MOWBITE_PLATFORM = \'tron\'\nA="x\nB=""\n')
+        self.assertEqual(where.env(), {"MOWBITE_MQTT_PORT": "1884", "MOWBITE_PLATFORM": "tron", "A": '"x', "B": ""})
 
     def test_window_left(self):
         at = time.struct_time((2026, 11, 11, 4, 59, 30, 2, 315, 0))
