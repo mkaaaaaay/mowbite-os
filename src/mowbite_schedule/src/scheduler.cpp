@@ -13,7 +13,6 @@ namespace {
 
 constexpr int kStateSchema = 1;
 constexpr int kLogSchema = 1;
-constexpr char kIdle[] = "IDLE";
 
 const char* PhaseName(Phase phase) {
   switch (phase) {

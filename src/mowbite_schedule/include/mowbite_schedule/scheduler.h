@@ -14,6 +14,8 @@
 
 namespace mowbite_schedule {
 
+// The state of robot_state a start goes from, without a sub state.
+constexpr char kIdle[] = "IDLE";
 // A plan fires in this many seconds after its time, later only from waiting.
 constexpr int64_t kWindow = 60;
 // How long a plan waits for the battery or the end of a hold, from its time.

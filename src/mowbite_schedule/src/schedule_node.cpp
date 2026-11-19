@@ -41,6 +41,9 @@ namespace {
 
 // robot_state older than this (s) counts as a silent logic.
 constexpr double kLogicFresh = 5.0;
+// hw/status comes several times a second, time/clock at least once a minute: older counts as none.
+constexpr double kHardwareFresh = 5.0;
+constexpr double kClockFresh = 150.0;
 // The files of the schedule are small; larger ones are not read.
 constexpr size_t kMaxFileBytes = size_t{64} * 1024;
 // How long a start waits for its mark on the disk (S4) before it fails with storage.
@@ -113,7 +116,10 @@ class ScheduleNode : public rclcpp::Node {
           robot_state_mono_ = MonotonicSeconds();
         });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) { hw_ = *msg; });
+        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
+          hw_ = *msg;
+          hw_mono_ = MonotonicSeconds();
+        });
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
         "hw/capabilities", LatchedQos(1),
         [this](const mowbite_msgs::msg::HardwareCapabilities::ConstSharedPtr& msg) {
@@ -125,6 +131,7 @@ class ScheduleNode : public rclcpp::Node {
     clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
         "time/clock", LatchedQos(1), [this](const mowbite_msgs::msg::ClockStatus::ConstSharedPtr& msg) {
           clock_ = ClockState{msg->ok, msg->reason};
+          clock_mono_ = MonotonicSeconds();
         });
     datum_sub_ = create_subscription<sensor_msgs::msg::NavSatFix>(
         "gps/datum", LatchedQos(1), [this](const sensor_msgs::msg::NavSatFix::ConstSharedPtr& msg) {
@@ -225,17 +232,22 @@ class ScheduleNode : public rclcpp::Node {
     Facts facts;
     facts.wall = WallSeconds();
     facts.mono = MonotonicSeconds();
-    facts.clock_ok = clock_.ok;
-    facts.clock_reason = clock_.reason;
+    // A clock status that stopped coming counts as none yet.
+    const bool clock_fresh = clock_mono_ && facts.mono - *clock_mono_ <= kClockFresh;
+    facts.clock_ok = clock_fresh && clock_.ok;
+    facts.clock_reason = clock_fresh ? clock_.reason : "never_synced";
     facts.logic_fresh = robot_state_mono_ && facts.mono - *robot_state_mono_ <= kLogicFresh;
-    facts.state = robot_state_.current_state;
-    facts.docked = hw_ && hw_->dock_contact;
-    facts.emergency = robot_state_.emergency || (hw_ && (hw_->emergency || hw_->emergency_latched));
+    // IDLE with a sub state (DRIVING, CALIBRATING, SETUP) is busy as well.
+    const std::string& sub = robot_state_.current_sub_state;
+    facts.state = robot_state_.current_state == kIdle && !sub.empty() ? sub : robot_state_.current_state;
+    const auto& hw = hw_mono_ && facts.mono - *hw_mono_ <= kHardwareFresh ? hw_ : kNoHardware;
+    facts.docked = hw && hw->dock_contact;
+    facts.emergency = robot_state_.emergency || (hw && (hw->emergency || hw->emergency_latched));
     facts.battery = static_cast<int>(std::lround(robot_state_.battery_percentage * 100.0));
     facts.rain_sensor = rain_sensor_;
-    facts.rain_wet = hw_ && hw_->rain;
+    facts.rain_wet = hw && hw->rain;
     facts.rain_mode = rain_mode_;
-    facts.hold = hold_until_ > facts.wall || (hw_ && hw_->hold);
+    facts.hold = hold_until_ > facts.wall || (hw && hw->hold);
     facts.latitude = latitude_;
     facts.longitude = longitude_;
     for (const auto& area : map_.MowAreas()) facts.areas.push_back(Area{area.id, area.mowable});
@@ -466,6 +478,9 @@ class ScheduleNode : public rclcpp::Node {
   mowbite_msgs::msg::RobotState robot_state_;
   std::optional<double> robot_state_mono_;
   std::optional<mowbite_msgs::msg::HardwareStatus> hw_;
+  std::optional<double> hw_mono_;
+  std::optional<double> clock_mono_;
+  static inline const std::optional<mowbite_msgs::msg::HardwareStatus> kNoHardware{};
   bool rain_sensor_ = false;
   int rain_mode_ = 0;
   int64_t hold_until_ = 0;
