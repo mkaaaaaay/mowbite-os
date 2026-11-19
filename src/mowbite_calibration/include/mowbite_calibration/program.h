@@ -52,8 +52,17 @@ struct ProgramConfig {
   double pose_timeout = 0.5;
   double sensor_timeout = 0.5;
   double start_timeout = 3.0;
-  // LEFT_LANE: the antenna farther than lane_limit (m) from its line, or the pivot of a turn moved that far.
+  // LEFT_LANE: the antenna farther than lane_limit (m) from its line or past its end, or the pivot of a turn moved
+  // that far.
   double lane_limit = 0.3;
+  // POSITION_ACCURACY: the pose of the localization worse than pose_accuracy (m), at the start and while it runs.
+  // POSITION_JUMP: the localization moved its estimate onto GPS again while it runs.
+  double pose_accuracy = 0.1;
+  // NOT_STANDING: in a stand after its settling, the antenna faster than stand_speed (m/s), or the gyro or the wheels
+  // turning faster than stand_rate (rad/s). GYRO_OFFSET: the gyro of a stand more than gyro_offset_max (rad/s) off 0.
+  double stand_speed = 0.05;
+  double stand_rate = 0.1;
+  double gyro_offset_max = 0.05;
   // NOT_TURNING: turn_check_after (s) into a turn, the gyro over the last turn_mean_window (s) at the full rate on
   // average below turn_min_ratio of it; wheels near their dead zone turn in jerks, which the average takes.
   double turn_check_after = 2.0;
@@ -161,6 +170,8 @@ class Program {
   void OnGnss(const GnssSample& sample, double now);
   void OnPose(const PoseSample& sample, double now);
   void OnEmergency(bool emergency, double now);
+  // localization/jump: the estimate moved onto GPS again.
+  void OnPositionJump(double distance, double now);
 
   // What keeps a drive from starting now from the sensors: SENSOR_MISSING, NO_RTK, GNSS_RATE, IMU_GRAVITY, SLOPE.
   std::vector<Problem> Readiness(double now) const;
@@ -209,7 +220,7 @@ class Program {
   };
 
   std::optional<Problem> Common(double now);
-  std::optional<Problem> StandChecks(double now) const;
+  std::optional<Problem> StandChecks(double now);
   std::optional<Problem> TurnChecks(double rate_cmd, double now);
   std::optional<Problem> LineChecks(double now);
   // Mean of the accelerations between since and now, none with too few samples.
@@ -235,12 +246,15 @@ class Program {
   std::deque<double> imu_times_;
   std::deque<std::pair<double, ImuSample>> accel_;
   std::optional<double> wheels_s_;
+  double wheel_linear_ = 0;
   double wheel_angular_ = 0;
   std::deque<Fix> fixes_;
   std::optional<double> good_fix_s_;
   std::optional<double> pose_s_;
   PoseSample pose_;
   bool emergency_ = false;
+  // The distance of a jump of the localization while a drive runs.
+  std::optional<double> jump_;
   // The gyro's offset from the last stand, and the angle turned since the turn began.
   double gyro_bias_ = 0;
   double gyro_sum_ = 0;
@@ -276,6 +290,8 @@ class Program {
   Hold slow_hold_;
   Hold fast_hold_;
   Hold lane_hold_;
+  Hold accuracy_hold_;
+  Hold stand_hold_;
   std::optional<Problem> outcome_;
   std::vector<PhaseEdge> edges_;
 };

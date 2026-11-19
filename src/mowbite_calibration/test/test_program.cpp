@@ -54,6 +54,11 @@ struct Mower {
   bool gnss_on = true;
   bool heading_valid = true;
   double heading_error = 0;
+  double pose_accuracy = 0.015;
+  // The pose stays where the mower was when it froze.
+  bool pose_frozen = false;
+  double pose_x = 0;
+  double pose_y = 0;
   double cmd_v = 0;
   double cmd_w = 0;
   double cmd_s = -1e9;
@@ -125,8 +130,13 @@ class ProgramTest : public ::testing::Test {
         imu.az = mower_.gravity * (-gx * std::sin(mower_.tilt) + gz * std::cos(mower_.tilt));
         program_.OnImu(imu, now_);
       }
+      if (!mower_.pose_frozen) {
+        mower_.pose_x = mower_.x;
+        mower_.pose_y = mower_.y;
+      }
       if (step_ % 2 == 0 && mower_.pose_on) {
-        program_.OnPose({mower_.x, mower_.y, Wrap(mower_.heading + mower_.heading_error), mower_.heading_valid, 0.015},
+        program_.OnPose({mower_.pose_x, mower_.pose_y, Wrap(mower_.heading + mower_.heading_error),
+                         mower_.heading_valid, mower_.pose_accuracy},
                         now_);
       }
       if (step_ % static_cast<long>(std::lround(mower_.gnss_period / 0.01)) == 0 && mower_.gnss_on) {
@@ -356,6 +366,68 @@ TEST_F(ProgramTest, PoseLostOrWithoutHeading) {
   Run(now_ + 12.0);
   mower_.heading_valid = false;
   EXPECT_EQ(EndsWith(0.2), "POSE_LOST");
+}
+
+TEST_F(ProgramTest, APoseThatIsNotAccurateOrJumps) {
+  // At the start it waits for an accurate pose, then gives up.
+  Run(now_ + 2.0);
+  mower_.pose_accuracy = 0.3;
+  Run(now_ + 0.5);
+  ASSERT_TRUE(program_.Start(Lane{2, 3, 0.0, 3.0}, now_));
+  EXPECT_EQ(EndsWith(5.0), "POSITION_ACCURACY");
+  EXPECT_EQ(program_.round(), 0);
+  // On a line once it lasts hold_time.
+  Rebuild();
+  mower_ = Mower();
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  RunUntilPhase(Phase::kLine, 1);
+  mower_.pose_accuracy = 0.3;
+  const double bad = now_;
+  EXPECT_EQ(EndsWith(2.0), "POSITION_ACCURACY");
+  EXPECT_GT(ended_s_ - bad, 0.4);
+  // A jump of the localization ends it at once.
+  Rebuild();
+  mower_ = Mower();
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  RunUntilPhase(Phase::kLine, 1);
+  program_.OnPositionJump(0.4, now_);
+  EXPECT_EQ(EndsWith(0.1), "POSITION_JUMP");
+  // Not while no drive runs.
+  Rebuild();
+  mower_ = Mower();
+  program_.OnPositionJump(0.4, now_);
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(5.0), "still running");
+}
+
+TEST_F(ProgramTest, ALineEndsByTheAntennaWhenThePoseStands) {
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  RunUntilPhase(Phase::kLine, 1);
+  mower_.pose_frozen = true;
+  EXPECT_EQ(EndsWith(40.0), "LEFT_LANE");
+  EXPECT_NE(program_.outcome()->message.find("along"), std::string::npos);
+  EXPECT_LT(mower_.x, 2.0 + 3.0 + 0.3 + 0.15);
+}
+
+TEST_F(ProgramTest, NotStandingInAStand) {
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  RunUntilPhase(Phase::kStand, 1);
+  // The zero got lost: the mower rolls on.
+  EXPECT_EQ(EndsWith(5.0, [&] { mower_.Command({0.1, 0.0}, now_); }), "NOT_STANDING");
+  Rebuild();
+  mower_ = Mower();
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  RunUntilPhase(Phase::kStand, 1);
+  EXPECT_EQ(EndsWith(5.0, [&] { mower_.Command({0.0, 0.3}, now_); }), "NOT_STANDING");
+}
+
+TEST_F(ProgramTest, AGyroOffsetBeyondItsLimit) {
+  mower_.gyro_bias = 0.08;
+  StartOn(Lane{2, 3, 0.0, 3.0});
+  EXPECT_EQ(EndsWith(30.0), "GYRO_OFFSET");
+  EXPECT_EQ(program_.round(), 0);
+  EXPECT_EQ(edges_.back().phase, Phase::kStand);
+  EXPECT_FALSE(edges_.back().start);
 }
 
 TEST_F(ProgramTest, SensorMissing) {

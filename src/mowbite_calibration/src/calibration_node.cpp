@@ -14,6 +14,7 @@
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
+#include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
 #include <mowbite_msgs/msg/rpc_methods.hpp>
@@ -200,6 +201,11 @@ class CalibrationNode : public rclcpp::Node {
                                              [this](GnssFix::ConstSharedPtr msg) { OnGnss(*msg); });
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](mowbite_msgs::msg::RobotPose::ConstSharedPtr msg) { OnPose(*msg); });
+    jump_sub_ = create_subscription<mowbite_msgs::msg::PositionJump>(
+        "localization/jump", 10, [this](mowbite_msgs::msg::PositionJump::ConstSharedPtr msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          program_.OnPositionJump(msg->distance, MonotonicSeconds());
+        });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
@@ -710,6 +716,7 @@ class CalibrationNode : public rclcpp::Node {
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheel_sub_;
   rclcpp::Subscription<GnssFix>::SharedPtr gnss_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotPose>::SharedPtr pose_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::PositionJump>::SharedPtr jump_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;

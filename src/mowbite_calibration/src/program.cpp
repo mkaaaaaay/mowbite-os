@@ -115,8 +115,9 @@ void Program::OnImu(const ImuSample& sample, double now) {
   while (!accel_.empty() && accel_.front().first < now - kGravityWindow) accel_.pop_front();
 }
 
-void Program::OnWheels(double /*linear*/, double angular, double now) {
+void Program::OnWheels(double linear, double angular, double now) {
   wheels_s_ = now;
+  wheel_linear_ = linear;
   wheel_angular_ = angular;
 }
 
@@ -159,6 +160,10 @@ void Program::OnPose(const PoseSample& sample, double now) {
 
 void Program::OnEmergency(bool emergency, double /*now*/) {
   emergency_ = emergency;
+}
+
+void Program::OnPositionJump(double distance, double /*now*/) {
+  if (running_) jump_ = distance;
 }
 
 std::optional<std::array<double, 3>> Program::MeanGravity(double since, double now) const {
@@ -261,7 +266,8 @@ bool Program::Start(const Lane& lane, double now) {
   edges_.clear();
   outcome_.reset();
   commands_.clear();
-  sign_hold_ = slow_hold_ = fast_hold_ = lane_hold_ = Hold();
+  sign_hold_ = slow_hold_ = fast_hold_ = lane_hold_ = accuracy_hold_ = stand_hold_ = Hold();
+  jump_.reset();
   turned_ = 0;
   turn_fixes_.clear();
   pivot_.reset();
@@ -291,7 +297,7 @@ void Program::Begin(size_t index, double now) {
   step_s_ = now;
   last_tick_s_ = now;
   cmd_ = 0;
-  slow_hold_ = fast_hold_ = lane_hold_ = Hold();
+  slow_hold_ = fast_hold_ = lane_hold_ = stand_hold_ = Hold();
   turn_track_.clear();
   full_rate_s_.reset();
   Step& step = steps_[index_];
@@ -335,10 +341,20 @@ void Program::Begin(size_t index, double now) {
 }
 
 std::optional<Twist2> Program::Next(double now, bool moved) {
-  Edge(false, now);
   const Step& step = steps_[index_];
-  // The offset of the gyro for the turns: the mean of the stand that ends.
-  if (step.phase == Phase::kStand && gyro_count_ >= kMinBiasSamples) gyro_bias_ = gyro_sum_ / gyro_count_;
+  // The offset of the gyro for the turns: the mean of the stand that ends, within its limit.
+  if (step.phase == Phase::kStand && gyro_count_ >= kMinBiasSamples) {
+    const double offset = gyro_sum_ / gyro_count_;
+    if (std::abs(offset) > config_.gyro_offset_max) {
+      return Abort(Make("GYRO_OFFSET",
+                        Text("The gyro reads %.3f rad/s standing, at most %.3f rad/s", offset,
+                             config_.gyro_offset_max),
+                        {{"rate", offset}, {"limit", config_.gyro_offset_max}}),
+                   now);
+    }
+    gyro_bias_ = offset;
+  }
+  Edge(false, now);
   if (step.phase == Phase::kStand && stand_count_ >= kMinGravitySamples && pose_s_) {
     const double n = static_cast<double>(stand_count_);
     stands_.push_back({pose_.x, pose_.y, pose_.heading, {stand_sum_[0] / n, stand_sum_[1] / n, stand_sum_[2] / n}});
@@ -391,6 +407,11 @@ std::optional<Twist2> Program::Tick(double now) {
       missing = Make("SENSOR_MISSING", "No wheel odometry at the start");
     } else if (!pose_s_ || now - *pose_s_ > config_.pose_timeout || !pose_.heading_valid) {
       missing = Make("POSE_LOST", "No pose with a heading from the localization at the start");
+    } else if (!(pose_.accuracy <= config_.pose_accuracy)) {
+      missing = Make("POSITION_ACCURACY",
+                     Text("The pose is %.2f m accurate at the start, %.2f m needed", pose_.accuracy,
+                          config_.pose_accuracy),
+                     {{"accuracy", pose_.accuracy}, {"limit", config_.pose_accuracy}});
     } else if (!good_fix_s_ || now - *good_fix_s_ > config_.rtk_timeout) {
       missing = Make("NO_RTK", Text("No RTK fixed position of %.2f m or better at the start", config_.rtk_accuracy),
                      {{"limit", config_.rtk_accuracy}});
@@ -438,6 +459,15 @@ std::optional<Problem> Program::Common(double now) {
                 {{"seconds", quiet}, {"limit", config_.pose_timeout}});
   }
   if (!pose_.heading_valid) return Make("POSE_LOST", "The localization has no heading any more");
+  // Lines, turns and their checks go by the pose: a jump or a pose that is not accurate spoils them.
+  if (jump_) {
+    return Make("POSITION_JUMP", Text("The localization jumped by %.2f m", *jump_), {{"distance", *jump_}});
+  }
+  if (accuracy_hold_.Failing(!(pose_.accuracy <= config_.pose_accuracy), now, config_.hold_time)) {
+    return Make("POSITION_ACCURACY",
+                Text("The pose is %.2f m accurate, %.2f m needed", pose_.accuracy, config_.pose_accuracy),
+                {{"accuracy", pose_.accuracy}, {"limit", config_.pose_accuracy}});
+  }
   if (!good_fix_s_ || now - *good_fix_s_ > config_.rtk_timeout) {
     const double quiet = good_fix_s_ ? now - *good_fix_s_ : 0;
     return Make("NO_RTK",
@@ -463,8 +493,19 @@ std::optional<Problem> Program::Common(double now) {
   return std::nullopt;
 }
 
-std::optional<Problem> Program::StandChecks(double now) const {
+std::optional<Problem> Program::StandChecks(double now) {
   if (now - step_s_ < kSettle) return std::nullopt;
+  // A lost zero or a mower that rolls on: the gyro offset and gravity of the stand would be wrong.
+  const auto speed = AntennaSpeed(now);
+  const double rate = std::max(std::abs(imu_.gz), std::abs(wheel_angular_));
+  const bool moving = (speed && *speed > config_.stand_speed) || std::abs(wheel_linear_) > config_.stand_speed ||
+                      rate > config_.stand_rate;
+  if (stand_hold_.Failing(moving, now, config_.hold_time)) {
+    return Make("NOT_STANDING",
+                Text("The mower moves in a stand: antenna %.2f m/s, wheels %.2f m/s, turning %.2f rad/s",
+                     speed.value_or(0.0), wheel_linear_, rate),
+                {{"speed", speed.value_or(0.0)}, {"wheels", wheel_linear_}, {"rate", rate}});
+  }
   return Gravity(now - kGravityWindow, now, true);
 }
 
@@ -559,6 +600,13 @@ std::optional<Problem> Program::LineChecks(double now) {
     if (lane_hold_.Failing(off > config_.lane_limit, now, config_.hold_time)) {
       return Make("LEFT_LANE", Text("The antenna is %.2f m off its line, at most %.2f m", off, config_.lane_limit),
                   {{"distance", off}, {"limit", config_.lane_limit}});
+    }
+    // Along the line by the antenna, independent of the pose that ends the line.
+    const double along = dx * std::cos(heading) + dy * std::sin(heading);
+    if (along > lane_.length + config_.lane_limit) {
+      return Make("LEFT_LANE",
+                  Text("The antenna is %.2f m along its line of %.2f m", along, lane_.length),
+                  {{"distance", along - lane_.length}, {"limit", config_.lane_limit}});
     }
   }
   return std::nullopt;
