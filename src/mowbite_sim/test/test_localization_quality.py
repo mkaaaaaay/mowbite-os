@@ -291,6 +291,7 @@ class TestLocalizationQuality(unittest.TestCase):
         p = self.probe
         p.wait(lambda: p.pose.position_accuracy < 0.1, 30)
         p.straight(2.0)
+        before = p.samples_since(len(p.samples) - 2)
         p.flags(gnss_quality=0)
         p.straight(8.0)
         last = p.samples_since(len(p.samples) - 2)
@@ -302,6 +303,8 @@ class TestLocalizationQuality(unittest.TestCase):
         position, heading = errors(last[-1])
         report("outage_position_m", position, "m")
         report("outage_heading_deg", math.degrees(abs(heading)), "deg")
+        # What the outage itself added: the heading error when it began.
+        report("outage_heading_before_deg", math.degrees(abs(errors(before[-1])[1])) if before else None, "deg")
         report("outage_reported_accuracy_m", accuracy, "m")
         self.check("outage_position_m", position)
         self.check("outage_heading_deg", math.degrees(abs(heading)))
