@@ -124,11 +124,12 @@ class ObstaclePart {
   // OBSTACLE with kind (the most of what held it: PERSON, ANIMAL, then OBJECT, UNKNOWN).
   Reason Why() const;
   // mowing.continue in a hold: the things that held it and lie out of view now count no more until a sensor sees them
-  // again, and the hold ends. False, and nothing changes, while one of them is in view.
+  // again, and the hold ends. False, and nothing changes, while one of them is in view or the status is stale.
   bool Waive();
   // A start of mowing: of what holds the mower a person or animal counts, an object only if objects is set (the way out
   // of the station leads forwards; objects hold only ahead of the nose, and mowing holds for them as before).
-  // mowing.start lets go what of that lies out of view, like Waive; false, and nothing changes, while one is in view.
+  // mowing.start lets go what of that lies out of view, like Waive; false, and nothing changes, while one is in view
+  // or the status is stale.
   bool WaiveForStart(bool objects);
   // OBSTACLE while such a thing holds the mower, else empty: a run of the schedule waives nothing.
   Reason StartProblem(bool objects) const;
@@ -137,6 +138,9 @@ class ObstaclePart {
   // In a hold of objects alone that stood avoid_wait s and was not refused: the circles to keep out of around them;
   // else none.
   std::vector<AvoidCircle> AvoidDue(double now_s) const;
+  // Whether circles AvoidDue gave earlier are due still as they were, at the time of the last status: the same
+  // objects alone, each no farther than avoid_still from the middle of its circle.
+  bool StillDue(const std::vector<AvoidCircle>& circles) const;
   // The circles are driven around: the hold ends, they count until they go.
   void Avoid(const std::vector<AvoidCircle>& circles);
   // No way around them: this hold waits like one of obstacle_mode stop.

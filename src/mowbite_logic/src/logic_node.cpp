@@ -180,8 +180,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
             setup_blade_lease_s_ = msg->blade_lease_s;
             core_.Call<&LogicCore::OnSetupBlade>(msg->step, static_cast<int>(msg->blade));
           }
-          // At once, not with the next tick: an end of the step or an off of the blade.
-          UpdateBladeLocked();
+          // An end of the step or an off of the blade at once; an on only from Step(), once the session is written.
+          if (!core_.View().BladeWanted()) UpdateBladeLocked();
         }
         if (why.code != setup_refusal_ && !why.empty()) {
           RCLCPP_WARN(get_logger(), "Setup step %s refused: %s", msg->step.c_str(), why.message.c_str());
@@ -545,6 +545,12 @@ void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count
     if (release_rpc_ids_.empty()) release_seq_ = core_.View().LastReleaseOutcome().seq;
     release_rpc_ids_.push_back(rpc_id);
   }
+  // Without S2 nothing is released, and the restart hold stays.
+  if (!emergency_client_->service_is_ready()) {
+    RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
+    RefuseReleaseLocked(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
+    return;
+  }
   // The user looked at the mower: the restart hold goes first, the file before the flag, so S2 does not latch it
   // again; the release of S2 and the driver follows as for any emergency.
   if (core_.View().RestartHeld()) {
@@ -559,11 +565,6 @@ void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count
     }
     core_.Call<&LogicCore::SetRestartHold>(false);
     RCLCPP_INFO(get_logger(), "Restart hold released by emergency.reset");
-  }
-  if (!emergency_client_->service_is_ready()) {
-    RCLCPP_ERROR(get_logger(), "safety/release_emergency is not available, emergency stays");
-    RefuseReleaseLocked(Reason("SAFETY_MISSING", "safety/release_emergency is not available"));
-    return;
   }
   auto request = std::make_shared<mowbite_msgs::srv::SetEmergency::Request>();
   request->latch = false;

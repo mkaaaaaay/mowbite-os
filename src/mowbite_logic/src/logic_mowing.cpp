@@ -42,7 +42,8 @@ Reason MowingPart::RequestStart(CoreAccess core, StartRequest request, const Rea
   Reason why = core.StartProblem(request.tasks);
   if (why.empty()) why = node_problem;
   if (why.empty() && !core.obstacle_part().WaiveForStart(core.LeavesForwards())) {
-    why = core.obstacle_part().StartProblem(core.LeavesForwards()).WithMessage("An obstacle in view is in the way");
+    why = core.obstacle_part().StartProblem(core.LeavesForwards())
+              .WithMessage("An obstacle in view, or one the sensors report no more, is in the way");
   }
   if (!why.empty()) {
     core.RefuseStart(why);
@@ -186,6 +187,7 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
       announced_area_ = area->id;
       core.AddEvent("AREA", {{"area_id", area->id}, {"area_name", area->name}});
     }
+    spinup_since_.reset();
     leg_ = Leg::kPlanning;
     step.kind = JobStep::Kind::kPlan;
     step.area_id = area->id;
@@ -227,6 +229,8 @@ JobStep MowingPart::NextJobStep(CoreAccess core, double now_s) {
   }
   if (!approached_ &&
       std::hypot(goal->x - pose_now->x, goal->y - pose_now->y) > core.config().approach_distance) {
+    // No blade on the way to the start of the path: a spin up begun before counts no more.
+    spinup_since_.reset();
     leg_ = Leg::kApproach;
     step.kind = JobStep::Kind::kApproach;
     step.goal = *goal;
@@ -261,6 +265,7 @@ bool MowingPart::BladeReady(CoreAccess core, double now_s) {
 }
 
 JobStep MowingPart::CutStep(CoreAccess core, std::vector<AvoidCircle> added) {
+  spinup_since_.reset();
   JobStep step;
   step.kind = JobStep::Kind::kCut;
   step.area_id = job_.CurrentArea()->id;
@@ -292,6 +297,12 @@ void MowingPart::OnCutAnswer(CoreAccess core, const CutAnswer& given) {
     return;
   }
   if (around && pause_ != kPauseObstacle) return;
+  // What held the mower changed while the planner cut (a person came, the status went stale, the object moved): no way
+  // around for it, the hold goes on and asks again once objects alone stand.
+  if (around && !core.obstacle_part().StillDue(added)) {
+    core.Notify("Mowing: the obstacle changed while the way around was planned, waiting for it");
+    return;
+  }
   if (!answer.ok && answer.code == "SEARCH_LIMIT" && cut_retries_ < kCutRetries) {
     // The planner kept the room after the first try: the second one gets further.
     ++cut_retries_;

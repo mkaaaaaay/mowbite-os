@@ -161,22 +161,25 @@ TEST(LogicSetup, TheBladeTurnsAsTheStepAsksWithoutASafetyMeasurement) {
   core.OnSetupBlade("blade", 7);
   EXPECT_FALSE(core.BladeWanted());
   core.OnSetupBlade("blade", 1);
-  // An emergency, no telemetry or the station switch it off.
+  // An emergency or no telemetry switch it off until the step asks for the blade anew.
+  for (int cut = 0; cut < 2; ++cut) {
+    HardwareSnapshot hw = Healthy();
+    hw.emergency = cut == 0;
+    hw.emergency_reason = cut == 0 ? 1u << 2 : 0;
+    hw.telemetry_ok = cut != 0;
+    core.OnHardwareStatus(hw);
+    EXPECT_FALSE(core.BladeWanted());
+    core.OnHardwareStatus(Healthy());
+    EXPECT_FALSE(core.BladeWanted()) << cut;
+    core.OnSetupBlade("blade", 0);
+    core.OnSetupBlade("blade", 1);
+    EXPECT_TRUE(core.BladeWanted()) << cut;
+  }
+  // The station switches it off while it lasts.
   HardwareSnapshot hw = Healthy();
-  hw.emergency = true;
-  hw.emergency_reason = 1u << 2;
-  core.OnHardwareStatus(hw);
-  EXPECT_FALSE(core.BladeWanted());
-  hw = Healthy();
-  hw.telemetry_ok = false;
-  core.OnHardwareStatus(hw);
-  EXPECT_FALSE(core.BladeWanted());
-  hw = Healthy();
   hw.dock_contact = true;
   core.OnHardwareStatus(hw);
   EXPECT_FALSE(core.BladeWanted());
-  core.OnHardwareStatus(Healthy());
-  EXPECT_TRUE(core.BladeWanted());
 }
 
 TEST(LogicSetup, TheBladeGoesOffWithTheEndOfSetup) {

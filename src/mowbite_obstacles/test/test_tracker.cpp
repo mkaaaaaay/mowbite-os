@@ -125,6 +125,18 @@ TEST_F(TrackerTest, ThingsOfOtherKindsStaySeparate) {
   EXPECT_EQ(tracker.tracks().size(), 2u);
 }
 
+TEST_F(TrackerTest, APersonSeenAsAnObjectForAWhileStaysAPerson) {
+  Feed(1.0, {Thing(Kind::kPerson, 1.5, 0.0)});
+  Feed(1.2, {Thing(Kind::kPerson, 1.5, 0.0)});
+  for (double t = 1.4; t < 3.5; t += 0.2) Feed(t, {Thing(Kind::kObject, 1.5, 0.0)});
+  ASSERT_EQ(tracker.tracks().size(), 1u);
+  EXPECT_EQ(tracker.tracks().begin()->second.kind, Kind::kPerson);
+  EXPECT_TRUE(tracker.tracks().begin()->second.confirmed);
+  // An animal seen as a person becomes one, never the other way.
+  Feed(3.6, {Thing(Kind::kAnimal, 1.5, 0.0)});
+  EXPECT_EQ(tracker.tracks().begin()->second.kind, Kind::kPerson);
+}
+
 TEST_F(TrackerTest, AClassOfTheModelNamesAThingSeenByDepthAlone) {
   Feed(1.0, {Thing(Kind::kUnknown, 2.0, 0.0)});
   Feed(1.2, {Thing(Kind::kAnimal, 2.0, 0.0)});
@@ -391,6 +403,27 @@ TEST_F(TrackerTest, AThingThatStopsLeavesTheZoneOnlyWellBeyondItsEdge) {
   tracker.OnPose(pose);
   tracker.Tick(1.6);
   EXPECT_FALSE(tracker.StatusAt(1.6).stop);
+}
+
+TEST(Body, WithoutItTheSensorsAreNotSetUp) {
+  Tracker tracker;
+  tracker.SetSources({"stereo"});
+  tracker.OnPose({1.0, 0.0, 0.0, 0.0, 0.0});
+  tracker.OnFrame(At(1.0), 1.0);
+  Status status = tracker.StatusAt(1.1);
+  EXPECT_FALSE(status.sight);
+  EXPECT_EQ(status.reason, "NOT_SET_UP");
+  tracker.SetBody({0.605, 0.12, 0.235});
+  EXPECT_TRUE(tracker.StatusAt(1.1).sight);
+}
+
+TEST(Pose, OneThatIsNotFiniteIsLeftOut) {
+  Tracker tracker;
+  tracker.SetSources({"stereo"});
+  tracker.SetBody({0.605, 0.12, 0.235});
+  tracker.OnPose({1.0, 0.0, 0.0, 0.0, std::nan("")});
+  EXPECT_TRUE(tracker.OnFrame(At(1.0, {Thing(Kind::kObject, 2.0, 0.0)}), 1.0).no_pose);
+  EXPECT_TRUE(tracker.tracks().empty());
 }
 
 }  // namespace mowbite_obstacles

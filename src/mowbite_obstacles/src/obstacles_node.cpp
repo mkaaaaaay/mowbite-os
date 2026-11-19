@@ -61,7 +61,8 @@ Frame ToFrame(const mowbite_msgs::msg::Obstacles& msg) {
                 msg.view_range_max};
   for (const auto& obstacle : msg.obstacles) {
     Find find;
-    if (!ParseKind(obstacle.kind, &find.kind)) find.kind = Kind::kObject;
+    // A kind the tracker does not know counts as a person, the most careful.
+    if (!ParseKind(obstacle.kind, &find.kind)) find.kind = Kind::kPerson;
     find.class_name = obstacle.class_name;
     find.score = obstacle.score;
     find.x = obstacle.x;
@@ -76,6 +77,14 @@ Frame ToFrame(const mowbite_msgs::msg::Obstacles& msg) {
     find.box_w = obstacle.box_w;
     find.box_h = obstacle.box_h;
     if (!std::isfinite(find.x) || !std::isfinite(find.y) || !std::isfinite(find.score)) continue;
+    // A find whose size or spread cannot be read leaves the frame without sight rather than smaller than it is.
+    if (!std::isfinite(obstacle.radius) || !std::isfinite(find.cov_xx) || !std::isfinite(find.cov_xy) ||
+        !std::isfinite(find.cov_yy)) {
+      frame.sight = false;
+      frame.reason = "NO_SIGNAL";
+      frame.finds.clear();
+      return frame;
+    }
     frame.finds.push_back(find);
   }
   return frame;

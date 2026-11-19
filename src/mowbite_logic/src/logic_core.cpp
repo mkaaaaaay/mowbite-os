@@ -278,6 +278,7 @@ void LogicCore::UpdateEmergency(bool report) {
     if (emergency && state_ == State::kUndocking) StopUndocking(std::nullopt, why);
     if (emergency && state_ == State::kDocking) EndDocking(why);
     if (emergency && state_ == State::kCalibrating) calibration_.EndCalibration(CoreAccess(*this), why, true);
+    if (emergency && state_ == State::kSetup) setup_.BladeStopped();
     // reason stays the bits of OpenMower; resetting is up to the user.
     json details = {{"emergency", emergency},
                     {"reason", reason_},
@@ -427,7 +428,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       Reason why = Held() ? HoldProblem() : ContinueProblem();
       // The user lets the mower go past what it cannot see; what a sensor sees in the stop zone keeps it.
       if (why.empty() && (mowing_.pause() & kPauseObstacle) && !obstacle_part_.Waive()) {
-        why = obstacle_part_.Why().WithMessage("An obstacle in view is in the way");
+        why = obstacle_part_.Why().WithMessage("An obstacle in view, or one the sensors report no more, is in the way");
       }
       if (!why.empty()) {
         RefuseStart(why);

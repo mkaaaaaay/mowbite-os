@@ -198,7 +198,9 @@ Reason ObstaclePart::Why() const {
 
 bool ObstaclePart::Waive() {
   const auto holders = Holders(last_);
-  if (fresh_ && std::any_of(holders.begin(), holders.end(), [](const auto* t) { return t->in_view; })) return false;
+  const bool seen = std::any_of(holders.begin(), holders.end(), [](const auto* t) { return t->in_view; });
+  // A stale status tells nothing of where they are now.
+  if (!holders.empty() && (!fresh_ || seen)) return false;
   for (const auto* track : holders) waived_.insert(track->id);
   EndHold();
   return true;
@@ -215,7 +217,8 @@ std::vector<const ObstacleTrackSample*> ObstaclePart::StartHolders(bool objects)
 
 bool ObstaclePart::WaiveForStart(bool objects) {
   const auto counted = StartHolders(objects);
-  if (fresh_ && std::any_of(counted.begin(), counted.end(), [](const auto* t) { return t->in_view; })) return false;
+  const bool seen = std::any_of(counted.begin(), counted.end(), [](const auto* t) { return t->in_view; });
+  if (!counted.empty() && (!fresh_ || seen)) return false;
   for (const auto* track : counted) waived_.insert(track->id);
   if (hold_ && Holders(last_).empty()) EndHold();
   return true;
@@ -244,6 +247,18 @@ std::vector<AvoidCircle> ObstaclePart::AvoidDue(double now_s) const {
     circles.push_back({track->id, track->id, track->x, track->y, around, std::min(pass, around), now_s});
   }
   return circles;
+}
+
+bool ObstaclePart::StillDue(const std::vector<AvoidCircle>& circles) const {
+  if (!last_at_) return false;
+  const auto due = AvoidDue(*last_at_);
+  if (due.size() != circles.size()) return false;
+  return std::all_of(circles.begin(), circles.end(), [&](const AvoidCircle& circle) {
+    return std::any_of(due.begin(), due.end(), [&](const AvoidCircle& now) {
+      return now.track_id == circle.track_id &&
+             std::hypot(now.x - circle.x, now.y - circle.y) <= config_.avoid_still;
+    });
+  });
 }
 
 void ObstaclePart::Avoid(const std::vector<AvoidCircle>& circles) {

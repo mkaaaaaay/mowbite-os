@@ -198,7 +198,12 @@ class Tracker {
   // The sensors the platform reports; others are ignored, and a sensor of these without frames has no sight.
   void SetSources(const std::vector<std::string>& sources);
   const std::vector<std::string>& sources() const { return sources_; }
-  void SetBody(const Body& body) { body_ = body; }
+  // Until the body is known the zones have no edge to count from: the sensors count as not set up.
+  void SetBody(const Body& body) {
+    body_ = body;
+    body_known_ = true;
+  }
+  // A pose with a value that is not finite is left out.
   void OnPose(const Pose& pose);
   // now: when the frame arrived, for the sight of its sensor.
   FrameResult OnFrame(const Frame& frame, double now);
@@ -228,6 +233,7 @@ class Tracker {
 
   TrackerConfig config_;
   Body body_;
+  bool body_known_ = false;
   std::vector<std::string> sources_;
   std::map<std::string, Sensor> sensors_;
   std::deque<Pose> poses_;

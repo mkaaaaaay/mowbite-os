@@ -187,6 +187,30 @@ TEST(ObstaclePart, TheUserLetsItGoPastWhatNoSensorSees) {
   EXPECT_TRUE(part.Holding());
 }
 
+TEST(ObstaclePart, AStaleStatusLetsNothingGo) {
+  ObstaclePart part = Armed();
+  part.OnStatus(Seen({Track(1, "PERSON", kStop, 0.5, true)}), 0, true);
+  ASSERT_TRUE(part.Holding());
+  part.Tick(1.2);
+  EXPECT_FALSE(part.Waive());
+  EXPECT_FALSE(part.WaiveForStart(false));
+  EXPECT_TRUE(part.Holding());
+}
+
+TEST(ObstaclePart, ACutIsDueStillOnlyAsItWasAsked) {
+  ObstaclePart part = Avoiding();
+  Feed(part, Seen({At(1, "OBJECT", 5, 0)}), 0, 3.0);
+  const auto due = part.AvoidDue(3.0);
+  ASSERT_EQ(due.size(), 1u);
+  EXPECT_TRUE(part.StillDue(due));
+  Feed(part, Seen({At(1, "OBJECT", 5, 0), At(2, "PERSON", 5, 1)}), 3.1, 3.5);
+  EXPECT_FALSE(part.StillDue(due));
+  Feed(part, Seen({At(1, "OBJECT", 5, 0)}), 3.6, 4.0);
+  EXPECT_TRUE(part.StillDue(due));
+  part.Tick(5.2);
+  EXPECT_FALSE(part.StillDue(due));
+}
+
 TEST(ObstaclePart, AStartLetsGoALivingThingOutOfViewAndIsRefusedByOneInView) {
   ObstaclePart part = Armed();
   EXPECT_TRUE(part.StartProblem(true).empty());

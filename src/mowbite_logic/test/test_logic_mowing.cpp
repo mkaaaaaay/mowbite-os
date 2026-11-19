@@ -512,6 +512,25 @@ TEST(LogicMowing, WaitsForTheBladeToSpinUpOrPausesWhenItDoesNot) {
   EXPECT_TRUE(Find(core.TakeEvents(), "MOW_MOTOR_SPINUP_FAILED"));
 }
 
+TEST(LogicMowing, ASpinUpEndsWhenTheMowerHasToDriveToThePathFirst) {
+  LogicConfig config;
+  config.mow_with_blade = true;
+  config.mower_spinup_rpm = 2000;
+  config.mower_spinup_timeout = 10;
+  TestCore core = Ready(config);
+  core.OnAction(kStart);
+  core.NextJobStep(0);
+  JobPath path = Lane(1);
+  path.poses[0].kind = kSegmentLane;
+  core.OnJobPlanned({path, path}, "fp");
+  EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
+  ASSERT_TRUE(core.BladeWanted());
+  // The position jumps away from the start of the path: no blade on the way back to it.
+  core.OnPose(PoseAt(20, 20));
+  EXPECT_EQ(core.NextJobStep(1).kind, JobStep::Kind::kApproach);
+  EXPECT_FALSE(core.BladeWanted());
+}
+
 TEST(LogicMowing, BladesEventsFollowTheRpmTheMcuReports) {
   TestCore core = Ready();
   auto hw = Healthy();
@@ -1517,6 +1536,24 @@ TEST(LogicAvoid, APersonOrAnimalIsWaitedFor) {
     }
     EXPECT_EQ(core.RobotState().state, "PAUSED");
   }
+}
+
+TEST(LogicAvoid, WhatChangedWhileThePlannerCutIsNotDrivenAround) {
+  TestCore core = Avoiding();
+  StandBefore(core, 100, ObjectAt(2.0, 2.0));
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  // A person steps into the stop zone while the planner cuts.
+  ObstacleSample both = ObjectAt(2.0, 2.0);
+  both.tracks.push_back(ObjectAt(2.0, 2.5, 8, "PERSON").tracks[0]);
+  core.OnObstacleStatus(both, 103.05);
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 0, 4}}));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_TRUE(core.Circles().empty());
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kNone);
+  // Once the person is gone the object alone is asked for again.
+  core.OnObstacleStatus(ObjectAt(2.0, 2.0), 103.2);
+  EXPECT_EQ(core.NextJobStep(103.2).kind, JobStep::Kind::kCut);
 }
 
 TEST(LogicAvoid, WithoutAWayOrACutOfThePlannerItWaitsLikeStop) {

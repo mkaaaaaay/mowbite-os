@@ -25,8 +25,25 @@ double LargerSigma(double xx, double xy, double yy) {
   return std::sqrt(std::max(0.0, mean + half));
 }
 
-bool Compatible(Kind a, Kind b) {
-  return a == b || a == Kind::kUnknown || b == Kind::kUnknown;
+// A find of any kind at the place of a person or animal keeps that track: a model that sees only legs from close by
+// must not end it.
+bool Compatible(Kind track, Kind find) {
+  return track == find || track == Kind::kUnknown || find == Kind::kUnknown || Living(track);
+}
+
+// PERSON before ANIMAL before OBJECT before UNKNOWN: a track takes the kind of a find above its own, never one below.
+int Rank(Kind kind) {
+  switch (kind) {
+    case Kind::kPerson:
+      return 3;
+    case Kind::kAnimal:
+      return 2;
+    case Kind::kObject:
+      return 1;
+    case Kind::kUnknown:
+      break;
+  }
+  return 0;
 }
 
 double Interpolate(double a, double b, double f) {
@@ -88,6 +105,10 @@ void Tracker::SetSources(const std::vector<std::string>& sources) {
 }
 
 void Tracker::OnPose(const Pose& pose) {
+  if (!std::isfinite(pose.stamp) || !std::isfinite(pose.x) || !std::isfinite(pose.y) || !std::isfinite(pose.heading) ||
+      !std::isfinite(pose.accuracy)) {
+    return;
+  }
   if (!poses_.empty() && pose.stamp <= poses_.back().stamp) {
     // A pose from the past (another clock, a restart of the localization) starts the history over.
     if (pose.stamp < poses_.back().stamp - config_.pose_keep) poses_.clear();
@@ -150,11 +171,11 @@ void Tracker::Update(Track& track, const Find& find, const Frame& frame, double 
   if (std::isfinite(find.height)) {
     track.height = moving || !std::isfinite(track.height) ? find.height : 0.5 * (track.height + find.height);
   }
-  if (track.kind == Kind::kUnknown && find.kind != Kind::kUnknown) {
+  if (Rank(find.kind) > Rank(track.kind)) {
     track.kind = find.kind;
     track.class_name = find.class_name;
     track.score = find.score;
-  } else if (find.kind != Kind::kUnknown && find.score > track.score) {
+  } else if (find.kind == track.kind && find.score > track.score) {
     track.class_name = find.class_name;
     track.score = find.score;
   }
@@ -358,6 +379,10 @@ Status Tracker::StatusAt(double now) const {
     status.source = source;
     status.reason = !fresh ? "NO_SIGNAL" : sensor->second.reason;
     break;
+  }
+  if (status.sight && !sources_.empty() && !body_known_) {
+    status.sight = false;
+    status.reason = "NOT_SET_UP";
   }
   if (poses_.empty()) return status;
   double stop_ahead = std::numeric_limits<double>::infinity();
