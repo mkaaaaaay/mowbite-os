@@ -183,8 +183,10 @@ std::vector<std::string> IncidentsToRemove(const std::vector<StoredIncident>& st
   std::vector<std::string> removed;
   std::vector<const StoredIncident*> kept;
   for (const StoredIncident& incident : stored) {
+    // Only with both times of a set clock: one made before the clock was set ages by the budget alone.
+    const bool dated = WallSet(now_s) && WallSet(incident.created_s);
     const double days = (now_s - incident.created_s) / 86400.0;
-    if (!incident.open && days > (incident.safety ? limits.max_days_safety : limits.max_days)) {
+    if (!incident.open && dated && days > (incident.safety ? limits.max_days_safety : limits.max_days)) {
       removed.push_back(incident.id);
     } else {
       kept.push_back(&incident);

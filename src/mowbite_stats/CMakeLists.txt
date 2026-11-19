@@ -28,7 +28,8 @@ add_library(mowbite_stats_core STATIC src/counter.cpp src/sensor_history.cpp src
 target_include_directories(mowbite_stats_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_stats_core PUBLIC nlohmann_json::nlohmann_json mowbite_api::mowbite_api_core)
+target_link_libraries(mowbite_stats_core PUBLIC nlohmann_json::nlohmann_json mowbite_api::mowbite_api_core
+  mowbite_journal::mowbite_journal)
 set_target_properties(mowbite_stats_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The incidents of the journal: files and a worker thread, no ROS; mowbite_replay copies runs without their place.

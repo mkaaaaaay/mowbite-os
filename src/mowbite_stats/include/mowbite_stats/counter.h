@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_journal/format.h"
+
 namespace mowbite_stats {
 
 using json = nlohmann::ordered_json;
@@ -18,13 +20,9 @@ constexpr size_t kMaxHours = 10000;
 constexpr double kMaxGap = 5.0;
 // A step of the pose longer than this (m) between two samples is a jump of the position, not driven.
 constexpr double kMaxStep = 2.0;
-// Wall times before 2026-01-01 come from a clock that is not set, those from kLatestWall on are no clock.
-constexpr double kEarliestWall = 1767225600;
-constexpr double kLatestWall = 1e11;
-
-inline bool WallSet(double wall) {
-  return wall >= kEarliestWall && wall < kLatestWall;
-}
+using mowbite_journal::kEarliestWall;
+using mowbite_journal::kLatestWall;
+using mowbite_journal::WallSet;
 
 struct Amounts {
   double blade_s = 0;   // the blade turned

@@ -8,6 +8,14 @@
 
 namespace mowbite_journal {
 
+// Wall times before 2026-01-01 come from a clock that is not set, those from kLatestWall on are no clock.
+constexpr double kEarliestWall = 1767225600;
+constexpr double kLatestWall = 1e11;
+
+inline bool WallSet(double wall) {
+  return wall >= kEarliestWall && wall < kLatestWall;
+}
+
 // A segment file: kMagic, the format version (u32), then blocks of [u32 raw size][u32 packed size][zstd frame]. A
 // block unpacks to records of [u16 stream][u16 method][i64 monotonic ns][u32 size][payload], all little endian.
 constexpr char kMagic[4] = {'M', 'B', 'J', 'S'};

@@ -491,19 +491,24 @@ class Journal::Impl {
     const size_t total = kBlockHeaderSize + out.pos;
     const double start = Seconds();
     const bool ok = WriteAll(block_.data(), total);
+    const int write_error = errno;
     const double took = Seconds() - start;
-    std::lock_guard<std::mutex> lock(stats_mutex_);
-    stats_.longest_write_s = std::max(stats_.longest_write_s, took);
-    stats_.writer_cpu_s = ThreadCpuSeconds();
-    stats_.seconds = Seconds() - static_cast<double>(start_ns_) * 1e-9;
+    {
+      std::lock_guard<std::mutex> lock(stats_mutex_);
+      stats_.longest_write_s = std::max(stats_.longest_write_s, took);
+      stats_.writer_cpu_s = ThreadCpuSeconds();
+      stats_.seconds = Seconds() - static_cast<double>(start_ns_) * 1e-9;
+      if (ok) {
+        stats_.raw_bytes += raw;
+        stats_.packed_bytes += total;
+      }
+    }
     if (!ok) {
-      // The segment may end in a broken block now: it is closed, the next flush starts a new one with a gap.
-      stats_.problem = std::string("write: ") + std::strerror(errno);
-      CloseLosing(parts, stats_.problem);
+      // The segment may end in a broken block now: it is closed, the next one with a gap is tried check_s from now.
+      Fail(std::string("write: ") + std::strerror(write_error));
+      CloseLosing(parts, problem_);
       return;
     }
-    stats_.raw_bytes += raw;
-    stats_.packed_bytes += total;
     segment_bytes_ += total;
   }
 
@@ -590,7 +595,8 @@ class Journal::Impl {
             {"streams", streams}};
   }
 
-  // Whole old runs first, then the oldest closed segments of this run; the age limit the same way.
+  // Whole old runs first, then the oldest closed segments of this run; the age limit the same way, only for times of
+  // a set clock. A run that ended without a segment goes by the age of its folder.
   void KeepLimits() {
     std::vector<std::string> runs;
     DIR* dir = opendir(options_.dir.c_str());
@@ -603,6 +609,10 @@ class Journal::Impl {
     std::sort(runs.begin(), runs.end());
     const std::time_t now = std::time(nullptr);
     const double max_age_s = options_.max_days * 86400.0;
+    const auto aged = [&](std::time_t t) {
+      return WallSet(static_cast<double>(now)) && WallSet(static_cast<double>(t)) &&
+             static_cast<double>(now - t) > max_age_s;
+    };
     const double max_bytes = options_.max_mb * 1e6;
     struct Run {
       std::string path;
@@ -621,7 +631,10 @@ class Journal::Impl {
         run.bytes += file.bytes;
         run.newest = std::max(run.newest, file.mtime);
       }
-      if (!run.active && !run.segments.empty() && static_cast<double>(now - run.newest) > max_age_s) {
+      struct stat folder {};
+      const bool old = run.segments.empty() ? ::stat(run.path.c_str(), &folder) == 0 && aged(folder.st_mtime)
+                                            : aged(run.newest);
+      if (!run.active && old) {
         RemoveRun(run.path);
         continue;
       }
@@ -640,7 +653,7 @@ class Journal::Impl {
       // The open segment is the last one; it stays.
       for (size_t i = 0; i + 1 < run.segments.size(); ++i) {
         const auto& file = run.segments[i];
-        if (total <= max_bytes && static_cast<double>(now - file.mtime) <= max_age_s) break;
+        if (total <= max_bytes && !aged(file.mtime)) break;
         if (unlink(file.path.c_str()) == 0) {
           total -= static_cast<double>(file.bytes);
           ++removed;

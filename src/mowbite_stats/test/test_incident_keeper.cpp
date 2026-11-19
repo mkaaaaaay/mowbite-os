@@ -193,12 +193,22 @@ StoredIncident Stored(const std::string& id, double created_s, bool safety, std:
 TEST(IncidentsToRemove, ExpiredOnesGoBySafety) {
   IncidentLimits limits;
   const double day = 86400;
-  const double now = 100 * day;
+  const double now = kEarliestWall + 300 * day;
   const auto removed = IncidentsToRemove({Stored("a", now - 31 * day, false, {}), Stored("b", now - 31 * day, true, {}),
                                           Stored("c", now - 91 * day, true, {}), Stored("d", now - 29 * day, false, {}),
                                           Stored("e", now - 200 * day, false, {}, true)},
                                          now, limits);
   EXPECT_EQ(removed, (std::vector<std::string>{"a", "c"}));
+}
+
+// Made before the clock was set (or with the clock still unset now): no age, only the budget.
+TEST(IncidentsToRemove, NoAgeWithoutASetClock) {
+  IncidentLimits limits;
+  const double day = 86400;
+  const double now = kEarliestWall + 300 * day;
+  EXPECT_TRUE(IncidentsToRemove({Stored("before", 1000, true, {}), Stored("unset", 50 * day, false, {})}, now, limits)
+                  .empty());
+  EXPECT_TRUE(IncidentsToRemove({Stored("a", 1000, false, {})}, 400 * day, limits).empty());
 }
 
 TEST(IncidentsToRemove, OverTheBudgetTheOldestNoSafetyFirst) {

@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 #include <sys/file.h>
+#include <sys/resource.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <chrono>
+#include <csignal>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -338,6 +341,72 @@ TEST_F(JournalTest, OldRunsGoFirstAndRunningOnesStay) {
   EXPECT_FALSE(fs::exists(dir_ / "20260101T000000Z_old_1"));
   EXPECT_TRUE(fs::exists(dir_ / "20260102T000000Z_old_2"));
   EXPECT_TRUE(fs::exists(dir_ / "20260103T000000Z_busy_3"));
+}
+
+// Sets the modification time of path to t (unix s).
+void Touch(const fs::path& path, std::time_t t) {
+  const timeval times[2] = {{t, 0}, {t, 0}};
+  ASSERT_EQ(utimes(path.c_str(), times), 0) << path;
+}
+
+// Age counts only for times of a set clock; a run without a segment goes by the age of its folder.
+TEST_F(JournalTest, AgeOnlyWithASetClockAndEmptyRunsGo) {
+  const std::time_t now = std::time(nullptr);
+  const std::time_t days_ago = now - 3 * 86400;
+  for (const char* name : {"20260101T000000Z_unset_1", "20260102T000000Z_old_2"}) {
+    fs::create_directories(dir_ / name);
+    std::ofstream(dir_ / name / "000000.mbj") << "x";
+  }
+  Touch(dir_ / "20260101T000000Z_unset_1" / "000000.mbj", 1000);
+  Touch(dir_ / "20260102T000000Z_old_2" / "000000.mbj", days_ago);
+  fs::create_directories(dir_ / "20260103T000000Z_empty_3");
+  std::ofstream(dir_ / "20260103T000000Z_empty_3" / "lock");
+  Touch(dir_ / "20260103T000000Z_empty_3", days_ago);
+  fs::create_directories(dir_ / "20260104T000000Z_fresh_4");
+  options_.max_days = 1;
+  {
+    std::string error;
+    auto journal = Journal::Create(options_, &error);
+    ASSERT_TRUE(journal) << error;
+    Wait(0.2);
+  }
+  EXPECT_TRUE(fs::exists(dir_ / "20260101T000000Z_unset_1"));
+  EXPECT_FALSE(fs::exists(dir_ / "20260102T000000Z_old_2"));
+  EXPECT_FALSE(fs::exists(dir_ / "20260103T000000Z_empty_3"));
+  EXPECT_TRUE(fs::exists(dir_ / "20260104T000000Z_fresh_4"));
+}
+
+// A block that cannot be written (here EFBIG beyond 64 bytes a file) closes the segment; the next one is tried only
+// check_s later, not at each flush.
+TEST_F(JournalTest, AWriteErrorIsTriedAgainAfterTheCheckTime) {
+  options_.flush_s = 0.05;
+  options_.check_s = 30;
+  std::string error;
+  auto journal = Journal::Create(options_, &error);
+  ASSERT_TRUE(journal) << error;
+  Journaled<toy::Toy> core(journal.get(), toy::ToyConfig{});
+  ASSERT_TRUE(WaitFor(
+      [&] {
+        core.Call<&toy::Toy::Add>(1.0);
+        return journal->GetStats().packed_bytes > 64;
+      },
+      2.0));
+  const uint64_t segments = journal->GetStats().segments;
+  rlimit before{};
+  ASSERT_EQ(getrlimit(RLIMIT_FSIZE, &before), 0);
+  rlimit small = before;
+  small.rlim_cur = 64;
+  const auto handler = std::signal(SIGXFSZ, SIG_IGN);
+  setrlimit(RLIMIT_FSIZE, &small);
+  for (int i = 0; i < 40; ++i) {
+    core.Call<&toy::Toy::Add>(1.0);
+    Wait(0.025);
+  }
+  setrlimit(RLIMIT_FSIZE, &before);
+  std::signal(SIGXFSZ, handler);
+  const Stats stats = journal->GetStats();
+  EXPECT_EQ(stats.problem.rfind("write: ", 0), 0u) << stats.problem;
+  EXPECT_EQ(stats.segments, segments);
 }
 
 TEST_F(JournalTest, ARunWithoutItsFirstSegmentIsNotReplayable) {
