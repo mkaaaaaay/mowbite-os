@@ -9,6 +9,7 @@
 #include <cmath>
 #include <ctime>
 #include <filesystem>
+#include <limits>
 #include <system_error>
 
 namespace mowbite_calibration {
@@ -215,13 +216,17 @@ std::vector<std::string> Prune(const std::string& folder, double wall_t, const R
     entries.push_back({item.path().string(), name, static_cast<uint64_t>(info.st_size),
                        wall_t - static_cast<double>(info.st_mtime)});
   }
+  // A clock behind the newest recording is not set yet or was set back: no recording counts as old by it then.
+  double newest = -std::numeric_limits<double>::infinity();
+  for (const auto& entry : entries) newest = std::max(newest, wall_t - entry.age_s);
+  const bool clock_behind = !entries.empty() && wall_t < newest;
   // Newest first: the names carry the UTC time of their start.
   std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) { return a.name > b.name; });
   size_t kept = 0;
   uint64_t bytes = 0;
   for (const auto& entry : entries) {
     const bool always = !keep.empty() && fs::path(entry.path) == fs::path(keep);
-    const bool old = entry.age_s > limits.max_days * kDay;
+    const bool old = !clock_behind && entry.age_s > limits.max_days * kDay;
     if (always || (!old && kept < limits.max_runs && bytes + entry.bytes <= limits.max_bytes)) {
       kept++;
       bytes += entry.bytes;

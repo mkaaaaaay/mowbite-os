@@ -187,6 +187,17 @@ TEST_F(RecordingTest, PruneKeepsTheNewestWithinTheLimits) {
                                                "notes.txt"}));
 }
 
+TEST_F(RecordingTest, PruneTakesNothingByAgeWithAClockBehindTheRecordings) {
+  RecordingLimits limits;
+  limits.max_days = 60;
+  Old(kNow - 70 * 86400.0, 10);
+  Old(kNow - 1 * 86400.0, 10);
+  // The clock is not set yet: 1970.
+  EXPECT_TRUE(Prune(folder_, 1000.0, limits).empty());
+  EXPECT_EQ(Names().size(), 2u);
+  EXPECT_EQ(Prune(folder_, kNow, limits).size(), 1u);
+}
+
 TEST_F(RecordingTest, OpenMakesRoomForTheNewOne) {
   RecordingLimits limits;
   limits.max_runs = 2;

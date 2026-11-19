@@ -356,7 +356,7 @@ class CalibrationNode : public rclcpp::Node {
 
   // Called with the mutex held.
   void Record(const char* kind, const json& fields) {
-    if (!recording_.Line(WallSeconds(), kind, fields) || recording_.open() || recording_.finished().empty()) return;
+    if (!recording_.Line(RecordingTime(), kind, fields) || recording_.open() || recording_.finished().empty()) return;
     RCLCPP_WARN(get_logger(), "The recording reached %.0f MB and ended: %s", limits_.max_bytes / 1e6,
                 recording_.finished().c_str());
   }
@@ -515,14 +515,22 @@ class CalibrationNode : public rclcpp::Node {
     goal_.reset();
   }
 
+  // The time of a line: the wall clock at the start of the recording, then the monotonic clock, so that a clock
+  // set meanwhile does not break the time axis the planner evaluates.
+  double RecordingTime() const {
+    return recording_wall_ + (MonotonicSeconds() - recording_mono_);
+  }
+
   // Called with the mutex held.
   void OpenRecording(const Lane& lane) {
     recorded_ = false;
     if (data_dir_.empty()) return;
+    recording_wall_ = WallSeconds();
+    recording_mono_ = MonotonicSeconds();
     const ProgramConfig& config = program_.config();
     json head = json::object();
     head["mode"] = "program";
-    head["started"] = Round(WallSeconds(), 1000.0);
+    head["started"] = Round(recording_wall_, 1000.0);
     head["params"] = {{"ticks_per_m", dimensions_->ticks_per_m},
                       {"wheel_distance_m", dimensions_->track},
                       {"antenna_offset_x", dimensions_->antenna_x},
@@ -541,7 +549,7 @@ class CalibrationNode : public rclcpp::Node {
                        {"spin_angle", Round(config.spin_angle, 1e5)}};
     if (!software_.empty()) head["software"] = software_;
     std::string why;
-    recorded_ = recording_.Open(RecordingsDir(), head, WallSeconds(), limits_, &why);
+    recorded_ = recording_.Open(RecordingsDir(), head, recording_wall_, limits_, &why);
     if (!recorded_) RCLCPP_ERROR(get_logger(), "Calibration: cannot record the drive: %s", why.c_str());
   }
 
@@ -555,7 +563,7 @@ class CalibrationNode : public rclcpp::Node {
     if (outcome.reason == "DONE") why = "enough";
     if (outcome.reason == "STOPPED") why = "stop";
     if (recording_.open()) {
-      ending_.recording = recording_.End(WallSeconds(), why, outcome.reason == "DONE" ? "" : outcome.reason);
+      ending_.recording = recording_.End(RecordingTime(), why, outcome.reason == "DONE" ? "" : outcome.reason);
       if (ending_.recording.empty()) RCLCPP_ERROR(get_logger(), "Calibration: the recording could not be finished");
       if (recording_.dropped() > 0) {
         RCLCPP_WARN(get_logger(), "Calibration: %zu lines were left out of the recording", recording_.dropped());
@@ -679,6 +687,8 @@ class CalibrationNode : public rclcpp::Node {
   LaneConfig lane_config_;
   RecordingLimits limits_;
   Recording recording_;
+  double recording_wall_ = 0;
+  double recording_mono_ = 0;
   // The drive that runs has a recording (it may have ended by its size).
   bool recorded_ = false;
   std::string data_dir_;
