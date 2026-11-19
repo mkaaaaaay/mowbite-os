@@ -78,7 +78,8 @@ class TestObstacleStop(ObstacleSim, unittest.TestCase):
         since = len(p.events)
         changed = time.time()
         STAGE.place(*things)
-        self.assertIsNotNone(p.event(since, "STATE", wait + SEEN_FREE + 6.0, state="MOWING"), "it did not go on")
+        self.assertIsNotNone(p.event(since, "STATE", wait + SEEN_FREE + 6.0, state="MOWING"),
+                             f"it did not go on: {p.robot and p.robot.pause_reason} {p.obstacles and p.obstacles.tracks}")
         took = time.time() - changed
         self.assertGreater(took, wait)
         return took, since
