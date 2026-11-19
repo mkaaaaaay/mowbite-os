@@ -175,7 +175,6 @@ class ScheduleNode : public rclcpp::Node {
     return data_dir_ + "/" + name;
   }
 
-  // A file of data_dir as JSON; null when missing or not readable (with a warning).
   // The file as JSON, null when it is missing or cannot be read; unreadable tells the second case.
   json ReadJson(const char* name, bool* unreadable = nullptr) {
     if (data_dir_.empty()) return nullptr;
@@ -240,7 +239,8 @@ class ScheduleNode : public rclcpp::Node {
     // IDLE with a sub state (DRIVING, CALIBRATING, SETUP) is busy as well.
     const std::string& sub = robot_state_.current_sub_state;
     facts.state = robot_state_.current_state == kIdle && !sub.empty() ? sub : robot_state_.current_state;
-    const auto& hw = hw_mono_ && facts.mono - *hw_mono_ <= kHardwareFresh ? hw_ : kNoHardware;
+    const mowbite_msgs::msg::HardwareStatus* hw =
+        hw_ && hw_mono_ && facts.mono - *hw_mono_ <= kHardwareFresh ? &*hw_ : nullptr;
     facts.docked = hw && hw->dock_contact;
     facts.emergency = robot_state_.emergency || (hw && (hw->emergency || hw->emergency_latched));
     facts.battery = static_cast<int>(std::lround(robot_state_.battery_percentage * 100.0));
@@ -497,7 +497,6 @@ class ScheduleNode : public rclcpp::Node {
   std::optional<mowbite_msgs::msg::HardwareStatus> hw_;
   std::optional<double> hw_mono_;
   std::optional<double> clock_mono_;
-  static inline const std::optional<mowbite_msgs::msg::HardwareStatus> kNoHardware{};
   bool rain_sensor_ = false;
   int rain_mode_ = 0;
   int64_t hold_until_ = 0;

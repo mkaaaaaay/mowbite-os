@@ -21,7 +21,6 @@ constexpr double kMaxGap = 5.0;
 // A step of the pose longer than this (m) between two samples is a jump of the position, not driven.
 constexpr double kMaxStep = 2.0;
 using mowbite_journal::kEarliestWall;
-using mowbite_journal::kLatestWall;
 using mowbite_journal::WallSet;
 
 struct Amounts {

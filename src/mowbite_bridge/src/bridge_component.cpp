@@ -403,7 +403,7 @@ class BridgeNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(inbox_mutex_);
       if (arrival.kind == Arrival::kMessage) {
-        const std::size_t limit = arrival.topic == "rpc/request" ? kMaxRequestBytes : kMaxInputBytes;
+        const std::size_t limit = arrival.topic == kRequestTopic ? kMaxRequestBytes : kMaxInputBytes;
         if (arrival.payload.size() > limit || inbox_.size() >= kMaxInbox ||
             inbox_bytes_ + arrival.payload.size() > kMaxInboxBytes) {
           ++inbox_dropped_;

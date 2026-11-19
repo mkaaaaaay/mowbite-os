@@ -22,18 +22,6 @@ bool IsDay(const std::string& text) {
   return text.size() == 8 && std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); });
 }
 
-// The day a request names: "" for none given (no params, {} or []), "-" for any other form or a text that cannot be
-// a day, so that a mistyped request never counts as "all days".
-std::string AskedDay(const Json& params) {
-  if (params.is_null() || ((params.is_object() || params.is_array()) && params.empty())) return "";
-  const Json* date = nullptr;
-  if (params.is_object() && params.size() == 1 && params.contains("date")) date = &params["date"];
-  if (params.is_array() && params.size() == 1) date = &params[0];
-  if (!date) return "-";
-  if (!date->is_string() || !IsDay(date->get<std::string>())) return "-";
-  return date->get<std::string>();
-}
-
 }  // namespace
 
 EventLog::EventLog(std::string dir, std::size_t max_days, std::uintmax_t max_bytes, std::size_t answer_bytes)
@@ -107,7 +95,7 @@ bool EventLog::Write(const Json& event, double now) {
 
 Json EventLog::Read(const Json& params, double now) const {
   Json events = Json::array();
-  std::string day = AskedDay(params);
+  std::string day = AskedName(params, "date", IsDay);
   if (day.empty()) day = DayOf(now);
   if (day == "-" || dir_.empty()) return events;
   std::ifstream in(PathOf(day));
@@ -138,7 +126,7 @@ Json EventLog::List() const {
 }
 
 Json EventLog::Erase(const Json& params) {
-  const std::string day = AskedDay(params);
+  const std::string day = AskedName(params, "date", IsDay);
   if (day == "-") throw std::invalid_argument("params: none for every day, or {\"date\": \"YYYYMMDD\"}");
   int deleted = 0;
   std::error_code ec;

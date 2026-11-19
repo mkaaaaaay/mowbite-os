@@ -21,13 +21,6 @@ MAX_BYTES = 1024 * 1024 * 1024
 FIELDS = ("min_app", "version", "api", "api_break", "interface", "files_version", "platforms")
 
 
-# Whether a candidate (or index entry) goes with the platform of this mower; one without platforms goes with any, and
-# so does every one while the platform is unknown.
-def fits_platform(candidate, platform):
-    platforms = candidate.get("platforms")
-    return not (platform and isinstance(platforms, list) and platforms and platform not in platforms)
-
-
 def sha256(path):
     digest = hashlib.sha256()
     with open(path, "rb") as f:

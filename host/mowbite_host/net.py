@@ -188,7 +188,7 @@ class Net:
         for entry in entries:
             component = entry["component"]
             if (entry["channel"] in CHANNELS[channel] and entry["serial"] > serial_of(component)
-                    and origin.fits_platform(entry, platform)):
+                    and bundle.fits_platform(entry, platform)):
                 if component not in best or entry["serial"] > best[component]["serial"]:
                     best[component] = entry
         return list(best.values())

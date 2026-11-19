@@ -13,7 +13,6 @@ namespace mowbite_bridge {
 
 namespace {
 
-constexpr char kRequestTopic[] = "rpc/request";
 constexpr char kResponseTopic[] = "rpc/response";
 constexpr char kRequestRefused[] = "REQUEST_REFUSED";
 constexpr std::size_t kMaxTokenBytes = 64;
@@ -546,10 +545,7 @@ std::string BridgeCore::Open(const Json& id, const std::string& method, const Re
   if (open_.size() >= kMaxOpenCalls) {
     Log(kLogWarn, "Bridge: " + std::to_string(kMaxOpenCalls) + " calls are open, the oldest (" +
                       CleanUtf8(open_.begin()->second.method) + ") ends without the answer of its node");
-    SendReply(open_.begin()->second.to,
-              ErrorReply(open_.begin()->second.id, kInternalError,
-                         "Too many calls are open: the answer of the node will not come through"));
-    open_.erase(open_.begin());
+    EndCall(open_.begin(), kInternalError, "Too many calls are open: the answer of the node will not come through");
   }
   const uint64_t number = ++next_call_;
   open_[number] = {id, method, now, to};
@@ -566,10 +562,8 @@ void BridgeCore::NoteMethods() {
 
 void BridgeCore::ExpireCalls(double now) {
   while (!open_.empty() && now - open_.begin()->second.since > kCallWaitS) {
-    SendReply(open_.begin()->second.to,
-              ErrorReply(open_.begin()->second.id, kInternalError,
-                         "No answer of the node within " + std::to_string(static_cast<int>(kCallWaitS)) + " s"));
-    open_.erase(open_.begin());
+    EndCall(open_.begin(), kInternalError,
+            "No answer of the node within " + std::to_string(static_cast<int>(kCallWaitS)) + " s");
   }
 }
 
@@ -579,10 +573,14 @@ void BridgeCore::FailCalls(const std::set<std::string>& methods) {
       ++call;
       continue;
     }
-    SendReply(call->second.to, ErrorReply(call->second.id, kMethodNotFound,
-                                          "The node that answers \"" + call->second.method + "\" is gone"));
-    call = open_.erase(call);
+    call = EndCall(call, kMethodNotFound, "The node that answers \"" + call->second.method + "\" is gone");
   }
+}
+
+std::map<uint64_t, BridgeCore::OpenCall>::iterator BridgeCore::EndCall(std::map<uint64_t, OpenCall>::iterator call,
+                                                                       int code, const std::string& message) {
+  SendReply(call->second.to, ErrorReply(call->second.id, code, message));
+  return open_.erase(call);
 }
 
 bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to) {

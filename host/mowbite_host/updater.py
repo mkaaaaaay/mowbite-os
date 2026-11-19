@@ -184,11 +184,10 @@ class Updater:
         meta = meta or {}
         return self._info(meta["revision"], meta) if isinstance(meta.get("revision"), str) else None
 
-    def _available(self, component):
+    def _available(self, component, platform):
         have = self.serial_of(component)
-        platform = self._platform()
         newer = [c for c in self._candidates if c["component"] == component and c["serial"] > have and
-                 origin.fits_platform(c, platform)]
+                 bundle.fits_platform(c, platform)]
         if not newer:
             return None
         best = max(newer, key=lambda c: c["serial"])
@@ -229,11 +228,12 @@ class Updater:
     def status(self):
         with self._lock:
             components = []
+            platform = self._platform()
             for component, name in COMPONENTS.items():
                 entry = self._entry(component)
                 components.append({
                     "id": component, "name": name, **self._installed(component),
-                    "available": self._available(component),
+                    "available": self._available(component, platform),
                     "installed_at": entry["installed_at"], "crashes_since_install": entry["crashes_since_install"],
                     "auto": self.state["auto"]["enabled"]})
             origin = self.state["origin"]
@@ -387,7 +387,7 @@ class Updater:
         if component not in COMPONENTS:
             raise Refused("INVALID", f"no component {component}")
         if revision is None:
-            available = self._available(component)
+            available = self._available(component, self._platform())
             if available is None:
                 raise Refused("NO_NEWER", "no newer revision found in the inbox or from the net")
             revision = available["revision"]
@@ -712,8 +712,6 @@ class Updater:
         return {**self.paths.env(), "PATH": os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"),
                 "HOME": "/nonexistent"}
 
-    # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
-    # times is blocked.
     # Whether an unfinished switch of component may be undone now, None when it may, else why not: an OS that runs may
     # mow by now, so it is stopped only at rest on the station with the hold granted, as for a switch.
     def _recover_gate(self, component):
@@ -727,6 +725,8 @@ class Updater:
         jobs = component == "planner"
         return self._closed(jobs, True, recovering=True) or self._ask_hold(jobs, recovering=True)
 
+    # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
+    # times is blocked.
     def recover(self, start_stopped=False):
         for component, installer in self.installers.items():
             if os.path.lexists(installer.place.pending):
@@ -772,8 +772,9 @@ class Updater:
         runs = self.carrier.show()[0] in ("active", "failed")
         left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs}
         self.check()
+        platform = self._platform()
         for component in AUTO_ORDER:
-            available = self._available(component)
+            available = self._available(component, platform)
             if (left_alone.get(component) or not available or available["blocked"] or
                     not app_suffices(self.state["app_version"], available.get("min_app"))):
                 continue

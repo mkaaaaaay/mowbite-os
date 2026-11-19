@@ -33,10 +33,10 @@ class MapStore {
 
   struct LoadedDatum {
     std::optional<Datum> datum;
-    // SHA-256 of the map file the datum belongs to; empty in a file of an older version.
-    std::string map_sha256;
     // Why the file was not used, empty if it is missing or fine.
     std::string problem;
+    // SHA-256 of the map file the datum belongs to; empty in a file of an older version.
+    std::string map_sha256;
   };
 
   // map_datum.json next to the map: the datum the map was recorded in, tied to the map file by its SHA-256.

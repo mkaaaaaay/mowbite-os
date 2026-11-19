@@ -70,4 +70,13 @@ std::string ErrorReply(const Json& id, int code, std::string_view message, const
   return Dump(Json{{"jsonrpc", "2.0"}, {"error", error}, {"id", id}});
 }
 
+std::string AskedName(const Json& params, const char* key, bool (*valid)(const std::string&)) {
+  if (params.is_null() || ((params.is_object() || params.is_array()) && params.empty())) return "";
+  const Json* name = nullptr;
+  if (params.is_object() && params.size() == 1 && params.contains(key)) name = &params[key];
+  if (params.is_array() && params.size() == 1) name = &params[0];
+  if (!name || !name->is_string() || !valid(name->get<std::string>())) return "-";
+  return name->get<std::string>();
+}
+
 }  // namespace mowbite_bridge

@@ -56,11 +56,10 @@ Json WarnLog::Recent(const Json& params) const {
     if (line.level < lowest || (has_since && line.t <= after)) continue;
     out.push_back(Json{{"t", line.t}, {"level", LevelName(line.level)}, {"node", line.node}, {"msg", line.message}});
   }
-  if (out.size() > limit) out.erase(out.begin(), out.begin() + static_cast<std::ptrdiff_t>(out.size() - limit));
-  // The newest lines that fit into an answer of kHistoryMaxAnswerBytes.
+  // The newest limit lines that fit into an answer of kHistoryMaxAnswerBytes.
   std::size_t bytes = 2;
   std::size_t keep = 0;
-  for (auto it = out.rbegin(); it != out.rend(); ++it, ++keep) {
+  for (auto it = out.rbegin(); it != out.rend() && keep < limit; ++it, ++keep) {
     bytes += it->dump().size() + 1;
     if (bytes > static_cast<std::size_t>(mowbite_api::kHistoryMaxAnswerBytes)) break;
   }

@@ -217,10 +217,17 @@ def missing_packages(packages):
     return missing
 
 
-# Refused PLATFORM_MISMATCH when the bundle names its platforms and platform, the one of this mower, is not one of them.
+# Whether a bundle.json (or a candidate or index entry from it) goes with the platform of this mower; one without
+# platforms goes with any, and so does every one while the platform is unknown.
+def fits_platform(meta, platform):
+    platforms = meta.get("platforms")
+    return not (platform and isinstance(platforms, list) and platforms and platform not in platforms)
+
+
+# Refused PLATFORM_MISMATCH when the bundle does not fit platform, the one of this mower.
 def check_platform(bundle, platform):
-    platforms = bundle.meta.get("platforms")
-    if platforms and platform and platform not in platforms:
+    if not fits_platform(bundle.meta, platform):
+        platforms = bundle.meta["platforms"]
         raise Refused(PLATFORM_MISMATCH, f"the bundle is built for {', '.join(platforms)}, this mower is {platform}")
 
 

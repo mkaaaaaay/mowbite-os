@@ -59,6 +59,10 @@ struct RpcFailure : std::runtime_error {
   int code;
 };
 
+// The name a request asks for as {key: name} or [name]: "" for none given (no params, {} or []), "-" for any other form
+// or a name that valid refuses, so that a mistyped request never counts as "all".
+std::string AskedName(const Json& params, const char* key, bool (*valid)(const std::string&));
+
 }  // namespace mowbite_bridge
 
 #endif  // MOWBITE_BRIDGE_JSON_RPC_H

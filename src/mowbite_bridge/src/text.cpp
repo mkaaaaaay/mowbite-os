@@ -59,6 +59,11 @@ bool IsSpace(char c) {
   return std::isspace(static_cast<unsigned char>(c)) != 0;
 }
 
+// A space or quote ends a credential.
+bool TokenEnd(char c) {
+  return IsSpace(c) || c == '"' || c == '\'';
+}
+
 bool IsNameChar(char c) {
   return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
 }
@@ -131,7 +136,7 @@ std::string HideSecrets(std::string_view text) {
     const std::size_t begin = scheme + 3;
     std::size_t end = begin;
     std::size_t at = std::string::npos;
-    while (end < out.size() && !IsSpace(out[end]) && out[end] != '"' && out[end] != '\'') {
+    while (end < out.size() && !TokenEnd(out[end])) {
       if (out[end] == '@') at = end;
       ++end;
     }
@@ -145,7 +150,7 @@ std::string HideSecrets(std::string_view text) {
       if (k >= out.size() || !IsSpace(out[k])) continue;
       while (k < out.size() && IsSpace(out[k])) ++k;
       std::size_t end = k;
-      while (end < out.size() && !IsSpace(out[end]) && out[end] != '"' && out[end] != '\'') ++end;
+      while (end < out.size() && !TokenEnd(out[end])) ++end;
       if (end > k) out.replace(k, end - k, "***");
       at = k;
     }

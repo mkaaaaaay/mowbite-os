@@ -20,6 +20,8 @@ namespace mowbite_bridge {
 
 // Prefix of the ids of calls between nodes on bridge/rpc/request (e.g. the calibration asking the planner).
 constexpr char kInternalCall[] = "os/";
+// The MQTT topic of the app's calls.
+inline constexpr char kRequestTopic[] = "rpc/request";
 
 // A call forwarded to a node waits this long for its answer, at most this many at once; ids of a call longer than this
 // as JSON are refused.
@@ -253,6 +255,9 @@ class BridgeCore {
     Reply to;
   };
   std::map<uint64_t, OpenCall> open_;
+  // Answers the open call with this error and removes it; the call after it.
+  std::map<uint64_t, OpenCall>::iterator EndCall(std::map<uint64_t, OpenCall>::iterator call, int code,
+                                                 const std::string& message);
   std::string tag_;
   uint64_t next_call_ = 0;
   // Each problem of an event against the catalog is logged once.
