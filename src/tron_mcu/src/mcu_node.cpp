@@ -274,9 +274,9 @@ class McuNode : public rclcpp::Node {
     }
     if (!config.stop_release) config.stop_clear_period_s = 0;
     config.silence_max_s = read_only ? 0.0 : std::max(0.0, declare_parameter("silence_max", 0.0));
-    // Measurement only (H3, phase 6): heartbeat after each SpeedData ("after" in the same write, "frame" in its
-    // frame, "later" after heartbeat_after_speed s), hw/silence after the next "speed" or "cutter" tick, stop frames
-    // after a silence delayed by silence_stop_delay s.
+    // Heartbeat after each SpeedData ("after" in the same write, "frame" in its frame, "later" after
+    // heartbeat_after_speed s: the setting of the Tron, T9). Measurement only: hw/silence after the next "speed" or
+    // "cutter" tick, stop frames after a silence delayed by silence_stop_delay s.
     const std::string speed_heartbeat = declare_parameter("speed_heartbeat", "");
     const std::string silence_after = declare_parameter("silence_after", "");
     using SH = tron::McuControlConfig::SpeedHeartbeat;
@@ -297,9 +297,9 @@ class McuNode : public rclcpp::Node {
     }
     config.heartbeat_after_speed_s = declare_parameter("heartbeat_after_speed", config.heartbeat_after_speed_s);
     config.silence_stop_delay_s = std::max(0.0, declare_parameter("silence_stop_delay", 0.0));
-    if (!speed_heartbeat.empty() || !silence_after.empty() || config.silence_stop_delay_s > 0) {
-      RCLCPP_WARN(get_logger(), "Measurement settings: speed_heartbeat '%s' (%.3f s), silence_after '%s', "
-                  "silence_stop_delay %.2f s", speed_heartbeat.c_str(), config.heartbeat_after_speed_s,
+    RCLCPP_INFO(get_logger(), "speed_heartbeat '%s' (%.3f s)", speed_heartbeat.c_str(), config.heartbeat_after_speed_s);
+    if (!silence_after.empty() || config.silence_stop_delay_s > 0) {
+      RCLCPP_WARN(get_logger(), "Measurement settings: silence_after '%s', silence_stop_delay %.2f s",
                   silence_after.c_str(), config.silence_stop_delay_s);
     }
     // Set by the launch when it starts the driver again after the last one ended.
@@ -1021,7 +1021,7 @@ class McuNode : public rclcpp::Node {
   std::unique_ptr<mowbite_watch::Attached> watch_;
 
   bool read_only_;
-  // Measurement only (speed_heartbeat): all frames of a tick in one write, a heartbeat in the frame of its SpeedData.
+  // With speed_heartbeat all frames of a tick in one write; "frame" (measurement): a heartbeat in its SpeedData's.
   bool one_write_ = false;
   bool speed_frame_heartbeat_ = false;
   bool stop_release_;

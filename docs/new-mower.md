@@ -555,7 +555,9 @@ Before the mower drives by itself. On blocks, wheels free, blade off, someone at
    no wheel command and no blade on before; your programme there names its stop buttons (`STOP_BUTTONS`), the steps
    that turn nothing (`STANDSTILL_STEPS`) and whether the board keeps `stop` until the release (`STOP_LATCHES`, the
    Tron's MCU): then the release follows a few seconds after the request to let go, else once `stop` is free.
-2. How long the board keeps the last setpoint without the host: `failsafe_without_host`.
+2. How long the board keeps the last setpoint without the host: `failsafe_without_host`. It may hang on the order of
+   the last frames: the Tron's MCU keeps it ~3.6 s, but ends it ~0.23 s after a heartbeat that comes alone after it
+   (`measure.py` T9), so its driver sends one 25 ms after each setpoint (`speed_heartbeat: later`).
 3. Stop button, lift, bumper left and right: wheels and blade stop, the reason bits are right, latched until release.
    With a release at the mower: the press that latched never releases, a held press does, anything else does not.
    Lift each side and the whole mower level by hand: note the tilt lift comes at, or that it does not come; with the

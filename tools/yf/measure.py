@@ -129,14 +129,15 @@ HOLD_HELD_S = 1.0
 HOLD_QUIET_S = 3.0
 HOLD_ARM_S = 0.5
 HOLD_CASES = {
-    "V0": ("the heartbeat ahead of the setpoint, as now", {"silence_after": "speed"}, 3.0, None),
+    "V0": ("the heartbeat ahead of the setpoint only", {"speed_heartbeat": "", "silence_after": "speed"}, 3.0, None),
     "V1": ("a heartbeat right after each setpoint, in one write", {"speed_heartbeat": "after",
                                                                     "silence_after": "speed"}, 3.0, None),
     "V2": ("a heartbeat in the frame of each setpoint", {"speed_heartbeat": "frame", "silence_after": "speed"}, 3.0,
            None),
-    "V3": ("a heartbeat 25 ms after each setpoint", {"speed_heartbeat": "later", "silence_after": "speed"}, 3.0, None),
+    "V3": ("a heartbeat 25 ms after each setpoint, as the Tron runs", {"speed_heartbeat": "later",
+                                                                       "silence_after": "speed"}, 3.0, None),
     "G": (f"as V0 with a long silence, then heartbeats alone for {HOLD_QUIET_S:.0f} s before the stops",
-          {"silence_after": "speed", "silence_stop_delay": HOLD_QUIET_S}, 10.0, 2),
+          {"speed_heartbeat": "", "silence_after": "speed", "silence_stop_delay": HOLD_QUIET_S}, 10.0, 2),
     "B": ("the blade on frame last, the disc off", {"silence_after": "cutter", "allow_blade": True}, 3.0, 3),
 }
 HOLD_DEFAULT = ("V0", "V1", "V2")

@@ -32,8 +32,10 @@ tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
     send_imu: true
-    # Without host the MCU stopped the wheels ~0.2 s after the last SpeedData in some runs, in others it kept the
-    # setpoint 3 s and longer (08.11., 18.11.). The driver sends motion at most every 100 ms, every start sends the stop.
+    # Without host the MCU keeps the last setpoint ~3.6 s, but ends it ~0.23 s after a heartbeat that comes alone after
+    # it (T9, 2026-11-19): a heartbeat goes heartbeat_after_speed s after each SpeedData, all frames of a tick in one
+    # write, as measured. The driver sends motion at most every 100 ms, every start sends the stop.
+    speed_heartbeat: later
     # After cmd_vel_timeout s without hw/cmd_vel come three stops. speed_repeat_window > 0 repeats the last setpoint
     # every 100 ms for that long instead, stops at its end and needs a measurement on the Tron first.
     cmd_vel_timeout: 0.5

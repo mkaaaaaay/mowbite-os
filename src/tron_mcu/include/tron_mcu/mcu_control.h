@@ -74,7 +74,7 @@ struct McuControlConfig {
   double stop_clear_delay_s = 1.5;
   // Longest hw/silence; 0 offers none.
   double silence_max_s = 0;
-  // Measurement of how the MCU ends a setpoint without its host (H3, phase 6); only set by an override.
+  // How the MCU ends a setpoint without its host (H3, T9): kLater is the setting of the Tron, kAfter a measurement.
   // speed_heartbeat: kAfter adds a heartbeat right after each SpeedData of a tick, kLater one heartbeat_after_speed_s
   // after the last SpeedData; the heartbeats of their own schedule go on.
   enum class SpeedHeartbeat { kNone, kAfter, kLater };

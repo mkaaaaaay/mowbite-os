@@ -292,6 +292,10 @@ class TestBladeArguments(unittest.TestCase):
             self.assertGreater(silence, m.HOLD_HELD_S, case)
             self.assertEqual(overrides.get("allow_blade", False), case == "B", case)
 
+    def test_the_cases_before_t9_keep_the_heartbeat_ahead_of_the_setpoint_only(self):
+        for case in ("V0", "G"):
+            self.assertEqual(m.HOLD_CASES[case][1]["speed_heartbeat"], "", case)
+
     def test_t6_and_t7_are_not_in_the_default_steps(self):
         self.assertIn("T6", m.TronMeasurement.STEPS)
         self.assertIn("T7", m.TronMeasurement.STEPS)

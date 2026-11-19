@@ -176,3 +176,11 @@ def test_the_obstacle_source_is_the_stereo_camera():
     stereo = values["tron_stereo"]["ros__parameters"]
     assert stereo["obstacles"] is True
     assert values["tron_mcu"]["ros__parameters"]["obstacle_sources"] == [stereo["camera_id"]]
+
+
+# T9 (2026-11-19): the MCU ends a setpoint ~0.23 s after a heartbeat that comes alone after it, else it keeps it ~3.6 s.
+def test_a_heartbeat_follows_each_setpoint_as_measured():
+    with open(PLATFORM_FILE) as f:
+        mcu = yaml.safe_load(f)["tron_mcu"]["ros__parameters"]
+    assert mcu["speed_heartbeat"] == "later"
+    assert "heartbeat_after_speed" not in mcu
