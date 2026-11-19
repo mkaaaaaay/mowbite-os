@@ -34,7 +34,7 @@ static_assert(sizeof(FilterNoise) == 16);
 static_assert(sizeof(GateConfig) == 40);
 static_assert(sizeof(CourseConfig) == 80);
 static_assert(sizeof(AccuracyConfig) == 24);
-static_assert(sizeof(EstimatorConfig) == 336);
+static_assert(sizeof(EstimatorConfig) == 344);
 static_assert(sizeof(GnssFix) == 56);
 static_assert(sizeof(Pose2) == 24);
 static_assert(sizeof(Jump) == 40);
