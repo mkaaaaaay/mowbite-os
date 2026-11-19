@@ -1,6 +1,7 @@
 #include "mowbite_schedule/scheduler.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <iterator>
 
@@ -386,20 +387,30 @@ void Scheduler::ResolveWeather() {
   const std::optional<Weather>& weather = pending.answer;
   const bool fresh = weather && weather->ok && weather->age_s <= kWeatherMaxAge;
   if (schedule.skip_forecast) {
-    if (!fresh || !weather->has_rain) {
-      Log("weather_unknown", "forecast", nullptr, key);
-    } else {
-      bool rain = weather->rain_now_mm >= kRainNowMm;
-      const size_t hours = std::min(weather->rain_hour_mm.size(), static_cast<size_t>(schedule.forecast_hours));
-      for (size_t i = 0; i < hours; ++i) rain = rain || weather->rain_hour_mm[i] >= kRainHourMm;
-      if (rain) {
-        Decide(key, "skip_forecast", nullptr);
-        return;
+    // Rain in a value the answer has skips; without rain, a value that is not finite or an hour the answer lacks
+    // leaves the forecast unknown, as no answer does.
+    bool rain = false;
+    bool unknown = !fresh || !weather->has_rain;
+    if (!unknown) {
+      const auto look = [&](double mm, double limit) {
+        if (!std::isfinite(mm)) unknown = true;
+        else rain = rain || mm >= limit;
+      };
+      look(weather->rain_now_mm, kRainNowMm);
+      for (int i = 0; i < schedule.forecast_hours; ++i) {
+        const size_t hour = static_cast<size_t>(i);
+        if (hour < weather->rain_hour_mm.size()) look(weather->rain_hour_mm[hour], kRainHourMm);
+        else unknown = true;
       }
     }
+    if (rain) {
+      Decide(key, "skip_forecast", nullptr);
+      return;
+    }
+    if (unknown) Log("weather_unknown", "forecast", nullptr, key);
   }
   if (schedule.skip_cold) {
-    if (!fresh || !weather->has_temp) {
+    if (!fresh || !weather->has_temp || !std::isfinite(weather->temp_c)) {
       Log("weather_unknown", "cold", nullptr, key);
     } else if (weather->temp_c < schedule.min_temp) {
       Decide(key, "skip_cold", OneDecimal(weather->temp_c));
@@ -416,6 +427,16 @@ void Scheduler::ResolveWeather() {
 
 void Scheduler::Start(const PlanKey& key, const Plan& plan) {
   const Schedule& schedule = file_.schedule;
+  int64_t end_in_s = 0;
+  if (plan.end) {
+    const Date end_date = *plan.end > plan.time ? key.date : AddDays(key.date, 1);
+    end_in_s = schedule.zone.ToUnix(end_date, *plan.end) - facts_.wall;
+    // Over before it began (the hour the clock skips in spring takes time and end alike); 0 would mean no end.
+    if (end_in_s <= 0) {
+      Decide(key, "skip_end", nullptr);
+      return;
+    }
+  }
   const AreaSplit split = SplitAreas(schedule, plan, key.date, facts_.areas);
   for (const std::string& id : split.paused) Log("paused_area", id, nullptr, key);
   for (const std::string& id : split.unknown) Log("unknown_area", id, nullptr, key);
@@ -428,10 +449,7 @@ void Scheduler::Start(const PlanKey& key, const Plan& plan) {
   request.angle_offset_deg = plan.angle_offset_deg;
   request.dark_allowed = plan.dark;
   request.until_sunset = !plan.dark || plan.sunset;
-  if (plan.end) {
-    const Date end_date = *plan.end > plan.time ? key.date : AddDays(key.date, 1);
-    request.end_in_s = schedule.zone.ToUnix(end_date, *plan.end) - facts_.wall;
-  }
+  request.end_in_s = end_in_s;
   Run run;
   run.key = key;
   run.run_id = request.run_id;

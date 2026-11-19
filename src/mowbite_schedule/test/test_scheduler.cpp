@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <cmath>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "mowbite_schedule/scheduler.h"
@@ -482,6 +484,41 @@ TEST_F(SchedulerTest, T14_RainBeyondTheHoursAskedStarts) {
   EXPECT_TRUE(Words().empty());
 }
 
+// Values that are not finite or hours the answer lacks: unknown, the plan starts; rain in what is there skips.
+TEST_F(SchedulerTest, T14_WhatTheAnswerLacksIsUnknown) {
+  for (const auto& [now, hours, words] :
+       std::vector<std::tuple<double, std::vector<double>, Lines>>{
+           {std::nan(""), {0.0, 0.0}, Lines{"weather_unknown forecast"}},
+           {0.0, {0.0}, Lines{"weather_unknown forecast"}},
+           {0.0, {std::nan(""), 9.0}, Lines{"skip_forecast"}}}) {
+    Make(File({{"skip_forecast", 1}, {"forecast_hours", 2}}));
+    const Output out = TickAt(kMonday, "10:00");
+    ASSERT_TRUE(out.weather);
+    Weather weather;
+    weather.id = out.weather->id;
+    weather.ok = true;
+    weather.has_rain = true;
+    weather.rain_now_mm = now;
+    weather.rain_hour_mm = hours;
+    scheduler_->OnWeather(weather);
+    EXPECT_EQ(TickAt(kMonday, "10:00", 1).start.has_value(), words[0] != "skip_forecast");
+    EXPECT_EQ(Words(), words);
+  }
+}
+
+TEST_F(SchedulerTest, T14_NotFiniteTemperatureIsUnknown) {
+  Make(File({{"skip_cold", 1}}));
+  const Output out = TickAt(kMonday, "10:00");
+  Weather weather;
+  weather.id = out.weather->id;
+  weather.ok = true;
+  weather.has_temp = true;
+  weather.temp_c = std::nan("");
+  scheduler_->OnWeather(weather);
+  EXPECT_TRUE(TickAt(kMonday, "10:00", 1).start);
+  EXPECT_EQ(Words(), (Lines{"weather_unknown cold"}));
+}
+
 TEST_F(SchedulerTest, T14_RainNow) {
   Make(File({{"skip_forecast", 1}}));
   const Output out = TickAt(kMonday, "10:00");
@@ -716,6 +753,16 @@ TEST_F(SchedulerTest, SummerTimeBegins) {
   EXPECT_FALSE(TickAt(sunday, "01:59", 59).start);
   EXPECT_TRUE(Tick(Good(At(sunday, "03:00"))).start);
   EXPECT_EQ(At(sunday, "02:30"), At(sunday, "03:00"));
+}
+
+// time and end in the hour the clock skips: both the same moment, over before it began.
+TEST_F(SchedulerTest, SummerTimeBeginsWithTheEndInTheSkippedHour) {
+  const Date sunday{2026, 3, 29};
+  ScheduleFile file = File({{"plans", {{{"days", {7}}, {"time", "02:30"}, {"end", "02:45"}, {"dark", 1}}}}});
+  file.changed_at = 0;
+  Make(file);
+  EXPECT_FALSE(Tick(Good(At(sunday, "03:00"))).start);
+  EXPECT_EQ(Words(), (Lines{"skip_end"}));
 }
 
 TEST_F(SchedulerTest, SummerTimeEndsFiresOnce) {
