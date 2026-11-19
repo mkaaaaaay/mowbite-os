@@ -272,6 +272,8 @@ class Pose:
 
 # The blade turns at about 3000 rpm whatever percentage it was given (measured on the Tron, 2954 to 3060).
 BLADE_RPM = 3000
+# Motors (mod 13) about 3.4 times a second, measured on the Tron 07.11.
+MOTORS_PERIOD = 0.3
 FAST_SPEED_GAP = 0.075
 FAST_SPEED_RUN = 3
 FAST_SPEED_HOLD = 3.6
@@ -910,7 +912,7 @@ def main():
 
     t0 = time.monotonic()
     last = 0.0
-    next_sensor = next_status = next_gnss = next_imu = next_state = next_port_check = 0.0
+    next_sensor = next_status = next_motors = next_gnss = next_imu = next_state = next_port_check = 0.0
     gnss_error = DriftingError()
     try:
         while True:
@@ -980,6 +982,10 @@ def main():
                 decivolts = max(0, min(0xFFFF, int(round(float(flags.get("battery_voltage", 24.5)) * 10))))
                 battery = struct.pack("<HhBbbI", decivolts, current, percentage, int(dock_ok),
                                       celsius(flags.get("battery_temperature", 30)), 0)
+                version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
+                send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version)]))
+            if now >= next_motors:
+                next_motors = now + MOTORS_PERIOD
                 left_rpm, right_rpm = drive.rpm()
                 motors = b"".join(struct.pack("<hhhbb", rpm, 0, 2450, 30, 0)
                                   for rpm in (-right_rpm, -left_rpm, 0))
@@ -988,9 +994,7 @@ def main():
                 # 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", BLADE_RPM if cutter_percent else 0, 80 if cutter_percent else 0, 2450,
                                      celsius(flags.get("blade_temperature", 30)), 0)
-                version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
-                send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version),
-                                  (FROM_MCU, 13, cutter + motors)]))
+                send(mcu.fd, encode([(FROM_MCU, 13, cutter + motors)]))
             if now >= next_gnss:
                 next_gnss = now + min(max(float(flags.get("gnss_period", GNSS_PERIOD)), 0.05), 1.0)
                 sigma = float(flags.get("gnss_noise", args.gnss_noise_m))
