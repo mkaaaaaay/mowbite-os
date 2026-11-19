@@ -235,14 +235,16 @@ class TestDockReference(unittest.TestCase):
         p = self.probe
         # Float fixes do not count: the accuracy grows from the last fixed one.
         p.flags(gnss_quality=5)
-        self.assertTrue(p.wait(lambda: 0.03 < p.pose.position_accuracy < 0.1, 10), p.pose.position_accuracy)
+        self.assertTrue(p.wait(lambda: 0.03 < p.pose.position_accuracy_at_heading < 0.1, 10),
+                        p.pose.position_accuracy_at_heading)
         since = len(p.events)
         p.act(START)
         refused = self.refused(since)
         self.assertEqual(refused["reason"], "POSITION_ACCURACY", refused)
         self.assertEqual(refused["limit"], 0.03)
         p.flags()
-        self.assertTrue(p.wait(lambda: p.pose.position_accuracy <= 0.03, 30), p.pose.position_accuracy)
+        self.assertTrue(p.wait(lambda: p.pose.position_accuracy_at_heading <= 0.03, 30),
+                        p.pose.position_accuracy_at_heading)
 
     def test_06_contact_without_a_station_in_the_map(self):
         p = self.probe
