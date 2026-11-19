@@ -204,7 +204,7 @@ const Field kActionEnabled = {"enabled", Type::kInteger, "", true, "1 when the a
 
 Json BuildSchema(const Json& planner) {
   Json defs = Json::object();
-  defs["robot_state"] = Object("robot_state/json, retained: the state of the mower for the app", Pointers(RobotState()),
+  defs["robot_state"] = Object("robot_state/json, live without retain: the state of the mower for the app", Pointers(RobotState()),
                                true);
   Json one_of = Json::array();
   Json known = Json::array();

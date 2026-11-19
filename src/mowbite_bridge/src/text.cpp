@@ -125,12 +125,29 @@ std::size_t NestingDepth(std::string_view text) {
 
 std::string HideSecrets(std::string_view text) {
   std::string out(text);
-  // user:password@ after "://", up to the first '/', '@' or space.
+  // user:password@ after "://", up to the last '@' before a space or quote: a password may hold '/' and '@'.
   for (std::size_t scheme = out.find("://"); scheme != std::string::npos; scheme = out.find("://", scheme + 3)) {
     const std::size_t begin = scheme + 3;
     std::size_t end = begin;
-    while (end < out.size() && out[end] != '/' && out[end] != '@' && !IsSpace(out[end])) ++end;
-    if (end < out.size() && out[end] == '@' && end > begin) out.replace(begin, end - begin, "***");
+    std::size_t at = std::string::npos;
+    while (end < out.size() && !IsSpace(out[end]) && out[end] != '"' && out[end] != '\'') {
+      if (out[end] == '@') at = end;
+      ++end;
+    }
+    if (at != std::string::npos && at > begin) out.replace(begin, at - begin, "***");
+  }
+  // The credentials of an Authorization header: "Basic x" or "Bearer x".
+  for (const std::string_view scheme : {std::string_view("basic"), std::string_view("bearer")}) {
+    for (std::size_t at = 0; at < out.size(); ++at) {
+      if (!StartsWithNoCase(out, at, scheme) || (at > 0 && IsNameChar(out[at - 1]))) continue;
+      std::size_t k = at + scheme.size();
+      if (k >= out.size() || !IsSpace(out[k])) continue;
+      while (k < out.size() && IsSpace(out[k])) ++k;
+      std::size_t end = k;
+      while (end < out.size() && !IsSpace(out[end]) && out[end] != '"' && out[end] != '\'') ++end;
+      if (end > k) out.replace(k, end - k, "***");
+      at = k;
+    }
   }
   // The value after a secret name and = or :, the name and a quoted value each in " or ' as in JSON.
   for (std::size_t at = 0; at < out.size(); ++at) {

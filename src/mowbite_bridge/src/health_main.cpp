@@ -61,6 +61,8 @@ int main() {
     for (auto now = std::chrono::steady_clock::now(); now < deadline; now = std::chrono::steady_clock::now()) {
       mqtt::const_message_ptr message;
       if (!client.try_consume_message_for(&message, deadline - now) || !message) continue;
+      // The bridge sends it live; a retained copy may be of an earlier version or another client.
+      if (message->is_retained()) continue;
       const std::string payload = message->to_string();
       const std::string why = RobotStateProblem(payload);
       if (why.empty()) {

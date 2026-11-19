@@ -40,6 +40,12 @@ TEST(HideSecrets, LoginsInUrlsAndValuesAfterKeyWords) {
   // Nothing to hide.
   EXPECT_EQ(HideSecrets("http://caster:2101/MOUNT and a@b"), "http://caster:2101/MOUNT and a@b");
   EXPECT_EQ(HideSecrets("password missing"), "password missing");
+  // A password with '/' or '@', and the credentials of an Authorization header.
+  EXPECT_EQ(HideSecrets("ntrip://user:pa/ss@caster/MOUNT x"), "ntrip://***@caster/MOUNT x");
+  EXPECT_EQ(HideSecrets("ntrip://user:p@ss@host:2101/M"), "ntrip://***@host:2101/M");
+  EXPECT_EQ(HideSecrets("Authorization: Basic dXNlcjpwYXNz"), "Authorization: Basic ***");
+  EXPECT_EQ(HideSecrets("header bearer abc.def end"), "header bearer *** end");
+  EXPECT_EQ(HideSecrets("basically fine"), "basically fine");
 }
 
 TEST(HideSecrets, QuotedNamesAndValuesAsInJson) {
