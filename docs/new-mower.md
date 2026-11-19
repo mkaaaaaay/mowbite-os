@@ -69,7 +69,8 @@ Duties:
   `latch_count` one up), send the blade off and three stops. `hw/end` answers and then ends the process with exit code
   3 without another byte to the board; the start counts it like a crash and starts the driver again latched. Both
   refuse with `READ_ONLY`, `CHARGING` (also on the raw contact), `BLADE` (lease, blade on, running down) and hw/silence
-  with `OUT_OF_RANGE` and `BUSY`. hw/silence with `blade` true goes silent with the blade on as well (the step `blade`
+  with `OUT_OF_RANGE`, `BUSY` and `NO_SETUP` (no active `setup/motion` within the last second: outside a setup step
+  the timeout of `hw/cmd_vel` stays in force). hw/silence with `blade` true goes silent with the blade on as well (the step `blade`
   measures that the board stops it alone); after it no lease runs on. Offer them with `silence_max_s` (a parameter
   `silence_max` well past the time the board stops without its host; 0 without) and `driver_end` in
   `hw/capabilities`. The steps `silence` and `driver_end` measure with them how the board stops without its host.
@@ -93,6 +94,11 @@ Duties:
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
+- Stops: the state of the board is unknown at every start and after a port reopens, so the driver sends the stop
+  frames then, latched or not. Before every frame that clears a latched sensor on the board, a stop. A board that
+  reports its wheel speeds is checked after every stop like the blade: still turning `wheel_stop_time` after the stop
+  (`tron_mcu`), the driver latches `MOWER_NOT_STOPPED` and stops again. When the process ends it sends the stop and the
+  blade off several times; the stop only stays out on the charging contacts without a command.
 - Start: until the first sample of a sensor it needs, a driver may refuse drive and blade without an emergency, for a
   fixed start time at most (`tron_mcu`: `imu_start_timeout`). After it the driver accepts or reports an emergency.
   Whoever starts a driver waits that long before the first request.

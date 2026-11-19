@@ -64,7 +64,7 @@ class ControlTest : public ::testing::Test {
     SubPacket packet;
   };
 
-  explicit ControlTest(McuControlConfig config = {}) : control_(config) {
+  explicit ControlTest(McuControlConfig config = {}) : control_(config), start_stops_(config.repeat_count) {
   }
 
   void Run(double until, bool feed_sensor = true) {
@@ -72,8 +72,20 @@ class ControlTest : public ::testing::Test {
       now_ = ++step_ * 0.01;
       if (feed_sensor) control_.OnSensorInfo(sensor_, now_);
       if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
-      for (auto& packet : control_.Tick(now_, kWall)) sent_.push_back({now_, packet});
+      if (feed_setup_) control_.OnSetupMotion(true, now_);
+      if (feed_wheels_) control_.OnWheelSpeed(wheel_linear_, wheel_angular_, now_);
+      for (auto& packet : control_.Tick(now_, kWall)) {
+        if (!StartStop(packet)) sent_.push_back({now_, packet});
+      }
     }
+  }
+
+  // The stop frames of the start, up to the first motion; StartStopTest keeps them, the others leave them out.
+  bool StartStop(const SubPacket& packet) {
+    if (IsMovingSpeed(packet)) start_stops_ = 0;
+    if (keep_start_stops_ || start_stops_ <= 0 || !IsZeroSpeed(packet)) return false;
+    --start_stops_;
+    return true;
   }
 
   template <typename Pred>
@@ -101,6 +113,14 @@ class ControlTest : public ::testing::Test {
   SensorInfo sensor_;
   // An IMU sample with every step.
   bool feed_imu_ = false;
+  // An active setup/motion with every step.
+  bool feed_setup_ = false;
+  // The speeds the MCU reports, with every step.
+  bool feed_wheels_ = false;
+  float wheel_linear_ = 0;
+  float wheel_angular_ = 0;
+  bool keep_start_stops_ = false;
+  int start_stops_;
   int step_ = 0;
   double now_ = 0;
   std::vector<Sent> sent_;
@@ -426,7 +446,7 @@ TEST_F(ControlTest, LiftStaysLatchedAfterFlagDrops) {
   EXPECT_EQ(Times(IsMovingSpeed).size(), 1u);
 }
 
-TEST_F(ControlTest, ReleaseWithLiftSendsClearThenZeros) {
+TEST_F(ControlTest, ReleaseWithLiftSendsZeroClearThenZeros) {
   Run(0.1);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(0.2);
@@ -436,10 +456,12 @@ TEST_F(ControlTest, ReleaseWithLiftSendsClearThenZeros) {
   Run(1.3);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 1u);
-  // Three zeros when the lift stopped the wheels, three more after the clear.
-  auto zeros = Times(IsZeroSpeed, clears[0]);
-  ASSERT_EQ(zeros.size(), 3u);
-  EXPECT_GE(zeros[0], clears[0]);
+  // A zero right before the clear in its frame order, three more after it.
+  const auto clear = std::find_if(sent_.begin(), sent_.end(), [](const Sent& s) { return IsClear(s.packet); });
+  ASSERT_NE(clear, sent_.begin());
+  EXPECT_TRUE(IsZeroSpeed((clear - 1)->packet));
+  EXPECT_NEAR((clear - 1)->t, clears[0], 1e-9);
+  EXPECT_EQ(Times(IsZeroSpeed, clears[0]).size(), 4u);
   // The MCU drops the flag within the release window.
   sensor_.lift = false;
   Run(1.4);
@@ -456,8 +478,9 @@ TEST_F(ControlTest, RepeatedReleaseWithStuckLiftIsQuiet) {
   size_t clears = Times(IsClear).size();
   EXPECT_GE(clears, 9u);
   EXPECT_LE(clears, 11u);
-  // No recent motion, so no speed frames at all, also not on the dock.
-  EXPECT_TRUE(Times([](const SubPacket& p) { return IsModule(p, Module::kSpeed); }).empty());
+  // Only zeros, a stop around each clear.
+  EXPECT_TRUE(Times(IsMovingSpeed).empty());
+  EXPECT_EQ(Times(IsZeroSpeed).size(), 4 * clears);
   EXPECT_TRUE(control_.Status(now_).latched);
 }
 
@@ -1311,7 +1334,7 @@ TEST_F(ControlTest, OneReleaseSendsOneClearWhileTheLiftStays) {
   EXPECT_TRUE(control_.Status(now_).latched);
 }
 
-TEST_F(ControlTest, ZerosFollowAClearOnlyAfterRecentMotion) {
+TEST_F(ControlTest, ZerosGoAroundEveryClearHoweverLongAgoTheMotionWas) {
   Run(6.0);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(6.2);
@@ -1323,35 +1346,16 @@ TEST_F(ControlTest, ZerosFollowAClearOnlyAfterRecentMotion) {
   Run(8.5);
   auto clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 1u);
-  // 2 s after the last motion: three zeros after the clear.
-  EXPECT_EQ(Times(IsZeroSpeed, clears[0]).size(), 3u);
+  EXPECT_EQ(Times(IsZeroSpeed, clears[0]).size(), 4u);
   sensor_.lift = false;
-  Run(14.0);
+  Run(30.0);
   sensor_.lift = true;
-  Run(15.0);
+  Run(31.0);
   control_.ReleaseEmergency(now_, 0);
-  Run(15.5);
+  Run(31.5);
   clears = Times(IsClear);
   ASSERT_EQ(clears.size(), 2u);
-  // 9 s after it: none.
-  EXPECT_TRUE(Times(IsZeroSpeed, clears[1]).empty());
-}
-
-TEST_F(ControlTest, NoZerosAfterAClearExactlyFiveSecondsAfterTheMotion) {
-  Run(0.02);
-  control_.OnCmdVel(0.2f, 0.0f, now_);
-  Run(0.1);
-  control_.OnCmdVel(0.0f, 0.0f, now_);
-  Run(1.0);
-  sensor_.lift = true;
-  Run(5.02);
-  // The motion went out at 0.03 s, the clear goes out at 5.03 s.
-  control_.ReleaseEmergency(now_, 0);
-  Run(5.5);
-  auto clears = Times(IsClear);
-  ASSERT_EQ(clears.size(), 1u);
-  EXPECT_NEAR(clears[0], 5.03, 1e-9);
-  EXPECT_TRUE(Times(IsZeroSpeed, clears[0]).empty());
+  EXPECT_EQ(Times(IsZeroSpeed, clears[1]).size(), 4u);
 }
 
 TEST_F(ControlTest, ASecondClearAfterTheMinimumInterval) {
@@ -1387,7 +1391,7 @@ TEST_F(ControlTest, ACommandBeforeAReconnectIsDropped) {
   EXPECT_TRUE(Times(IsMovingSpeed).empty());
 }
 
-TEST_F(ControlTest, AReconnectStopsAMovingMowerAtOnceAndAStandingOneGetsNoZeros) {
+TEST_F(ControlTest, AReconnectStopsAMovingMowerAtOnceAndAStandingOneAsWell) {
   Run(0.1);
   control_.OnCmdVel(0.2f, 0.0f, now_);
   Run(0.2);
@@ -1399,7 +1403,7 @@ TEST_F(ControlTest, AReconnectStopsAMovingMowerAtOnceAndAStandingOneGetsNoZeros)
   Run(5.0);
   control_.OnConnected(now_);
   Run(6.0);
-  EXPECT_TRUE(Times(IsZeroSpeed, 5.0).empty());
+  EXPECT_EQ(Times(IsZeroSpeed, 5.0).size(), 3u);
 }
 
 TEST_F(ControlTest, AReconnectSendsAHeartbeatAtOnce) {
@@ -1427,9 +1431,22 @@ TEST_F(ControlTest, HeartbeatEvery100msForLong) {
   for (size_t i = 1; i < times.size(); i++) EXPECT_NEAR(times[i] - times[i - 1], 0.1, 1e-6);
 }
 
-TEST_F(ControlTest, TheFirstTicksSendOnlyHeartbeatAndBladeOff) {
+TEST_F(ControlTest, TheFirstTicksSendOnlyHeartbeatBladeOffAndStop) {
+  keep_start_stops_ = true;
   Run(0.5);
-  for (const auto& s : sent_) EXPECT_TRUE(IsHeartbeat(s.packet) || IsBladeOff(s.packet)) << s.t;
+  for (const auto& s : sent_) EXPECT_TRUE(IsHeartbeat(s.packet) || IsBladeOff(s.packet) || IsZeroSpeed(s.packet)) << s.t;
+}
+
+TEST_F(ControlTest, TheFirstMotionEndsTheStopsOfTheStart) {
+  keep_start_stops_ = true;
+  Run(0.05);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(0.3);
+  ASSERT_EQ(Times(IsZeroSpeed).size(), 1u);
+  EXPECT_NEAR(Times(IsZeroSpeed)[0], 0.01, 1e-9);
+  // The motion waits speed_period_s after the stop frame, as after any.
+  ASSERT_FALSE(Times(IsMovingSpeed).empty());
+  EXPECT_NEAR(Times(IsMovingSpeed)[0], 0.11, 1e-9);
 }
 
 TEST_F(ControlTest, TelemetryExactlyAtTheTimeoutIsStillFresh) {
@@ -1932,6 +1949,7 @@ TEST_F(StartLatchedTest, LatchedWithHighLevelBeforeTheFirstTick) {
 }
 
 TEST_F(StartLatchedTest, TheFirstTickSendsHeartbeatStopAndBladeOff) {
+  keep_start_stops_ = true;
   Run(0.01);
   EXPECT_EQ(Times(IsHeartbeat).size(), 1u);
   EXPECT_EQ(Times(IsZeroSpeed).size(), 1u);
@@ -1969,11 +1987,11 @@ TEST_F(StartLatchedTest, NoMotionOrBladeUntilTheRelease) {
   EXPECT_TRUE(DrivesOrMows(now_ + 0.5));
 }
 
-TEST_F(StartLatchedTest, AReconnectSendsNoStopFramesAgain) {
+TEST_F(StartLatchedTest, AReconnectSendsTheStopFramesAgain) {
   Run(1.0);
   control_.OnConnected(now_);
   Run(2.0);
-  EXPECT_TRUE(Times(IsZeroSpeed, 1.0).empty());
+  EXPECT_EQ(Times(IsZeroSpeed, 1.0).size(), 3u);
   EXPECT_EQ(Times(IsBladeOff, 1.0).size(), 3u);
   EXPECT_TRUE(control_.Status(now_).latched);
 }
@@ -2008,11 +2026,15 @@ TEST_F(StartLatchedImuTest, TheImuStillDueIsNoReasonAndAReleaseBeforeItHasNoEffe
   EXPECT_FALSE(control_.Status(now_).latched);
 }
 
-TEST_F(ControlTest, WithoutStartLatchedTheStartIsFree) {
+// The MCU might still run a setpoint of a driver that ended in any way, also with the whole stack.
+TEST_F(ControlTest, WithoutStartLatchedTheStartIsFreeAndStillStops) {
+  keep_start_stops_ = true;
   Run(0.5);
   EXPECT_FALSE(control_.Status(now_).latched);
   EXPECT_EQ(control_.Status(now_).latch_count, 0u);
-  EXPECT_TRUE(Times(IsZeroSpeed).empty());
+  const auto zeros = Times(IsZeroSpeed);
+  ASSERT_EQ(zeros.size(), 3u);
+  for (size_t i = 0; i < zeros.size(); i++) EXPECT_NEAR(zeros[i], 0.01 + 0.1 * static_cast<double>(i), 1e-9);
 }
 
 // Journals from before start_latched replay as they ran: started free.
@@ -2051,6 +2073,7 @@ class SilenceTest : public ControlTest {
     return config;
   }
   SilenceTest() : ControlTest(SilenceConfig()) {
+    feed_setup_ = true;
   }
   // Drives until now_ = 0.5, then the silence begins.
   double DriveThenSilence(double seconds) {
@@ -2289,6 +2312,7 @@ class HoldMeasureTest : public ControlTest {
     return config;
   }
   explicit HoldMeasureTest(McuControlConfig config) : ControlTest(config) {
+    feed_setup_ = true;
   }
   // Keeps commanding motion every 0.1 s up to `until`, as the logic does.
   void Drive(double until) {
@@ -2442,4 +2466,234 @@ TEST_F(HoldCutterTest, TheSilenceStartsRightAfterTheBladeOnFrame) {
   EXPECT_TRUE(IsBladeOn(TickAt(on[0]).back()));
   EXPECT_TRUE(Times([](const SubPacket&) { return true; }, on[0] + 0.001).empty());
   EXPECT_TRUE(control_.Status(now_).silent);
+}
+
+// F5: a stop is not confirmed by the MCU; the wheel speeds it reports are.
+class WheelStopTest : public ControlTest {
+ protected:
+  WheelStopTest() {
+    feed_wheels_ = true;
+  }
+  // Drives from 0.3 s, the command ends at 0.5 s: the stop frames begin at 0.5 s.
+  void DriveThenStop() {
+    Run(0.3);
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    wheel_linear_ = 0.2f;
+    Run(0.5);
+    control_.OnCmdVel(0.0f, 0.0f, now_);
+  }
+  bool NotStopped() const {
+    return (control_.Status(now_).emergency_reason & kReasonMowerNotStopped) != 0;
+  }
+};
+
+TEST_F(WheelStopTest, WheelsStillTurningAfterTheStopLatchAndTheStopsGoOutAgain) {
+  DriveThenStop();
+  Run(1.99);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_EQ(Times(IsZeroSpeed, 0.5).size(), 3u);
+  Run(2.01);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_TRUE(NotStopped());
+  Run(2.3);
+  EXPECT_EQ(Times(IsZeroSpeed, 2.0).size(), 3u);
+  // Still turning: once more after another wheel_stop_time_s, not with every report.
+  Run(3.45);
+  EXPECT_EQ(Times(IsZeroSpeed, 2.0).size(), 3u);
+  Run(3.8);
+  EXPECT_EQ(Times(IsZeroSpeed, 2.0).size(), 6u);
+}
+
+TEST_F(WheelStopTest, AReleaseWaitsForStandingWheels) {
+  DriveThenStop();
+  Run(2.2);
+  ASSERT_TRUE(NotStopped());
+  control_.ReleaseEmergency(now_, 0);
+  Run(2.5);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  wheel_linear_ = 0;
+  Run(2.6);
+  ASSERT_TRUE(control_.ReleaseEmergency(now_, 0));
+  Run(2.7);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(WheelStopTest, WheelsThatStoodEndTheCheckAndLaterTurnsLatchNothing) {
+  DriveThenStop();
+  Run(0.7);
+  wheel_linear_ = 0;
+  Run(2.1);
+  // Pushed by hand afterwards.
+  wheel_linear_ = 0.3f;
+  Run(6.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  EXPECT_EQ(Times(IsZeroSpeed, 0.5).size(), 3u);
+}
+
+TEST_F(WheelStopTest, AShortSpikeIsNoTurningWheel) {
+  DriveThenStop();
+  Run(0.7);
+  wheel_linear_ = 0;
+  Run(1.9);
+  wheel_linear_ = 0.05f;
+  Run(2.18);
+  wheel_linear_ = 0;
+  Run(2.3);
+  wheel_linear_ = 0.05f;
+  Run(2.5);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(WheelStopTest, BelowTheStillSpeedTheWheelsStand) {
+  DriveThenStop();
+  // The standing Tron reports up to 0.011 m/s and 0.028 rad/s.
+  wheel_linear_ = 0.011f;
+  wheel_angular_ = 0.028f;
+  Run(4.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(WheelStopTest, ATurnOnTheSpotCountsByItsFasterWheel) {
+  DriveThenStop();
+  wheel_linear_ = 0;
+  // 0.15 rad/s with 0.40 m between the wheels: 0.03 m/s each.
+  wheel_angular_ = 0.15f;
+  Run(2.3);
+  EXPECT_TRUE(NotStopped());
+}
+
+TEST_F(WheelStopTest, TurningWhileCommandedIsNoFault) {
+  Run(0.3);
+  wheel_linear_ = 0.2f;
+  for (int i = 0; i < 50; i++) {
+    control_.OnCmdVel(0.2f, 0.0f, now_);
+    Run(now_ + 0.1);
+  }
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+TEST_F(WheelStopTest, TheStopsOfTheStartAreCheckedAsWell) {
+  wheel_linear_ = 0.1f;
+  Run(1.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+  Run(1.8);
+  EXPECT_TRUE(NotStopped());
+}
+
+TEST_F(WheelStopTest, AnotherCommandEndsTheCheck) {
+  DriveThenStop();
+  Run(1.0);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(1.2);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(1.4);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(1.6);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(1.8);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+class NoWheelStopCheckTest : public ControlTest {
+ protected:
+  static McuControlConfig NoCheckConfig() {
+    McuControlConfig config;
+    config.wheel_stop_time_s = 0;
+    return config;
+  }
+  NoWheelStopCheckTest() : ControlTest(NoCheckConfig()) {
+    feed_wheels_ = true;
+  }
+};
+
+TEST_F(NoWheelStopCheckTest, ZeroTurnsTheCheckOff) {
+  wheel_linear_ = 0.3f;
+  Run(5.0);
+  EXPECT_FALSE(control_.Status(now_).latched);
+}
+
+// Journals from before the check of the wheels replay as they ran: without it.
+TEST(McuJournal, ConfigFromBeforeTheWheelCheckReplays) {
+  tron::McuControlConfig config;
+  config.wheel_stop_time_s = 2.5;
+  config.wheel_still_mps = 0.04;
+  nlohmann::json j = config;
+  EXPECT_EQ(j.get<tron::McuControlConfig>().wheel_stop_time_s, 2.5);
+  EXPECT_EQ(j.get<tron::McuControlConfig>().wheel_still_mps, 0.04);
+  j.erase("wheel_stop_time_s");
+  j.erase("wheel_still_mps");
+  EXPECT_EQ(j.get<tron::McuControlConfig>().wheel_stop_time_s, 0.0);
+}
+
+// F8: the frames when the process ends.
+TEST_F(ControlTest, TheFarewellStopsAlsoAStandingMowerAndSwitchesTheBladeOff) {
+  Run(1.0);
+  const auto farewell = control_.Farewell();
+  ASSERT_EQ(farewell.size(), 2u);
+  EXPECT_TRUE(IsZeroSpeed(farewell[0]));
+  EXPECT_TRUE(IsBladeOff(farewell[1]));
+  EXPECT_EQ(CutterHeight(farewell[1]), kMaxCutterHeightMm);
+}
+
+TEST_F(ControlTest, TheFarewellLeavesTheStopOutOnTheChargingContactsWithoutCommand) {
+  Run(0.5);
+  for (int i = 0; i < 3; i++) control_.OnDockContactSample(true);
+  ASSERT_TRUE(control_.Status(now_).dock_contact);
+  auto farewell = control_.Farewell();
+  ASSERT_EQ(farewell.size(), 1u);
+  EXPECT_TRUE(IsBladeOff(farewell[0]));
+  // Driving onto the contacts: commanded, so the stop goes.
+  control_.OnCmdVel(0.1f, 0.0f, now_);
+  Run(0.6);
+  ASSERT_TRUE(control_.Status(now_).moving);
+  farewell = control_.Farewell();
+  ASSERT_EQ(farewell.size(), 2u);
+  EXPECT_TRUE(IsZeroSpeed(farewell[0]));
+}
+
+TEST_F(ControlTest, TheFarewellStopsOnASingleContactSample) {
+  Run(0.5);
+  control_.OnDockContactSample(true);
+  ASSERT_FALSE(control_.Status(now_).dock_contact);
+  EXPECT_EQ(control_.Farewell().size(), 2u);
+}
+
+// F9: hw/silence only while a step of the setup program runs.
+class SilenceSetupTest : public ControlTest {
+ protected:
+  static McuControlConfig Config() {
+    McuControlConfig config;
+    config.silence_max_s = 3.0;
+    return config;
+  }
+  SilenceSetupTest() : ControlTest(Config()) {
+  }
+};
+
+TEST_F(SilenceSetupTest, RefusedWithoutSetupMotion) {
+  Run(0.5);
+  control_.OnCmdVel(0.5f, 0.0f, now_);
+  Run(0.6);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNoSetup);
+  EXPECT_EQ(control_.SilenceWithBlade(1.0, now_), HostTestRefusal::kNoSetup);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_STREQ(HostTestRefusalCode(HostTestRefusal::kNoSetup), "NO_SETUP");
+}
+
+TEST_F(SilenceSetupTest, TakenWithinASecondOfAnActiveSetupMotionOnly) {
+  Run(0.5);
+  control_.OnSetupMotion(true, now_);
+  Run(1.5);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNone);
+  Run(3.0);
+  control_.OnSetupMotion(true, now_);
+  Run(4.01);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNoSetup);
+}
+
+TEST_F(SilenceSetupTest, AnInactiveSetupMotionEndsIt) {
+  Run(0.5);
+  control_.OnSetupMotion(true, now_);
+  control_.OnSetupMotion(false, now_);
+  EXPECT_EQ(control_.Silence(1.0, now_), HostTestRefusal::kNoSetup);
 }

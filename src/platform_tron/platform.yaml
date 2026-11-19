@@ -32,8 +32,8 @@ tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
     send_imu: true
-    # The MCU stops the wheels ~0.2 s after the last SpeedData, also with heartbeat and IMU (measured 07.11.), but at
-    # 20 SpeedData/s it kept a setpoint up to 3.6 s without host (08.11.). The driver sends motion at most every 100 ms.
+    # Without host the MCU stopped the wheels ~0.2 s after the last SpeedData in some runs, in others it kept the
+    # setpoint 3 s and longer (08.11., 18.11.). The driver sends motion at most every 100 ms, every start sends the stop.
     # After cmd_vel_timeout s without hw/cmd_vel come three stops. speed_repeat_window > 0 repeats the last setpoint
     # every 100 ms for that long instead, stops at its end and needs a measurement on the Tron first.
     cmd_vel_timeout: 0.5
@@ -57,6 +57,11 @@ tron_mcu:
     imu_start_timeout: 2.0
     blade_stop_time: 1.5
     blade_still_rpm: 100
+    # Nor is a stop: a wheel still at wheel_still_speed m/s or more wheel_stop_time s after the stop frames latches
+    # MOWER_NOT_STOPPED and the stops go out again. The standing Tron reports up to 0.011 m/s and 0.028 rad/s, ~0.017
+    # m/s at the faster wheel (07./08.11.); the slowest setpoint seen kept running was 0.03 m/s (18.11.).
+    wheel_stop_time: 1.5
+    wheel_still_speed: 0.025
     # STOP at the mower releases the emergency (G37): free 2 s, then a short press (0.1 to 2 s). The driver reports it
     # on hw/button, the logic releases as for emergency.reset. The MCU keeps stop until a clear frame (measured
     # 2026-11-15), so the gesture works only with stop_clear_period > 0: STOP cleared every stop_clear_period s during
@@ -66,8 +71,9 @@ tron_mcu:
     stop_release: true
     stop_clear_period: 0.0
     stop_clear_delay: 1.5
-    # Longest hw/silence of the setup program in s (0 offers none). Without host the MCU stopped the wheels within
-    # 0.3 s and the blade within 0.6 s (07./08./14.11.), and in 20 s it latched nothing by itself (15.11.).
+    # Longest hw/silence of the setup program in s (0 offers none), taken only during a setup step. Without host the
+    # MCU stopped the blade within 0.6 s (14.11.), the wheels only in some runs (above), and in 20 s it latched nothing
+    # by itself (15.11.).
     silence_max: 3.0
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""

@@ -36,6 +36,7 @@ const char* HostTestRefusalCode(HostTestRefusal refusal) {
     case HostTestRefusal::kCharging: return "CHARGING";
     case HostTestRefusal::kBusy: return "BUSY";
     case HostTestRefusal::kBlade: return "BLADE";
+    case HostTestRefusal::kNoSetup: return "NO_SETUP";
   }
   return "";
 }
@@ -78,6 +79,36 @@ void McuControl::OnBladeRpm(int rpm, double now) {
   LatchEmergency(kReasonMowerNotStopped);
   // A lost off frame is the likely cause, so the off frames go out again with every such report.
   StartRepeat(blade_off_repeat_, BladeOff(), now);
+}
+
+void McuControl::OnWheelSpeed(float linear, float angular, double now) {
+  // The faster wheel, with the wheel distance the MCU counts with.
+  const double wheel = std::abs(linear) + std::abs(angular) * kMcuWheelDistance / 2;
+  const bool fast = wheel >= config_.wheel_still_mps;
+  if (!fast) {
+    wheel_fast_since_s_.reset();
+    wheels_turning_ = false;
+  } else if (!wheel_fast_since_s_) {
+    wheel_fast_since_s_ = now;
+  }
+  if (!wheel_stop_s_ || config_.wheel_stop_time_s <= 0 || now - *wheel_stop_s_ < config_.wheel_stop_time_s) return;
+  if (!fast) {
+    wheel_stop_s_.reset();
+    return;
+  }
+  if (now - *wheel_fast_since_s_ + kDeadlineSlackS < kWheelTurningS) return;
+  wheels_turning_ = true;
+  LatchEmergency(kReasonMowerNotStopped);
+  // A lost stop frame is the likely cause, so they go out again and the check starts anew.
+  StartStop(now);
+}
+
+void McuControl::OnSetupMotion(bool active, double now) {
+  if (active) {
+    setup_motion_s_ = now;
+  } else {
+    setup_motion_s_.reset();
+  }
 }
 
 bool McuControl::OnVersions(const VersionInfo& versions) {
@@ -176,10 +207,8 @@ void McuControl::OnConnected(double now) {
   blade_on_.reset();
   // After the port reopens the MCU might run another firmware, e.g. after an update.
   firmware_ok_.reset();
-  if (moving_) {
-    moving_ = false;
-    StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
-  }
+  moving_ = false;
+  StartStop(now);
   stop_release_.Interrupt();
 }
 
@@ -211,6 +240,10 @@ HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade)
   if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > config_.silence_max_s) {
     return HostTestRefusal::kOutOfRange;
   }
+  // Only a running setup step may silence the driver: in normal operation the cmd_vel timeout has to stay in force.
+  if (!setup_motion_s_ || now - *setup_motion_s_ > kSetupMotionFreshS + kDeadlineSlackS) {
+    return HostTestRefusal::kNoSetup;
+  }
   const HostTestRefusal refusal = HostTestRefused(blade);
   if (refusal != HostTestRefusal::kNone) return refusal;
   if (config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
@@ -235,8 +268,7 @@ void McuControl::EndSilence(double now) {
   release_until_s_.reset();
   // The MCU might still run the last setpoint; its blade state is unknown.
   moving_ = false;
-  StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
-  stop_repeat_.next_s = now + config_.silence_stop_delay_s;
+  StartStop(now, config_.silence_stop_delay_s);
   blade_on_.reset();
   StartRepeat(blade_off_repeat_, BladeOff(), now);
   blade_off_since_s_ = now;
@@ -355,6 +387,12 @@ void McuControl::StartRepeat(Repeat& repeat, const SubPacket& packet, double now
   repeat.next_s = now;
 }
 
+void McuControl::StartStop(double now, double delay) {
+  StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+  stop_repeat_.next_s = now + delay;
+  wheel_stop_s_ = now + delay;
+}
+
 void McuControl::EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& out) {
   if (repeat.remaining <= 0 || now + kDeadlineSlackS < repeat.next_s) return;
   out.push_back(repeat.packet);
@@ -366,6 +404,13 @@ void McuControl::EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& 
 double McuControl::StopAfter() const {
   if (config_.speed_repeat_window_s <= 0) return config_.cmd_vel_timeout_s;
   return std::min(config_.speed_repeat_window_s, config_.cmd_vel_timeout_s);
+}
+
+std::vector<SubPacket> McuControl::Farewell() const {
+  std::vector<SubPacket> out;
+  if (moving_ || !DockContact()) out.push_back(ZeroSpeedPacket());
+  out.push_back(BladeOff());
+  return out;
 }
 
 SubPacket McuControl::BladeOff() const {
@@ -388,14 +433,14 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     EndSilence(now);
   }
 
-  // The blade state of the MCU is unknown when the driver takes over.
+  // The state of the MCU is unknown when the driver takes over: the blade goes off and the wheels get the stop.
   if (!started_) {
     started_ = true;
-    // A reconnect resends the off frames but does not restart the time the IMU has.
+    // A reconnect resends the frames but does not restart the time the IMU has.
     if (!start_s_) {
       start_s_ = now;
-      // The MCU might still run the last setpoint of the driver before this one.
-      if (config_.start_latched) StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+      // The MCU might still run a setpoint of an earlier driver, however that one ended.
+      StartStop(now);
     }
     StartRepeat(blade_off_repeat_, BladeOff(), now);
     blade_off_since_s_ = now;
@@ -431,16 +476,15 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     release_requested_ = false;
     bool clear_allowed = !last_clear_s_ || now - *last_clear_s_ + kDeadlineSlackS >= config_.clear_min_interval_s;
     if ((lift || stop) && clear_allowed) {
+      // The MCU might pick up the last setpoint again once the latch is gone: the stop goes before and after.
+      out.push_back(ZeroSpeedPacket());
       out.push_back(SensorClearPacket());
       last_clear_s_ = now;
-      // The MCU might pick up the last setpoint again once the latch is gone.
-      if (last_motion_s_ && now - *last_motion_s_ < config_.clear_zero_after_motion_s) {
-        StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
-      }
+      StartStop(now);
     }
   }
   if (release_until_s_) {
-    if (!lift && !stop && !bumper && !TelemetryStale(now) && !ImuStale(now) && !blade_turning_) {
+    if (!lift && !stop && !bumper && !TelemetryStale(now) && !ImuStale(now) && !blade_turning_ && !wheels_turning_) {
       latched_ = false;
       latch_reason_ = 0;
       release_until_s_.reset();
@@ -457,7 +501,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (stop && stop_clear_mark_ && StopClearReady(now) &&
       (!last_stop_clear_s_ || now - *last_stop_clear_s_ + kDeadlineSlackS >= config_.stop_clear_period_s)) {
     // The MCU might pick up the last setpoint again once its latch is gone.
-    if (last_motion_s_ && now - *last_motion_s_ < config_.clear_zero_after_motion_s) out.push_back(ZeroSpeedPacket());
+    out.push_back(ZeroSpeedPacket());
     out.push_back(SensorClearPacket());
     last_stop_clear_s_ = now;
   }
@@ -473,7 +517,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     pending_cmd_.reset();
     if (moving_) {
       moving_ = false;
-      StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+      StartStop(now);
     }
   } else if (pending_cmd_) {
     std::optional<SubPacket> packet;
@@ -483,14 +527,14 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     if (!packet) {
       if (moving_) {
         moving_ = false;
-        StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+        StartStop(now);
       }
       pending_cmd_.reset();
     } else if (now + kDeadlineSlackS >= next_speed_s_) {
       stop_repeat_.remaining = 0;
+      wheel_stop_s_.reset();
       out.push_back(*packet);
       moving_ = true;
-      last_motion_s_ = now;
       last_speed_ = *packet;
       next_speed_s_ = now + config_.speed_period_s;
       pending_cmd_.reset();
@@ -499,11 +543,10 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
 
   if (moving_ && now - last_cmd_s_ > StopAfter()) {
     moving_ = false;
-    StartRepeat(stop_repeat_, ZeroSpeedPacket(), now);
+    StartStop(now);
   }
   if (moving_ && last_speed_ && config_.speed_repeat_window_s > 0 && now + kDeadlineSlackS >= next_speed_s_) {
     out.push_back(*last_speed_);
-    last_motion_s_ = now;
     next_speed_s_ = now + config_.speed_period_s;
   }
 

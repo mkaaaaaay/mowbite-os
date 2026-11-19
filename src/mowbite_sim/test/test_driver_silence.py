@@ -1,6 +1,7 @@
 """hw/silence and hw/end of tron_mcu against fake_tron on a pty: silent, the board gets no frame, afterwards the driver
 latches with HIGH_LEVEL and sends the blade off and three stops; with blade also while the blade turns, which the board
-then stops alone; after hw/end the process ends with exit code 3 without another frame. Read only it offers neither.
+then stops alone; after hw/end the process ends with exit code 3 without another frame. hw/silence only during a
+setup step (setup/motion). Read only it offers neither.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_driver_silence.py
 """
@@ -16,7 +17,7 @@ import launch
 import launch_testing.actions
 import rclpy
 from geometry_msgs.msg import Twist
-from mowbite_msgs.msg import HardwareStatus
+from mowbite_msgs.msg import HardwareStatus, SetupMotion
 from mowbite_msgs.srv import EndDriver, SetBlade, SetEmergency, SilenceDriver
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
@@ -55,7 +56,15 @@ class Probe(HwProbe):
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.silence = self.node.create_client(SilenceDriver, "hw/silence")
         self.end = self.node.create_client(EndDriver, "hw/end")
+        # A running setup step, as the setup program signs it.
+        self.setup = self.node.create_publisher(SetupMotion, "setup/motion", 10)
+        self.in_setup = True
+        self.node.create_timer(0.25, self.sign_setup)
         self.start()
+
+    def sign_setup(self):
+        if self.in_setup:
+            self.setup.publish(SetupMotion(active=True, step="silence"))
 
     def latest(self, pred, timeout=10.0):
         return self.wait(lambda: self.status if self.status and pred(self.status) else None, timeout)
@@ -133,6 +142,16 @@ class TestDriverSilence(unittest.TestCase):
                                                                             latch_count=s.latch_count))
         self.assertTrue(answer.success, answer)
         self.assertTrue(self.probe.latest(lambda s: not s.emergency, 3.0), "the release did not end the emergency")
+
+    def test_c0_refused_outside_a_setup_step(self):
+        self.assertTrue(self.probe.latest(lambda s: s.telemetry_ok and not s.emergency, 5), "no free status")
+        self.probe.in_setup = False
+        time.sleep(1.3)
+        answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=1.0))
+        self.assertEqual((answer.success, answer.code), (False, "NO_SETUP"))
+        self.probe.in_setup = True
+        time.sleep(0.5)
+        self.assertTrue(self.probe.latest(lambda s: not s.emergency, 1.0), "the refusal latched")
 
     def test_c2_silence_with_the_blade_turning(self):
         self.assertTrue(self.probe.latest(lambda s: s.telemetry_ok and not s.emergency, 5), "no free status")

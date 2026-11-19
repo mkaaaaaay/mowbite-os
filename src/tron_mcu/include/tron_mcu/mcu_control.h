@@ -47,16 +47,18 @@ struct McuControlConfig {
   // off latches the emergency, and the off frames go out again. 0 turns the check off.
   double blade_stop_time_s = 5.0;
   int blade_still_rpm = 100;
+  // The MCU does not confirm a stop either. A wheel it reports at wheel_still_mps or more for kWheelTurningS in a row,
+  // wheel_stop_time_s or later after the stop frames began, latches MOWER_NOT_STOPPED and the stop frames go out
+  // again; the first report of standing wheels from then on ends the check. 0 turns it off.
+  double wheel_stop_time_s = 1.5;
+  double wheel_still_mps = 0.025;
   bool bumper_latches_emergency = true;
-  // The driver before this one ended and the launch started this one: the MCU does not lock itself without a host and
-  // might still hold a setpoint, so the emergency is latched (HIGH_LEVEL) from the start and the first tick sends the
-  // stop frames.
+  // The driver before this one ended and the launch started this one: the MCU does not lock itself without a host, so
+  // the emergency is latched (HIGH_LEVEL) from the start. Every start sends the stop frames, with or without it.
   bool start_latched = false;
   // A release waits this long for lift, stop and bumper to drop after the clear frame.
   double release_window_s = 1.0;
   double clear_min_interval_s = 1.0;
-  // Zero speed follows a clear frame only if the wheels were commanded this recently.
-  double clear_zero_after_motion_s = 5.0;
   // Firmware the driver was checked against, "major.minor.patch". Empty skips the check of that board. With a check,
   // motion and blade stay blocked until a version frame matches; a release does not lift it.
   std::string expected_cutter_version;
@@ -145,11 +147,15 @@ struct McuInput {
 constexpr double kMinSilenceS = 0.2;
 // How long an hw/silence with silence_after waits for its tick.
 constexpr double kSilenceArmS = 1.0;
+// hw/silence is taken only this soon after an active setup/motion; the setup program sends it at 4 Hz.
+constexpr double kSetupMotionFreshS = 1.0;
+// How long a wheel has to turn after a stop before it counts as not stopped.
+constexpr double kWheelTurningS = 0.3;
 
 // Why hw/silence or hw/end was refused; kNone when it was taken.
-enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade };
+enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade, kNoSetup };
 
-// The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE; empty for kNone.
+// The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE, NO_SETUP; empty for kNone.
 const char* HostTestRefusalCode(HostTestRefusal refusal);
 
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
@@ -201,6 +207,10 @@ class McuControl {
   void OnImu(const ImuCounts& imu, double now);
   // Speed of the blade motor as the MCU reports it (motors frame, about once a second).
   void OnBladeRpm(int rpm, double now);
+  // Speed and turn rate as the MCU measures them (m/s, rad/s, about 100 Hz).
+  void OnWheelSpeed(float linear, float angular, double now);
+  // setup/motion of the setup program: a step that moves the wheels or the blade runs while it is active.
+  void OnSetupMotion(bool active, double now);
   // Version frame of the MCU, about once a second. Returns false if it does not match the expected firmware.
   bool OnVersions(const VersionInfo& versions);
 
@@ -216,7 +226,7 @@ class McuControl {
   // Not allowed: Charge 0 at once, repeat_count times, and no Charge 1 until allowed again or the contact ends, so
   // that the mower leaves the station without charging. Allowed: Charge 1 at the next tick while there is contact.
   void SetCharging(bool allowed, double now);
-  // The MCU state is unknown after the port (re)opens: the blade goes off and moving wheels get a stop.
+  // The MCU state is unknown after the port (re)opens: the blade goes off and the wheels get the stop frames.
   void OnConnected(double now);
   // The hold of an update (hold.json): motion and blade blocked like before the first IMU sample, without an
   // emergency; a moving mower gets a stop, the blade goes off. Charging goes on.
@@ -225,7 +235,8 @@ class McuControl {
   void SetStopClearMark(bool written);
   // hw/silence: no frame to the MCU for seconds; commands, blade requests, releases and IMU samples meanwhile are
   // dropped. At its end the emergency latches (HIGH_LEVEL, counted), and the blade off and the stop frames go out as
-  // after start_latched. Refused on the charging contacts and with the blade on or turning.
+  // after start_latched. Refused without an active setup/motion within kSetupMotionFreshS, on the charging contacts and
+  // with the blade on or turning.
   HostTestRefusal Silence(double seconds, double now);
   // As Silence, also with the blade on or turning: the MCU has to stop it without its host. The blade request is gone
   // afterwards.
@@ -234,6 +245,9 @@ class McuControl {
   HostTestRefusal End();
 
   std::vector<SubPacket> Tick(double now, const WallClock& wall);
+  // The frames when the process ends, sent repeat_count times by the node: the stop, unless the mower stands on the
+  // charging contacts without a command (zero frames push it off them), and the blade off.
+  std::vector<SubPacket> Farewell() const;
   McuControlStatus Status(double now) const;
   // STOP, lift and the two bumpers; none active without fresh telemetry.
   std::array<McuInput, 4> Inputs(double now) const;
@@ -284,6 +298,8 @@ class McuControl {
   bool Stop(double now) const;
   bool Bumper(double now) const;
   void StartRepeat(Repeat& repeat, const SubPacket& packet, double now);
+  // The stop frames from now + delay on, and the check of the wheels after them.
+  void StartStop(double now, double delay = 0);
   void EmitRepeat(Repeat& repeat, double now, std::vector<SubPacket>& out);
   double StopAfter() const;
   SubPacket BladeOff() const;
@@ -297,7 +313,6 @@ class McuControl {
   std::optional<PendingCmd> pending_cmd_;
   double last_cmd_s_ = 0;
   bool moving_ = false;
-  std::optional<double> last_motion_s_;
   // The last non-zero setpoint sent and when it goes out again.
   std::optional<SubPacket> last_speed_;
   double next_speed_s_ = 0;
@@ -336,6 +351,16 @@ class McuControl {
   bool blade_turning_ = false;
   // The last blade report showed blade_still_rpm or more.
   bool blade_rpm_high_ = false;
+
+  // When the stop frames began; empty while the wheels are commanded or once they stood after wheel_stop_time_s.
+  std::optional<double> wheel_stop_s_;
+  // Since when the reports show a wheel at wheel_still_mps or more; empty while they stand.
+  std::optional<double> wheel_fast_since_s_;
+  // The wheels did not stop; only a report of standing wheels clears it.
+  bool wheels_turning_ = false;
+
+  // The last active setup/motion; empty after an inactive one.
+  std::optional<double> setup_motion_s_;
 
   int dock_samples_ = 0;
   bool dock_raw_ = false;
