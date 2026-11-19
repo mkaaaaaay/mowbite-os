@@ -295,7 +295,7 @@ SightReason Feed(SightCheck& check, const std::vector<uint8_t>& frame, double fr
   return check.Reason(to, detail);
 }
 
-TEST(Sight, TooDarkOnlyAtHighestGainAfterTwoSeconds) {
+TEST(Sight, TooDarkAfterTwoSecondsAtHighestGainAfterTenAtAnyGain) {
   SightCheck check{SightLimits{}};
   EXPECT_EQ(Feed(check, Flat(30, 30), 0.0, 1.8), SightReason::kNone);
   EXPECT_EQ(Feed(check, Flat(30, 30), 2.0, 2.2), SightReason::kTooDark);
@@ -303,7 +303,8 @@ TEST(Sight, TooDarkOnlyAtHighestGainAfterTwoSeconds) {
   EXPECT_EQ(Feed(check, Flat(40, 40), 2.4, 4.0), SightReason::kTooDark);
   EXPECT_EQ(Feed(check, Flat(46, 46), 4.2, 4.2), SightReason::kNone);
   SightCheck low_gain{SightLimits{}};
-  EXPECT_EQ(Feed(low_gain, Flat(30, 30), 0.0, 5.0, false), SightReason::kNone);
+  EXPECT_EQ(Feed(low_gain, Flat(30, 30), 0.0, 9.8, false), SightReason::kNone);
+  EXPECT_EQ(Feed(low_gain, Flat(30, 30), 10.0, 10.0, false), SightReason::kTooDark);
 }
 
 TEST(Sight, TooBrightAfterOneSecondBackBelowTenPercent) {
@@ -408,11 +409,13 @@ struct CoreRig {
     return *core;
   }
   // One frame of the scene to the core, then the reports until one with sight or `wait_s` of real time.
-  bool Analyse(ObstacleReport& report, bool moving = false, double wait_s = 3.0) {
+  // `stamp_offset` (s) shifts the frame time of the driver against the clock.
+  bool Analyse(ObstacleReport& report, bool moving = false, double wait_s = 3.0, double stamp_offset = 0.0) {
     if (frame.empty()) frame = scene.Render();
     // A camera never gives two frames alike.
     frame[360 * 2560 + 2 * 330] ^= 1;
-    CapturedFrame f{0, frame.data(), frame.size(), 2560, ++sequence, static_cast<int64_t>(clock * 1e6), -1};
+    const auto stamp = static_cast<int64_t>((clock + stamp_offset) * 1e6);
+    CapturedFrame f{0, frame.data(), frame.size(), 2560, ++sequence, stamp, -1};
     Core().OnFrame(f, clock, {moving, true});
     const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(wait_s);
     while (std::chrono::steady_clock::now() < until) {
@@ -464,11 +467,31 @@ TEST(ObstacleCore, NotSetUpSaysWhatIsMissing) {
   up.config.mount.pitch = -0.8;
   EXPECT_FALSE(up.Core().Load());
 
+  // Class lists that do not fit the model: a person could count as an object.
   CoreRig wrong_class;
   wrong_class.config.animal = {"dog", "hedgehog"};
-  EXPECT_TRUE(wrong_class.Core().Load());
-  ASSERT_EQ(wrong_class.Core().Warnings().size(), 1U);
-  EXPECT_NE(wrong_class.Core().Warnings()[0].find("hedgehog"), std::string::npos);
+  EXPECT_FALSE(wrong_class.Core().Load());
+  ASSERT_TRUE(wrong_class.Core().Poll(1.0, wrong_class.camera, report));
+  EXPECT_EQ(report.reason, SightReason::kNotSetUp);
+  EXPECT_NE(report.detail.find("hedgehog"), std::string::npos);
+
+  CoreRig misspelt_person;
+  misspelt_person.config.person = {"Person"};
+  EXPECT_FALSE(misspelt_person.Core().Load());
+
+  CoreRig no_person;
+  no_person.config.person.clear();
+  EXPECT_FALSE(no_person.Core().Load());
+  ASSERT_TRUE(no_person.Core().Poll(1.0, no_person.camera, report));
+  EXPECT_NE(report.detail.find("kind_person"), std::string::npos);
+
+  CoreRig person_height;
+  person_height.config.known_height = {{"person", 1.7}};
+  EXPECT_FALSE(person_height.Core().Load());
+
+  CoreRig unknown_height;
+  unknown_height.config.known_height = {{"brick", 0.1}};
+  EXPECT_FALSE(unknown_height.Core().Load());
 }
 
 TEST(ObstacleCore, KindsFromThePlatformLists) {
@@ -526,28 +549,40 @@ TEST(ObstacleCore, IgnoredClassesAreLeftOut) {
   EXPECT_EQ(rig.Core().Status().last, "none");
 }
 
-// The size probe moves a depth far out with a spread that still holds the depth of the stereo; the point under the box
-// stays in charge, so the thing ends up no farther than where it stands.
+// The size probe moves an object far out with a spread that still holds the depth of the stereo; the point under the
+// box stays in charge, so the thing ends up no farther than where it stands.
 TEST(ObstacleCore, TheSizeProbeLeavesTheGroundInCharge) {
   Scene scene;
   const Block block{1.5, 1.8, -0.15, 0.15, 0.4};
   scene.blocks = {block};
-  CoreRig sized(HitFor(BoxOf(scene, block), 0));
+  CoreRig sized(HitFor(BoxOf(scene, block), 4));
   sized.scene = scene;
-  // A person of 1.7 m whose box is only 0.4 m high would be far away by its size.
-  sized.config.known_height = {{"person", 1.7}};
+  // A stone of 1.7 m whose box is only 0.4 m high would be far away by its size.
+  sized.config.known_height = {{"stone", 1.7}};
   ASSERT_TRUE(sized.Core().Load());
   ObstacleReport with_size;
   ASSERT_TRUE(sized.Analyse(with_size));
-  CoreRig plain(HitFor(BoxOf(scene, block), 0));
-  plain.scene = scene;
-  ASSERT_TRUE(plain.Core().Load());
-  ObstacleReport without;
-  ASSERT_TRUE(plain.Analyse(without));
   ASSERT_EQ(with_size.obstacles.size(), 1U);
-  ASSERT_EQ(without.obstacles.size(), 1U);
   EXPECT_LT(with_size.obstacles[0].spot.x, block.near + 0.5 * (block.left - block.right) + 0.08);
   EXPECT_GT(with_size.obstacles[0].spot.x, block.near - 0.1);
+}
+
+// A result of a frame the driver stamped long ago gives no sight; a stamp ahead counts from the submission.
+TEST(ObstacleCore, ResultsOfOldFramesAreDropped) {
+  Scene scene;
+  const Block block{1.5, 1.8, -0.15, 0.15, 0.4};
+  scene.blocks = {block};
+  CoreRig rig(HitFor(BoxOf(scene, block), 0));
+  rig.scene = scene;
+  ASSERT_TRUE(rig.Core().Load());
+  ObstacleReport report;
+  ASSERT_TRUE(rig.Analyse(report));
+  rig.clock += 0.3;
+  EXPECT_FALSE(rig.Analyse(report, false, 0.5, -2.0));
+  EXPECT_EQ(report.reason, SightReason::kNoSignal);
+  rig.clock += 0.3;
+  EXPECT_TRUE(rig.Analyse(report, false, 3.0, 5.0));
+  EXPECT_EQ(report.obstacles.size(), 1U);
 }
 
 TEST(ObstacleCore, PhotosOnlyWhenWantedAndAtMostOnceASecond) {

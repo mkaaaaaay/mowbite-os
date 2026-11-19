@@ -11,10 +11,6 @@
 
 namespace tron_vision {
 
-// /dev/videoN whose sysfs entry has that name and belongs to that platform device, found by reading under
-// `sysfs_root` only; empty if none or more than one match. No device is opened.
-std::string FindVideoNode(const std::string& sysfs_root, const std::string& device, const std::string& name);
-
 // Stereo camera of the Tron: both eyes side by side as YUYV from the capture interface behind the bridge chip. Only
 // the video node is opened, never a subdev: bridge and sensor drivers crash the kernel on enumerations, and a format
 // set on the bridge undoes its setup.

@@ -11,6 +11,9 @@
 
 namespace tron_vision {
 
+// Longest wait of the encoder for the packet of a frame (ms).
+constexpr int64_t kEncoderOutputWaitMs = 400;
+
 struct EncoderSettings {
   // Size of the coded picture; it is the left part of each line of the frame.
   uint32_t width = 640;

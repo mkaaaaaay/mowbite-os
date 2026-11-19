@@ -1,6 +1,7 @@
 """A driver the launch starts again after the last one ended (start_latched), here tron_mcu against fake_tron on a pty:
 it is latched with HIGH_LEVEL from the start, its first frames carry three stops beside the heartbeat, no command
-reaches the board until the release, and read only it neither latches nor sends.
+reaches the board until the release, and read only it neither latches nor sends. A first start is free and sends the
+three stops as well.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_start_latched.py
 """
@@ -149,12 +150,14 @@ class TestStartLatched(unittest.TestCase):
         self.assertFalse(any(status.emergency_latched for status in self.probe.all()))
         self.assertEqual(host_packets(LOG, self.driver.since), [])
 
-    def test_e_a_first_start_is_free_and_sends_no_stop(self):
+    def test_e_a_first_start_is_free_and_stops_as_well(self):
         s = self.restart(start_latched=False)
         self.assertTrue(s, "no telemetry after the restart")
         time.sleep(1.0)
         self.assertFalse(self.probe.all()[-1].emergency, self.probe.all()[-1].emergency_reason)
-        self.assertEqual(sub_packets(LOG, self.driver.since, SPEED), [])
+        speeds = sub_packets(LOG, self.driver.since, SPEED)
+        self.assertEqual(len(speeds), 3, speeds)
+        self.assertFalse(any(moving(e) for e in speeds), speeds)
 
 
 if __name__ == "__main__":

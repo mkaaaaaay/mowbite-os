@@ -25,7 +25,6 @@ bool BoardLink::OnRtcm(size_t bytes, double now) {
     return false;
   }
   forwarded_bytes_ += bytes;
-  last_forward_ = now;
   return true;
 }
 
@@ -40,8 +39,9 @@ std::string BoardLink::Poll(double now) {
     active_ = true;
     next_on_ = now;
   }
-  if (pending_reset_) {
+  if (pending_reset_ && (!last_reset_ || now - *last_reset_ >= config_.min_reset_gap_s)) {
     pending_reset_ = false;
+    last_reset_ = now;
     resets_++;
     out += kBoardReset;
     next_on_ = now;

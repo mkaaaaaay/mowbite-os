@@ -199,6 +199,7 @@ class RearLoop {
   DockReason WouldFail(std::string& detail);
   void StepOff(double now, bool asked, bool viewer);
   void StepFault(double now, bool asked);
+  double GoodBy() const;
   void StepCamera(double now, bool asked, bool viewer);
   void StepView(double now);
   // Opens the camera for the viewer alone; false if it cannot now.

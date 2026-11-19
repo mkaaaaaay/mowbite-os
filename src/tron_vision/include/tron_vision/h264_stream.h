@@ -14,6 +14,9 @@
 
 namespace tron_vision {
 
+// A camera or a stream that ran this long (s) forgets its earlier failures.
+constexpr double kFailuresForgetS = 600.0;
+
 // H.264 of camera frames for the client of one path of an RTSP server: the parameter sets ahead for its session
 // description, the encoder open only between Begin() and End(), frame and bit rate over the last second.
 class H264Stream {
@@ -53,6 +56,9 @@ class H264Stream {
   bool Running() const {
     return running_;
   }
+  double RunningFor() const {
+    return running_ ? now_() - began_ : 0.0;
+  }
   // One frame to the client; on kEncoderFailed the encoder is closed and the client dropped.
   Sent Send(const CapturedFrame& frame, std::string& error);
   // Closes the encoder; it lets go of the buffers of the camera, so it comes before the camera stops.
@@ -77,6 +83,7 @@ class H264Stream {
   size_t path_;
   double slow_encode_s_;
   std::function<double()> now_;
+  double began_ = 0.0;
   EncoderSettings settings_;
   ParameterSets sets_;
   bool prepared_ = false;

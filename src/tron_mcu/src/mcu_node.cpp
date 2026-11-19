@@ -14,6 +14,7 @@
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/setup_motion.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
 #include <mowbite_msgs/srv/end_driver.hpp>
@@ -197,6 +198,12 @@ class McuNode : public rclcpp::Node {
           "imu/data", rclcpp::SensorDataQoS(),
           [this](const sensor_msgs::msg::Imu::ConstSharedPtr& msg) { OnImu(*msg); });
     }
+    // hw/silence is taken only while a step of the setup program runs.
+    setup_motion_sub_ = create_subscription<mowbite_msgs::msg::SetupMotion>(
+        "setup/motion", 10, [this](const mowbite_msgs::msg::SetupMotion::ConstSharedPtr& msg) {
+          std::lock_guard<std::mutex> lock(mutex_);
+          control_.Call<&C::OnSetupMotion>(msg->active, MonotonicSeconds());
+        });
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
         "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr& req,
                                const mowbite_msgs::srv::SetEmergency::Response::SharedPtr& res) {
@@ -252,6 +259,9 @@ class McuNode : public rclcpp::Node {
     config.imu_start_timeout_s = send_imu ? imu_start_timeout : 0.0;
     config.blade_stop_time_s = declare_parameter("blade_stop_time", config.blade_stop_time_s);
     config.blade_still_rpm = static_cast<int>(declare_parameter("blade_still_rpm", config.blade_still_rpm));
+    // Read only another program commands the wheels: the stops of this core never go out.
+    config.wheel_stop_time_s = read_only ? 0.0 : declare_parameter("wheel_stop_time", config.wheel_stop_time_s);
+    config.wheel_still_mps = declare_parameter("wheel_still_speed", config.wheel_still_mps);
     config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
     config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
     config.stop_release = declare_parameter("stop_release", false) && !read_only;
@@ -525,14 +535,17 @@ class McuNode : public rclcpp::Node {
       port_.Close();
       return;
     }
-    // Stop wheels if they were commanded, switch the blade off and lift the deck.
+    // The stop and the blade off, several times: after them no host is left.
     std::vector<tron::SubPacket> packets;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      if (control_.View().Status(MonotonicSeconds()).moving) packets.push_back(tron::ZeroSpeedPacket());
+      packets = control_.View().Farewell();
     }
-    packets.push_back(tron::CutterPacket(tron::CutterCommand{}));
-    Send(packets);
+    const tron::McuControlConfig config;
+    for (int i = 0; i < config.repeat_count && port_.IsOpen(); ++i) {
+      if (i > 0) std::this_thread::sleep_for(std::chrono::duration<double>(config.repeat_interval_s));
+      Send(packets);
+    }
     port_.Close();
   }
 
@@ -546,7 +559,10 @@ class McuNode : public rclcpp::Node {
         for (const auto& packet : frame) {
           if (packet.type != static_cast<uint8_t>(tron::PacketType::kMcuToHost)) continue;
           if (packet.module == static_cast<uint8_t>(Module::kSpeed)) {
-            if (auto speed = tron::DecodeSpeed(packet.payload)) speeds.push_back(*speed);
+            if (auto speed = tron::DecodeSpeed(packet.payload)) {
+              control_.Call<&C::OnWheelSpeed>(speed->linear, speed->angular, now);
+              speeds.push_back(*speed);
+            }
           } else {
             HandleTelemetry(packet, now);
           }
@@ -1047,6 +1063,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
   rclcpp::Service<mowbite_msgs::srv::SilenceDriver>::SharedPtr silence_srv_;
+  rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_motion_sub_;
   rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
   rclcpp::TimerBase::SharedPtr journal_timer_;

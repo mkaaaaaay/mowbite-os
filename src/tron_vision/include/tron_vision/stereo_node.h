@@ -4,6 +4,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/obstacle_image.hpp>
@@ -63,6 +64,7 @@ class StereoNode : public rclcpp::Node {
  private:
   void OnStatus(const mowbite_msgs::msg::HardwareStatus& msg);
   void Run();
+  void TryListen();
   void Report(const StereoStatus& status, double now);
   void PublishCamera(const StereoStatus& status);
   void PublishObstacles(const ObstacleReport& report, double now);
@@ -74,8 +76,11 @@ class StereoNode : public rclcpp::Node {
   std::unique_ptr<ObstacleCore> obstacles_;
   std::unique_ptr<StereoLoop> loop_;
   std::string camera_id_;
-  // Set instead of the loop when the RTSP port cannot be had.
+  // Set instead of the loop while the RTSP port cannot be had; the loop gets the config once it is.
   StereoStatus failed_;
+  std::optional<StereoConfig> waiting_config_;
+  int rtsp_port_ = 0;
+  double next_listen_ = 0.0;
   mowbite_msgs::msg::Camera camera_entry_;
   bool camera_published_ = false;
   rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;

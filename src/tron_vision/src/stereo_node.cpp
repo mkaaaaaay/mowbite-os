@@ -23,6 +23,7 @@ constexpr double kReportPeriod = 1.0;
 // Silence of the loop thread or of the ROS thread that ends the process.
 constexpr double kWatchLimit = 2.0;
 constexpr auto kFailedWait = std::chrono::milliseconds(200);
+constexpr double kListenRetryS = 5.0;
 
 std::string StateText(const StereoStatus& status) {
   std::string text = StateName(status.state);
@@ -173,6 +174,8 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   camera_id_ = config.camera_id;
   config.obstacles = declare_parameter("obstacles", config.obstacles);
   config.marker_dir = declare_parameter("crash_dir", config.marker_dir);
+  config.max_rss_bytes =
+      static_cast<size_t>(declare_parameter("max_rss_mb", static_cast<int64_t>(config.max_rss_bytes >> 20))) << 20;
   config.encoder.bitrate_bps =
       static_cast<int>(declare_parameter("bitrate_kbps", config.encoder.bitrate_bps / 1000)) * 1000;
   config.temp_file = FindThermalZone("/sys/class/thermal", "soc-thermal");
@@ -250,15 +253,10 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   camera_ = std::make_unique<TronStereoCamera>(std::move(camera), seams.device);
   encoder_ = std::make_unique<MppEncoder>(library);
   server_ = std::make_unique<RtspServer>(rtsp, MonotonicSeconds);
-  std::string error;
-  if (server_->Listen(error)) {
-    guard_ = std::make_unique<CrashGuard>(config.marker_dir, seams.crash_flag, config.boot_id_file);
-    loop_ = std::make_unique<StereoLoop>(std::move(config), *camera_, *encoder_, *server_, *guard_, MonotonicSeconds,
-                                         obstacles_.get());
-  } else {
-    failed_.state = StereoState::kFailed;
-    failed_.detail = "RTSP port " + std::to_string(rtsp.port) + ": " + error;
-  }
+  guard_ = std::make_unique<CrashGuard>(config.marker_dir, seams.crash_flag, config.boot_id_file);
+  waiting_config_ = std::move(config);
+  rtsp_port_ = rtsp.port;
+  TryListen();
 
   // No feedback to the driver: a stalled process cannot slow tron_mcu down, and 10 Hz against 1 s bear losses.
   status_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
@@ -280,13 +278,28 @@ void StereoNode::OnStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
   mower_ = mower;
 }
 
+// The loop starts once the RTSP port is had; until then the camera reports itself failed and the next try follows.
+void StereoNode::TryListen() {
+  const double now = MonotonicSeconds();
+  if (now < next_listen_) return;
+  next_listen_ = now + kListenRetryS;
+  std::string error;
+  if (!server_->Listen(error)) {
+    failed_.state = StereoState::kFailed;
+    failed_.detail = "RTSP port " + std::to_string(rtsp_port_) + ": " + error;
+    return;
+  }
+  loop_ = std::make_unique<StereoLoop>(std::move(*waiting_config_), *camera_, *encoder_, *server_, *guard_,
+                                       MonotonicSeconds, obstacles_.get());
+  waiting_config_.reset();
+}
+
 void StereoNode::Run() {
   if (obstacles_) {
     {
       mowbite_watch::Watch load("tron_stereo_load", kLoadLimit);
       obstacles_->Load();
     }
-    for (const std::string& warning : obstacles_->Warnings()) RCLCPP_WARN(get_logger(), "%s", warning.c_str());
   }
   // Signed after each step: a step that hangs in the camera, the encoder or the model ends the process.
   mowbite_watch::Watch watch("tron_stereo_loop", kWatchLimit);
@@ -302,6 +315,7 @@ void StereoNode::Run() {
       go_on = loop_->Step();
     } else {
       std::this_thread::sleep_for(kFailedWait);
+      TryListen();
     }
     watch.Sign();
     const StereoStatus& status = loop_ ? loop_->Status() : failed_;

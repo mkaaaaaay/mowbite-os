@@ -8,18 +8,23 @@
 namespace tron_vision {
 namespace {
 
-// sysfs of the Tron as read 09.11. (M2b), nodes in a temporary directory.
+// sysfs of the Tron as read 09.11. (M2b) and 19.11., nodes in a temporary directory, video nodes with the link to
+// their platform device.
 struct Sysfs {
   Sysfs() {
     Node("v4l-subdev11", "rockchip-mipi-csi2");
     Node("v4l-subdev13", "m01_b_gc2093 3-0037");
-    Node("v4l-subdev14", "m00_b_gc2093 7-0037");
-    Node("video53", "rkisp_mainpath");
-    Node("video44", "rkisp_mainpath");
+    Node("v4l-subdev2", "m00_b_gc2093 5-0037");
+    Node("video53", "rkisp_mainpath", "rkisp1-vir0");
+    Node("video44", "rkisp_mainpath", "rkisp0-vir0");
+    Node("video45", "rkisp_selfpath", "rkisp0-vir0");
   }
-  void Node(const std::string& node, const std::string& name) {
+  void Node(const std::string& node, const std::string& name, const std::string& device = "") {
     std::filesystem::create_directories(tmp.Path() + "/" + node);
     tmp.Write(node + "/name", name + "\n");
+    if (device.empty()) return;
+    std::filesystem::create_directories(tmp.Path() + "/devices/" + device);
+    std::filesystem::create_directory_symlink("../devices/" + device, tmp.Path() + "/" + node + "/device");
   }
   test::TempDir tmp;
 };
@@ -35,10 +40,12 @@ TEST(TronCamera, FindsTheSubdevByName) {
   EXPECT_EQ(FindSubdev(s.tmp.Path(), "rkisp_mainpath"), "");
 }
 
-TEST(TronCamera, NodeName) {
+// Each side camera finds the main path of its own ISP, whatever its number.
+TEST(TronCamera, FindsTheVideoNodeOfItsIsp) {
   Sysfs s;
-  EXPECT_EQ(NodeName(s.tmp.Path(), "/dev/video53"), "rkisp_mainpath");
-  EXPECT_EQ(NodeName(s.tmp.Path(), "/dev/video99"), "");
+  EXPECT_EQ(FindVideoNode(s.tmp.Path(), TronCameraConfig{}.capture_device, "rkisp_mainpath"), "/dev/video53");
+  EXPECT_EQ(FindVideoNode(s.tmp.Path(), kRightCaptureDevice, "rkisp_mainpath"), "/dev/video44");
+  EXPECT_EQ(FindVideoNode(s.tmp.Path(), "rkisp2-vir0", "rkisp_mainpath"), "");
 }
 
 TEST(TronCamera, StartRefusesWithoutTheSensorOrWithAnotherNode) {
@@ -52,10 +59,10 @@ TEST(TronCamera, StartRefusesWithoutTheSensorOrWithAnotherNode) {
   EXPECT_NE(error.find("no single subdev"), std::string::npos) << error;
 
   c.sensor_name = "m01_b_gc2093";
-  c.video_device = "/dev/video52";
+  c.capture_device = "rkisp2-vir0";
   TronCamera other(c);
   EXPECT_FALSE(other.Start(error));
-  EXPECT_NE(error.find("not rkisp_mainpath"), std::string::npos) << error;
+  EXPECT_EQ(error, "no single video node rkisp_mainpath of rkisp2-vir0");
 }
 
 TEST(TronCamera, StartRefusesADeviceOpenElsewhere) {

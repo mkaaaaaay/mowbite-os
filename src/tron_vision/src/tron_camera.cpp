@@ -11,17 +11,17 @@ bool TronCamera::Start(std::string& error) {
     error = "no single subdev named " + config_.sensor_name;
     return false;
   }
-  const std::string name = NodeName(config_.sysfs, config_.video_device);
-  if (name != config_.video_name) {
-    error = config_.video_device + " is \"" + name + "\", not " + config_.video_name;
+  const std::string node = FindVideoNode(config_.sysfs, config_.capture_device, config_.video_name);
+  if (node.empty()) {
+    error = "no single video node " + config_.video_name + " of " + config_.capture_device;
     return false;
   }
-  for (const std::string& device : {subdev, config_.video_device}) {
+  for (const std::string& device : {subdev, node}) {
     if (!DeviceFree(config_.processes_using, device, error)) return false;
   }
   if (!sensor_.Open(subdev, error)) return false;
   if (!sensor_.SetVerticalBlanking(config_.vertical_blanking, error) || !sensor_.Set(pending_, error) ||
-      !capture_.Open(config_.video_device,
+      !capture_.Open(node,
                      {config_.width, config_.height, PixelFormat::kNv12, config_.buffers, config_.export_buffers},
                      error) ||
       !capture_.Start(error)) {

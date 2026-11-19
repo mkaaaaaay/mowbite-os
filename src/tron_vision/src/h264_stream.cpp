@@ -65,7 +65,8 @@ bool H264Stream::Begin(std::string& error) {
   }
   running_ = true;
   clock_ = RtpClock(Random());
-  window_start_ = now_();
+  began_ = now_();
+  window_start_ = began_;
   window_frames_ = 0;
   window_bytes_ = 0;
   return true;

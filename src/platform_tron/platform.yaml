@@ -32,8 +32,8 @@ tron_mcu:
   ros__parameters:
     port: /dev/ttyS9
     send_imu: true
-    # The MCU stops the wheels ~0.2 s after the last SpeedData, also with heartbeat and IMU (measured 07.11.), but at
-    # 20 SpeedData/s it kept a setpoint up to 3.6 s without host (08.11.). The driver sends motion at most every 100 ms.
+    # Without host the MCU stopped the wheels ~0.2 s after the last SpeedData in some runs, in others it kept the
+    # setpoint 3 s and longer (08.11., 18.11.). The driver sends motion at most every 100 ms, every start sends the stop.
     # After cmd_vel_timeout s without hw/cmd_vel come three stops. speed_repeat_window > 0 repeats the last setpoint
     # every 100 ms for that long instead, stops at its end and needs a measurement on the Tron first.
     cmd_vel_timeout: 0.5
@@ -57,6 +57,11 @@ tron_mcu:
     imu_start_timeout: 2.0
     blade_stop_time: 1.5
     blade_still_rpm: 100
+    # Nor is a stop: a wheel still at wheel_still_speed m/s or more wheel_stop_time s after the stop frames latches
+    # MOWER_NOT_STOPPED and the stops go out again. The standing Tron reports up to 0.011 m/s and 0.028 rad/s, ~0.017
+    # m/s at the faster wheel (07./08.11.); the slowest setpoint seen kept running was 0.03 m/s (18.11.).
+    wheel_stop_time: 1.5
+    wheel_still_speed: 0.025
     # STOP at the mower releases the emergency (G37): free 2 s, then a short press (0.1 to 2 s). The driver reports it
     # on hw/button, the logic releases as for emergency.reset. The MCU keeps stop until a clear frame (measured
     # 2026-11-15), so the gesture works only with stop_clear_period > 0: STOP cleared every stop_clear_period s during
@@ -66,8 +71,9 @@ tron_mcu:
     stop_release: true
     stop_clear_period: 0.0
     stop_clear_delay: 1.5
-    # Longest hw/silence of the setup program in s (0 offers none). Without host the MCU stopped the wheels within
-    # 0.3 s and the blade within 0.6 s (07./08./14.11.), and in 20 s it latched nothing by itself (15.11.).
+    # Longest hw/silence of the setup program in s (0 offers none), taken only during a setup step. Without host the
+    # MCU stopped the blade within 0.6 s (14.11.), the wheels only in some runs (above), and in 20 s it latched nothing
+    # by itself (15.11.).
     silence_max: 3.0
     # Set after reading the versions of this Tron in phase 4.
     expected_cutter_version: ""
@@ -263,7 +269,7 @@ mowbite_sound:
     # jpeg_max_rate, jpeg_max_kb, score_threshold, max_rss_mb and crash_dir: the defaults of the node. Left: camera_id
     # oa_left, NPU core 0, rtsp_port 8556 and the sensors vision_*, the defaults of the node too.
 
-# Only what the right instance does otherwise; sensor_name and video_device follow camera_id.
+# Only what the right instance does otherwise; sensor_name and capture_device follow camera_id.
 /right/tron_vision:
   ros__parameters:
     camera_id: oa_right
@@ -273,10 +279,11 @@ mowbite_sound:
     sensor_suffix: _right
 
 # tron_stereo, the live picture of the stereo camera (MOWBITE_STEREO=on): bitrate_kbps, rtsp_port, capture_device,
-# stream_name, encoder_library and crash_dir have the defaults of the node. record_max_mb above 0 (at most 300) keeps
-# both eyes of the frames of a stream as gray JPEG under record_dir (below /run, in RAM, shared with the recording of
-# tron_rear), one per record_interval_s (0.07: every second frame), none older than record_keep_min; only while a
-# viewer holds the stream; off by default, for work on the pictures set in <data_dir>/tron.yaml.
+# stream_name, encoder_library, max_rss_mb (101 MB measured with the model) and crash_dir have the defaults of the
+# node. record_max_mb above 0 (at most 300) keeps both eyes of the frames of a stream as gray JPEG under record_dir
+# (below /run, in RAM, shared with the recording of tron_rear), one per record_interval_s (0.07: every second frame),
+# none older than record_keep_min; only while a viewer holds the stream; off by default, for work on the pictures set
+# in <data_dir>/tron.yaml.
 # gain_wish_file (below /run; /run/mowbite-os/stereo-gain/wish is where tron-stereo-ae of the root file system
 # looks) lets the camera wish for the gain level day, dusk or night by the luma of its frames; off without it.
 tron_stereo:
@@ -297,13 +304,10 @@ tron_stereo:
     kind_person: [person]
     kind_animal: [dog, cat, hedgehog, rabbit]
     kind_ignore: [manhole, dock]
-    # Heights for the size probe (m): a stereo depth below half the one from the height of the box is taken for the
-    # grass in front of it.
-    known_heights: ["person=1.7", "dog=0.6", "cat=0.3"]
 
 # tron_side, only the live picture of the right side camera (MOWBITE_RIGHT=on, MOWBITE_RIGHT_NODE=side), streaming only
 # while a viewer is there:
-# sensor_name, video_device, vertical_blanking, jpeg_max_rate, jpeg_max_kb, max_rss_mb and crash_dir have the defaults
+# sensor_name, capture_device, vertical_blanking, jpeg_max_rate, jpeg_max_kb, max_rss_mb and crash_dir have the defaults
 # of the node.
 
 # tron_rear, the dock marker of the rear camera (MOWBITE_REAR=on), on request of the logic. Without lens, mount, marker

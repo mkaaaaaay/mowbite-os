@@ -154,9 +154,13 @@ std::string FindSubdev(const std::string& sysfs_root, const std::string& name_pr
   });
 }
 
-std::string NodeName(const std::string& sysfs_root, const std::string& device_path) {
-  const size_t slash = device_path.rfind('/');
-  return FirstLine(sysfs_root + "/" + device_path.substr(slash + 1) + "/name");
+std::string FindVideoNode(const std::string& sysfs_root, const std::string& device, const std::string& name) {
+  return UniqueNode(sysfs_root, [&device, &name](const std::filesystem::path& dir) {
+    if (dir.filename().string().rfind("video", 0) != 0 || FirstLine((dir / "name").string()) != name) return false;
+    std::error_code link_error;
+    const std::filesystem::path owner = std::filesystem::read_symlink(dir / "device", link_error);
+    return !link_error && owner.filename() == device;
+  });
 }
 
 SensorControls::~SensorControls() {

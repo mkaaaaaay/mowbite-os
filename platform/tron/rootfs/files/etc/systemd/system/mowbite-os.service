@@ -3,6 +3,8 @@ Description=MowBite OS
 # After a kernel crash the OS starts with its restart hold (crash_record); mowbite-crash-ok or the app release it.
 ConditionPathExists=/opt/mowbite/current
 After=mowbite-crash.service mosquitto.service network.target
+# Map, journal and settings live there; without it mounted the OS does not start rather than write to the rootfs.
+RequiresMountsFor=/userdata
 Wants=mosquitto.service
 StartLimitIntervalSec=10min
 StartLimitBurst=3
@@ -17,7 +19,9 @@ ExecStart=/usr/lib/mowbite/run-os
 KillSignal=SIGINT
 KillMode=mixed
 TimeoutStopSec=20
-Restart=on-failure
+# Also after an end with 0: the launch ends that way when the setup program asks for a restart of the OS. A stop by
+# systemctl is never restarted.
+Restart=always
 RestartSec=5
 # The driver is the last the kernel ends when memory runs out; container and planner raise their own value.
 OOMScoreAdjust=-900

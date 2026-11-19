@@ -250,9 +250,11 @@ class GnssNode : public rclcpp::Node {
     queue_.insert(queue_.end(), msg.data.begin(), msg.data.end());
   }
 
-  // Board commands first, then the queued RTCM. False on a write error.
+  // Board commands first, then the queued RTCM. False on a write error. The host's age of the corrections starts
+  // anew only with RTCM written.
   bool WritePending(double now) {
     std::vector<uint8_t> out;
+    bool rtcm = false;
     {
       std::lock_guard<std::mutex> lock(board_mutex_);
       const std::string commands = board_.Poll(now);
@@ -260,10 +262,17 @@ class GnssNode : public rclcpp::Node {
         RCLCPP_WARN(get_logger(), "RTK board fell back from network RTK: RTKRESET and ON");
       }
       out.assign(commands.begin(), commands.end());
+      rtcm = !queue_.empty();
       out.insert(out.end(), queue_.begin(), queue_.end());
       queue_.clear();
     }
-    return out.empty() || port_.Write(out);
+    if (out.empty()) return true;
+    if (!port_.Write(out)) return false;
+    if (rtcm) {
+      std::lock_guard<std::mutex> lock(board_mutex_);
+      board_.OnWritten(now);
+    }
+    return true;
   }
 
   void HandleBytes(const uint8_t* data, size_t size, double now) {
@@ -340,7 +349,7 @@ class GnssNode : public rclcpp::Node {
     gga_pub_->publish(text);
     // The larger of the receiver's and the host's age, as the tracker counts it.
     std::optional<double> age = gga.correction_age_s;
-    {
+    if (host_required_.value_or(false)) {
       std::lock_guard<std::mutex> lock(board_mutex_);
       if (auto host = board_.host_correction_age(now)) age = age ? std::max(*age, *host) : host;
     }

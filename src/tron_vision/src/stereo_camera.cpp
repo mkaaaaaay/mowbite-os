@@ -1,19 +1,6 @@
 #include "tron_vision/stereo_camera.h"
 
-#include <filesystem>
-
-#include "tron_vision/text_file.h"
-
 namespace tron_vision {
-
-std::string FindVideoNode(const std::string& sysfs_root, const std::string& device, const std::string& name) {
-  return UniqueNode(sysfs_root, [&device, &name](const std::filesystem::path& dir) {
-    if (dir.filename().string().rfind("video", 0) != 0 || FirstLine((dir / "name").string()) != name) return false;
-    std::error_code link_error;
-    const std::filesystem::path owner = std::filesystem::read_symlink(dir / "device", link_error);
-    return !link_error && owner.filename() == device;
-  });
-}
 
 bool TronStereoCamera::Open(std::string& error) {
   Close();

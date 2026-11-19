@@ -75,7 +75,8 @@ std::optional<GnssPose> GnssTracker::Update(const NmeaMessage& message, double n
       break;
     case static_cast<int>(FixQuality::kRtkFixed): {
       std::optional<double> age = gga.correction_age_s;
-      if (age && host_correction_age_s_) age = std::max(*age, *host_correction_age_s_);
+      // The host counts only while NTRIP is set up: corrections it passed before stay out of a fix over LoRa.
+      if (age && host_required_ && host_correction_age_s_) age = std::max(*age, *host_correction_age_s_);
       const bool before_host = host_required_ && !host_correction_age_s_;
       if (!before_host && age && *age <= config_.max_correction_age_s) {
         pose.solution = Solution::kRtkFixed;

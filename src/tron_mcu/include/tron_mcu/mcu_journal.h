@@ -35,7 +35,6 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["bumper_latches_emergency"] = c.bumper_latches_emergency;
   j["release_window_s"] = c.release_window_s;
   j["clear_min_interval_s"] = c.clear_min_interval_s;
-  j["clear_zero_after_motion_s"] = c.clear_zero_after_motion_s;
   j["expected_cutter_version"] = c.expected_cutter_version;
   j["expected_chassis_version"] = c.expected_chassis_version;
   j["stop_release"] = c.stop_release;
@@ -47,6 +46,8 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["heartbeat_after_speed_s"] = c.heartbeat_after_speed_s;
   j["silence_after"] = static_cast<int>(c.silence_after);
   j["silence_stop_delay_s"] = c.silence_stop_delay_s;
+  j["wheel_stop_time_s"] = c.wheel_stop_time_s;
+  j["wheel_still_mps"] = c.wheel_still_mps;
 }
 // Fields that came later take the value the journals from before ran with; all else is required.
 inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
@@ -72,7 +73,6 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   j.at("bumper_latches_emergency").get_to(c.bumper_latches_emergency);
   j.at("release_window_s").get_to(c.release_window_s);
   j.at("clear_min_interval_s").get_to(c.clear_min_interval_s);
-  j.at("clear_zero_after_motion_s").get_to(c.clear_zero_after_motion_s);
   j.at("expected_cutter_version").get_to(c.expected_cutter_version);
   j.at("expected_chassis_version").get_to(c.expected_chassis_version);
   j.at("stop_release").get_to(c.stop_release);
@@ -84,6 +84,8 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   c.heartbeat_after_speed_s = j.value("heartbeat_after_speed_s", McuControlConfig{}.heartbeat_after_speed_s);
   c.silence_after = static_cast<McuControlConfig::SilenceAfter>(j.value("silence_after", 0));
   c.silence_stop_delay_s = j.value("silence_stop_delay_s", 0.0);
+  c.wheel_stop_time_s = j.value("wheel_stop_time_s", 0.0);
+  c.wheel_still_mps = j.value("wheel_still_mps", McuControlConfig{}.wheel_still_mps);
 }
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SensorInfo, bumper, rain, lift, stop, power_off, battery_gate, cutter_size,
                                    press_module, bumper_right, bumper_left)
@@ -94,7 +96,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 288);
+static_assert(sizeof(McuControlConfig) == 304);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);
@@ -138,7 +140,8 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::SetBlade, &tron::McuControl::SetCharging, &tron::McuControl::OnConnected,
                           &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark,
                           &tron::McuControl::Silence, &tron::McuControl::End,
-                          &tron::McuControl::SilenceWithBlade);
+                          &tron::McuControl::SilenceWithBlade, &tron::McuControl::OnWheelSpeed,
+                          &tron::McuControl::OnSetupMotion);
 
   // Every call with the wall clock, for a copy of a journal without its place (mowbite_replay anonymize): the date of
   // a tick and of the heartbeat it sends.

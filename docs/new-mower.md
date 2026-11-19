@@ -69,7 +69,8 @@ Duties:
   `latch_count` one up), send the blade off and three stops. `hw/end` answers and then ends the process with exit code
   3 without another byte to the board; the start counts it like a crash and starts the driver again latched. Both
   refuse with `READ_ONLY`, `CHARGING` (also on the raw contact), `BLADE` (lease, blade on, running down) and hw/silence
-  with `OUT_OF_RANGE` and `BUSY`. hw/silence with `blade` true goes silent with the blade on as well (the step `blade`
+  with `OUT_OF_RANGE`, `BUSY` and `NO_SETUP` (no active `setup/motion` within the last second: outside a setup step
+  the timeout of `hw/cmd_vel` stays in force). hw/silence with `blade` true goes silent with the blade on as well (the step `blade`
   measures that the board stops it alone); after it no lease runs on. Offer them with `silence_max_s` (a parameter
   `silence_max` well past the time the board stops without its host; 0 without) and `driver_end` in
   `hw/capabilities`. The steps `silence` and `driver_end` measure with them how the board stops without its host.
@@ -93,6 +94,11 @@ Duties:
 - Limits until driving tests show more: 0.3 m/s and 0.3 rad/s.
 - Before opening a port: no other process holds it.
 - A restarted driver starts latched (`start_latched`).
+- Stops: the state of the board is unknown at every start and after a port reopens, so the driver sends the stop
+  frames then, latched or not. Before every frame that clears a latched sensor on the board, a stop. A board that
+  reports its wheel speeds is checked after every stop like the blade: still turning `wheel_stop_time` after the stop
+  (`tron_mcu`), the driver latches `MOWER_NOT_STOPPED` and stops again. When the process ends it sends the stop and the
+  blade off several times; the stop only stays out on the charging contacts without a command.
 - Start: until the first sample of a sensor it needs, a driver may refuse drive and blade without an emergency, for a
   fixed start time at most (`tron_mcu`: `imu_start_timeout`). After it the driver accepts or reports an emergency.
   Whoever starts a driver waits that long before the first request.
@@ -464,6 +470,9 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   `journal_max_days` for the journal and `incidents_max_mb`, `incidents_max_days`, `incidents_max_days_safety` for its
   incidents; an incident keeps a run from its start while the run takes less than a quarter
   of `incidents_max_mb`.
+- The service of the OS restarts it after every end, also one with exit code 0 (the launch ends that way when the
+  setup program asks for a restart of the OS), and starts only with the data partition mounted; on the Tron
+  `Restart=always` and `RequiresMountsFor=/userdata` in `mowbite-os.service`.
 - `mowbite-host` (`host/`, unit `mowbite-host.service` on the Tron) runs beside the OS as root, not in its bundle:
   it installs signed bundles (update.*), answers `host.restart_os` and keeps `mowbite/host/status` retained, also
   while the OS is off. It needs the broker of the OS, `python3-paho-mqtt` (1.x or 2.x), `ssh-keygen`, systemd for
@@ -771,8 +780,11 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
   and by stereo depth (search along the epipolar line, median in the lower part of the box). Its file holds the
   classes by kind (`kind_person`, `kind_animal`, `kind_ignore`), `calibration_path` (both eyes as fisheye, made from
   boards held before the camera, also low and at the edges) and `mount` (measured with a board lying flat at known
-  places on the floor); without one of them it reports NOT_SET_UP. Sight: dark, bright, covered (eyes unlike, or
-  no depth while driving), frames that stand still; the limits are start values until measured on the mower.
+  places on the floor); without one of them, with `kind_person` empty or with a class name the model does not know
+  it reports NOT_SET_UP. A size probe (`known_heights`) only ever moves objects farther away, never a person or an
+  animal. A result of a frame older than 0.5 s gives no sight. Sight: dark (lower half, sooner at the highest gain),
+  bright, covered (eyes unlike, or no depth while driving), frames that stand still; the limits are start values
+  until measured on the mower.
 - In the simulation `fake_obstacles` reports the things of a scene file (`config/obstacles_scene.example.json`) from
   the true pose of the fake board, and reads the file again when it changes; `test_obstacles.py` drives the node
   through the app interface, `test_obstacle_stop.py` the hold in the whole stack, `test_obstacle_avoid.py` driving

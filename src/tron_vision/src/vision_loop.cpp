@@ -188,23 +188,25 @@ bool VisionLoop::Step() {
   }
   const double deadline =
       last_frame_ < 0.0 ? stream_start_ + config_.first_frame_s : last_frame_ + config_.frame_timeout_s;
-  if (now >= deadline) {
-    StopStream(VisionState::kNoFrames, "no frame within " +
-                                           Score(static_cast<float>(last_frame_ < 0.0 ? config_.first_frame_s
-                                                                                       : config_.frame_timeout_s)) +
-                                           " s, attempt " + std::to_string(attempts_ + 1) + " of " +
-                                           std::to_string(config_.max_attempts));
-    return true;
-  }
+  // Frames the driver holds after a long step still count: the gap is judged only after asking for them.
   Nv12View frame;
   std::string error;
-  const int got =
-      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kFrameWaitStepS) * 1000.0)), frame, error);
+  const int got = camera_.Next(
+      static_cast<int>(std::ceil(std::clamp(deadline - now, 0.0, kFrameWaitStepS) * 1000.0)), frame, error);
   if (got < 0) {
     StopStream(VisionState::kCameraError, error);
     return true;
   }
-  if (got == 0) return true;
+  if (got == 0) {
+    if (now_() >= deadline) {
+      StopStream(VisionState::kNoFrames,
+                 "no frame within " +
+                     Score(static_cast<float>(last_frame_ < 0.0 ? config_.first_frame_s : config_.frame_timeout_s)) +
+                     " s, attempt " + std::to_string(attempts_ + 1) + " of " + std::to_string(config_.max_attempts));
+    }
+    return true;
+  }
+  if (now_() - stream_start_ >= kFailuresForgetS) attempts_ = 0;
   OnFrame(frame, now_());
   SendVideo();
   return status_.state != VisionState::kFailed;

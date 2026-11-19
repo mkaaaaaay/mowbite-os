@@ -231,16 +231,14 @@ bool StereoLoop::CountFailure(int& count, double now) {
   return ++count >= config_.max_attempts;
 }
 
+// The mark comes before the calls into the driver, so that one of them hanging still leaves it for the next process.
 void StereoLoop::FailForThisBoot(StereoState state, const std::string& detail) {
-  StopStream();
   const std::string boot = FirstLine(config_.boot_id_file);
   std::string error;
   RemoveDurably(Marker("verified"));
-  if (!WriteDurably(Marker("failed"), boot + " " + detail + "\n", error)) {
-    End(state, detail + "; " + error);
-    return;
-  }
-  End(state, detail);
+  const bool marked = WriteDurably(Marker("failed"), boot + " " + detail + "\n", error);
+  StopStream();
+  End(state, marked ? detail : detail + "; " + error);
 }
 
 void StereoLoop::StartSelftest(double now) {
@@ -529,6 +527,30 @@ void StereoLoop::SetCaptureState() {
   }
 }
 
+// The next frame into `frame`; false without one, after FailForThisBoot when the camera gave none in time. A step
+// that took long still finds the frames the driver holds: the gap counts only after asking for them.
+bool StereoLoop::NextFrame(double now, CapturedFrame& frame) {
+  const bool first = last_frame_ < 0.0;
+  const double deadline = first ? stream_start_ + config_.first_frame_s : last_frame_ + config_.frame_gap_s;
+  std::string text;
+  const int got =
+      camera_.Next(static_cast<int>(std::ceil(std::clamp(deadline - now, 0.0, kStreamStepS) * 1000.0)), frame, text);
+  if (got < 0) {
+    FailForThisBoot(StereoState::kStalled, text);
+    return false;
+  }
+  if (got == 0) {
+    if (now_() >= deadline) {
+      FailForThisBoot(first ? StereoState::kNoFrames : StereoState::kStalled,
+                      "no frame within " + Fixed(first ? config_.first_frame_s : config_.frame_gap_s) + " s");
+    }
+    return false;
+  }
+  last_frame_ = now_();
+  if (last_frame_ - stream_start_ >= kFailuresForgetS) camera_failures_ = 0;
+  return true;
+}
+
 void StereoLoop::StepCapture(double now) {
   server_.Poll(0);
   std::string text;
@@ -540,22 +562,8 @@ void StereoLoop::StepCapture(double now) {
     return;
   }
   StepVideo(now);
-  const bool first = last_frame_ < 0.0;
-  const double deadline = first ? stream_start_ + config_.first_frame_s : last_frame_ + config_.frame_gap_s;
-  if (now >= deadline) {
-    FailForThisBoot(first ? StereoState::kNoFrames : StereoState::kStalled,
-                    "no frame within " + Fixed(first ? config_.first_frame_s : config_.frame_gap_s) + " s");
-    return;
-  }
   CapturedFrame frame;
-  const int got =
-      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, text);
-  if (got < 0) {
-    FailForThisBoot(StereoState::kStalled, text);
-    return;
-  }
-  if (got == 0) return;
-  last_frame_ = now_();
+  if (!NextFrame(now, frame)) return;
   if (have_sequence_ && frame.sequence > last_sequence_ + 1) status_.lost += frame.sequence - last_sequence_ - 1;
   have_sequence_ = true;
   last_sequence_ = frame.sequence;
@@ -634,22 +642,8 @@ void StereoLoop::StepStream(double now) {
     phase_ = Phase::kIdle;
     return;
   }
-  const bool first = last_frame_ < 0.0;
-  const double deadline = first ? stream_start_ + config_.first_frame_s : last_frame_ + config_.frame_gap_s;
-  if (now >= deadline) {
-    FailForThisBoot(first ? StereoState::kNoFrames : StereoState::kStalled,
-                    "no frame within " + Fixed(first ? config_.first_frame_s : config_.frame_gap_s) + " s");
-    return;
-  }
   CapturedFrame frame;
-  const int got =
-      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, text);
-  if (got < 0) {
-    FailForThisBoot(StereoState::kStalled, text);
-    return;
-  }
-  if (got == 0) return;
-  last_frame_ = now_();
+  if (!NextFrame(now, frame)) return;
   if (have_sequence_ && frame.sequence > last_sequence_ + 1) status_.lost += frame.sequence - last_sequence_ - 1;
   have_sequence_ = true;
   last_sequence_ = frame.sequence;
@@ -727,6 +721,7 @@ void StereoLoop::SendFrame(const CapturedFrame& frame) {
     phase_ = Phase::kIdle;
     return;
   }
+  if (stream_.RunningFor() >= kFailuresForgetS) encoder_failures_ = 0;
   status_.frames = stream_.Frames();
   status_.fps = stream_.Fps();
   status_.kbps = stream_.Kbps();

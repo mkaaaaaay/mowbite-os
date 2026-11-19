@@ -558,6 +558,17 @@ TEST_F(StopClearTest, ZeroSpeedGoesBeforeTheClearAfterMotion) {
   EXPECT_TRUE(IsZeroSpeed(*(clear - 1)));
 }
 
+TEST_F(StopClearTest, ZeroSpeedGoesBeforeTheClearAlsoWithoutMotion) {
+  Run(1.0);
+  Press(0.3, 2.0);
+  ASSERT_FALSE(clear_ticks_.empty());
+  for (const auto& tick : clear_ticks_) {
+    const auto clear = std::find_if(tick.begin(), tick.end(), IsClear);
+    ASSERT_NE(clear, tick.begin());
+    EXPECT_TRUE(IsZeroSpeed(*(clear - 1)));
+  }
+}
+
 TEST_F(StopClearTest, LiftKeptByTheBoardDropsWithTheClearAndAPressReleases) {
   Run(1.0);
   sensor_.lift = 1;

@@ -31,15 +31,18 @@ struct ObstacleConfig {
   int npu_core = 2;
   bool swap_rb = false;
   DecodeParams decode;
-  // Class names by kind; any other class of the model is an object.
+  // Class names by kind; any other class of the model is an object. Each name has to be a class of the model and
+  // person must not be empty, else NOT_SET_UP.
   std::vector<std::string> person;
   std::vector<std::string> animal;
   std::vector<std::string> ignore;
-  // Heights of things of a class (m) for the size probe.
+  // Heights of things of an object class (m) for the size probe; a person or an animal is never moved farther away.
   std::map<std::string, double> known_height;
   // Analyses per second; without one for late_s the camera counts as without sight.
   double rate = 5.0;
   double late_s = 0.4;
+  // A result of a frame older than this (s) is dropped: no sight until a fresh one.
+  double max_result_age_s = 0.5;
   // A run of the model over slow_run_s max_slow_runs times, or one not ended after hang_s, ends the process.
   double slow_run_s = 2.0;
   int max_slow_runs = 3;
@@ -130,10 +133,6 @@ class ObstacleCore : public FrameSink {
 
   // Reads the calibration and the class list, opens and checks the model; false with the reason as NOT_SET_UP.
   bool Load();
-  // Notes in the log what the class lists name and the model does not know.
-  const std::vector<std::string>& Warnings() const {
-    return warnings_;
-  }
 
   void OnFrame(const CapturedFrame& frame, double now, const FrameContext& context) override;
   void OnStop() override;
@@ -169,7 +168,6 @@ class ObstacleCore : public FrameSink {
 
   ObstacleConfig config_;
   std::function<double()> now_;
-  std::vector<std::string> warnings_;
   std::string not_set_up_;
   StereoCalibration calibration_;
   mowbite_obstacles::Plane ground_;

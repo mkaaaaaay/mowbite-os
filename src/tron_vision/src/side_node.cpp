@@ -59,7 +59,7 @@ SideNode::SideNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camera> c
 
   TronCameraConfig hardware;
   hardware.sensor_name = declare_parameter("sensor_name", std::string(kRightSensorName));
-  hardware.video_device = declare_parameter("video_device", std::string(kRightVideoDevice));
+  hardware.capture_device = declare_parameter("capture_device", std::string(kRightCaptureDevice));
   hardware.vertical_blanking = static_cast<int>(declare_parameter("vertical_blanking", hardware.vertical_blanking));
   hardware.processes_using = mowbite_serial::ProcessesUsing;
 

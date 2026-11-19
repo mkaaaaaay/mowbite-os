@@ -29,7 +29,6 @@ static_assert(static_cast<int>(mpp::kBufferExternalDma) == static_cast<int>(MPP_
 static_assert(static_cast<int>(mpp::kRateControlCbr) == static_cast<int>(MPP_ENC_RC_MODE_CBR));
 static_assert(static_cast<int>(mpp::kHeaderEachIdr) == static_cast<int>(MPP_ENC_HEADER_MODE_EACH_IDR));
 static_assert(static_cast<int>(mpp::kSeiOff) == static_cast<int>(MPP_ENC_SEI_MODE_DISABLE));
-static_assert(static_cast<int>(mpp::kWaitForever) == static_cast<int>(MPP_POLL_BLOCK));
 static_assert(static_cast<int>(mpp::kSetOutputTimeout) == static_cast<int>(MPP_SET_OUTPUT_TIMEOUT));
 static_assert(static_cast<int>(mpp::kEncSetConfig) == static_cast<int>(MPP_ENC_SET_CFG));
 static_assert(static_cast<int>(mpp::kEncGetConfig) == static_cast<int>(MPP_ENC_GET_CFG));

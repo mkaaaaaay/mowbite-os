@@ -25,8 +25,9 @@ bool DeviceFree(const ProcessesUsing& processes_using, const std::string& device
 // (normally /sys/class/video4linux) only; empty if none or more than one match. No device is opened.
 std::string FindSubdev(const std::string& sysfs_root, const std::string& name_prefix);
 
-// Name of a video node from sysfs ("rkisp_mainpath"), empty if unreadable.
-std::string NodeName(const std::string& sysfs_root, const std::string& device_path);
+// /dev/videoN whose sysfs entry has that name and belongs to that platform device, found by reading under
+// `sysfs_root` only; empty if none or more than one match. No device is opened.
+std::string FindVideoNode(const std::string& sysfs_root, const std::string& device, const std::string& name);
 
 // Exposure, gain and vertical blanking of the image sensor through its subdev. Only VIDIOC_QUERYCTRL, G_CTRL and
 // S_CTRL with these three controls.

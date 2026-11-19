@@ -30,6 +30,9 @@ TEST_F(BoardTest, FirstRtcmGivesOnWithoutResetAndIsHeldUntilOn) {
   EXPECT_EQ(board.state(), BoardState::kOn);
   EXPECT_TRUE(board.OnRtcm(200, 2.5));
   EXPECT_EQ(board.forwarded_bytes(), 200u);
+  // The age starts anew only once the RTCM is written.
+  EXPECT_FALSE(board.host_correction_age(3.0));
+  board.OnWritten(2.5);
   EXPECT_NEAR(*board.host_correction_age(3.0), 0.5, 1e-9);
   EXPECT_EQ(board.resets(), 0u);
 }
@@ -68,6 +71,29 @@ TEST_F(BoardTest, FallBackFromOnGivesResetAndOn) {
   EXPECT_EQ(board.resets(), 1u);
   EXPECT_FALSE(board.OnRtcm(50, 1.2));
   EXPECT_EQ(board.Poll(1.2), "");
+}
+
+// A board that keeps falling back gets one reset a minute; ON goes on meanwhile.
+TEST_F(BoardTest, ResetsAtMostOnceAMinute) {
+  board.OnBoardReport(true, 0);
+  board.OnRtcm(50, 0);
+  EXPECT_EQ(board.Poll(0), kOn);
+  board.OnBoardReport(false, 1.0);
+  EXPECT_EQ(board.Poll(1.0), kReset + kOn);
+  board.OnBoardReport(true, 3.0);
+  board.OnRtcm(50, 4.0);
+  board.OnBoardReport(false, 5.0);
+  EXPECT_EQ(board.Poll(5.0), kOn);
+  board.OnRtcm(50, 9.0);
+  EXPECT_EQ(board.Poll(9.0), kOn);
+  EXPECT_EQ(board.resets(), 1u);
+  for (double t = 10.0; t < 61.0; t += 1.0) {
+    board.OnRtcm(50, t);
+    EXPECT_EQ(board.Poll(t).find(kReset), std::string::npos) << t;
+  }
+  board.OnRtcm(50, 61.0);
+  EXPECT_EQ(board.Poll(61.0), kReset + kOn);
+  EXPECT_EQ(board.resets(), 2u);
 }
 
 TEST_F(BoardTest, FirstOffOnlyWaitsForOn) {

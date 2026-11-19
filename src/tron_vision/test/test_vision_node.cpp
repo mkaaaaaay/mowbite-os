@@ -231,7 +231,7 @@ TEST_F(VisionNodeTest, RightInstanceReportsItsCameraAndSensors) {
   auto node = std::make_shared<VisionNode>(options);
   Spin spin(node);
   EXPECT_EQ(node->get_parameter("sensor_name").as_string(), "m00_b_gc2093");
-  EXPECT_EQ(node->get_parameter("video_device").as_string(), "/dev/video44");
+  EXPECT_EQ(node->get_parameter("capture_device").as_string(), "rkisp0-vir0");
   auto listener = std::make_shared<rclcpp::Node>("listener");
   std::vector<Camera> cameras;
   std::map<std::string, std::string> names;

@@ -76,7 +76,6 @@ ObstacleKind ObstacleCore::KindOf(const std::string& class_name) const {
 
 bool ObstacleCore::Load() {
   StopWorker();
-  warnings_.clear();
   not_set_up_ = config_.not_set_up;
   if (!not_set_up_.empty()) return false;
   std::string error;
@@ -115,6 +114,29 @@ bool ObstacleCore::Load() {
     not_set_up_ = "model: " + error;
     return false;
   }
+  // A person the lists do not name would count as an object, with the smaller zones of one.
+  if (config_.person.empty()) {
+    not_set_up_ = "kind_person is empty";
+    return false;
+  }
+  for (const auto* list : {&config_.person, &config_.animal, &config_.ignore}) {
+    for (const std::string& name : *list) {
+      if (!Contains(names_, name)) {
+        not_set_up_ = "class " + name + " is not in " + config_.labels_path;
+        return false;
+      }
+    }
+  }
+  for (const auto& [name, height] : config_.known_height) {
+    if (!Contains(names_, name)) {
+      not_set_up_ = "class " + name + " is not in " + config_.labels_path;
+      return false;
+    }
+    if (KindOf(name) != ObstacleKind::kObject) {
+      not_set_up_ = "known height for " + name + ": the size probe is only for objects";
+      return false;
+    }
+  }
   auto worker = std::make_shared<InferenceWorker>();
   NpuModel& model = worker->Model();
   if (!model.Open(config_.library_path, config_.model_path, config_.npu_core, error)) {
@@ -125,14 +147,6 @@ bool ObstacleCore::Load() {
     model.Close();
     not_set_up_ = "model: " + error;
     return false;
-  }
-  for (const auto* list : {&config_.person, &config_.animal, &config_.ignore}) {
-    for (const std::string& name : *list) {
-      if (!Contains(names_, name)) warnings_.push_back("class " + name + " is not in " + config_.labels_path);
-    }
-  }
-  for (const auto& [name, height] : config_.known_height) {
-    if (!Contains(names_, name)) warnings_.push_back("class " + name + " is not in " + config_.labels_path);
   }
   place_ = PlaceFrame(config_.eye_width, config_.eye_height, Fit::kPad, kModelWidth, kModelHeight);
   worker->Start(layout_, config_.decode);
@@ -214,8 +228,10 @@ bool ObstacleCore::Poll(double now, const StereoStatus& camera, ObstacleReport& 
                      " times";
       return false;
     }
-    // A result of a frame from before the camera last stopped is dropped.
-    if (capturing_ && camera.capturing && job_.epoch == epoch_) {
+    // A result of a frame from before the camera last stopped is dropped, so is one of a frame too old; the frame time
+    // of the driver counts only where it is not younger than the submission.
+    const double age = now - std::min(job_.taken, job_.submitted);
+    if (capturing_ && camera.capturing && job_.epoch == epoch_ && age <= config_.max_result_age_s) {
       last_result_ = now;
       std::string detail;
       if (sight_.Reason(now, detail) == SightReason::kNone) {
