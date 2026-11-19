@@ -36,6 +36,8 @@ constexpr double kConvertTimeout = 30.0;
 // How often the executor looks whether the import or the check of an upload is done, in s.
 constexpr double kImportPoll = 0.5;
 constexpr double kUploadPoll = 0.1;
+// s until an import that found no sound card is tried again.
+constexpr double kImportRetry = 30.0;
 constexpr int kLogEveryMs = 10000;
 
 rclcpp::QoS LatchedQos(size_t depth) {
@@ -71,8 +73,8 @@ struct Imported {
 // The sounds: announcements for the events and states of the mower, the emergency over all of them (G33: a sound ends
 // within 0.1 s of hw/status telling it, then only EMERGENCY or LIFT_TRIGGERED), and sound.* through the bridge. The
 // vendor's MP3 are converted by mowbite_sound_convert, a process of its own, once at the start, an upload after its
-// last part in a thread of its own. With output none, or without a sound card or a file, it offers no method and plays
-// nothing.
+// last part in a thread of its own. With output none it offers no method and plays nothing. The alarms play from the
+// start, without a file as the tone of the player; sound.* comes once the card answered and a file is there.
 class SoundNode : public rclcpp::Node {
  public:
   explicit SoundNode(const rclcpp::NodeOptions& options)
@@ -90,6 +92,8 @@ class SoundNode : public rclcpp::Node {
     const std::string problem = service_.Load();
     if (!problem.empty()) RCLCPP_ERROR(get_logger(), "%s; the vendor's sounds are taken again", problem.c_str());
 
+    // The alarms do not wait for the card or the import: without a file they play the tone of the player.
+    Listen();
     imported_ = std::async(std::launch::async, [this, have = service_.files()] { return Import(have); });
     import_timer_ = create_wall_timer(std::chrono::duration<double>(kImportPoll), [this] { OnImportPoll(); });
   }
@@ -182,13 +186,21 @@ class SoundNode : public rclcpp::Node {
   }
 
   void OnImportPoll() {
-    if (imported_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
-    import_timer_->cancel();
-    Imported imported = imported_.get();
-    if (!imported.error.empty()) {
-      RCLCPP_ERROR(get_logger(), "%s: no sound.* methods, no sound", imported.error.c_str());
+    if (!imported_.valid()) {
+      if (MonotonicSeconds() < retry_at_) return;
+      imported_ = std::async(std::launch::async, [this, have = service_.files()] { return Import(have); });
       return;
     }
+    if (imported_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+    Imported imported = imported_.get();
+    if (!imported.error.empty()) {
+      // A card that is busy or not there yet at boot: tried again, the alarms go on meanwhile.
+      RCLCPP_ERROR(get_logger(), "%s: no sound.* methods yet, trying again in %.0f s", imported.error.c_str(),
+                   kImportRetry);
+      retry_at_ = MonotonicSeconds() + kImportRetry;
+      return;
+    }
+    import_timer_->cancel();
     for (const auto& note : imported.notes) RCLCPP_WARN(get_logger(), "%s", note.c_str());
     const std::string problem = service_.SetFiles(std::move(imported.files));
     if (!problem.empty()) RCLCPP_ERROR(get_logger(), "Cannot keep sounds.json: %s", problem.c_str());
@@ -201,12 +213,8 @@ class SoundNode : public rclcpp::Node {
     Start();
   }
 
-  void Start() {
-    methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
-    response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
-    error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
-    request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
-        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
+  // The emergency, the state, the events and the hold, from the start of the node.
+  void Listen() {
     status_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](mowbite_msgs::msg::HardwareStatus::ConstSharedPtr msg) {
           service_.OnDriverEmergency(msg->emergency, msg->emergency_reason, MonotonicSeconds());
@@ -223,6 +231,15 @@ class SoundNode : public rclcpp::Node {
         });
     hold_sub_ = create_subscription<std_msgs::msg::Int64>(
         "logic/hold", LatchedQos(1), [this](std_msgs::msg::Int64::ConstSharedPtr msg) { service_.SetHold(msg->data); });
+  }
+
+  // sound.* through the bridge, once the files are there.
+  void Start() {
+    methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
+    response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
+    error_pub_ = create_publisher<mowbite_msgs::msg::RpcError>("bridge/rpc/error", 100);
+    request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
+        "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
 
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_sound";
@@ -284,6 +301,8 @@ class SoundNode : public rclcpp::Node {
   SoundService service_;
   std::atomic<bool> stopping_{false};
   std::future<Imported> imported_;
+  // When an import that found no card is tried again (monotonic s).
+  double retry_at_ = 0;
   // The check of the upload whose last part waits for its answer.
   std::future<UploadResult> checked_;
   std::string upload_id_;

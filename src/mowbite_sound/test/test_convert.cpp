@@ -123,3 +123,12 @@ TEST(RunProgram, KillsWhatTakesTooLongAndNamesAMissingProgram) {
   EXPECT_FALSE(RunProgram({"/bin/sleep", "5"}, 0.3, &error, &code));
   EXPECT_EQ(code, -1);
 }
+
+TEST(Wav, TheAlarmToneIsAWavTheOsPlays) {
+  const Wav tone = AlarmTone();
+  std::string error;
+  const auto read = DecodeWav(EncodeWav(tone), &error);
+  ASSERT_TRUE(read) << error;
+  EXPECT_NEAR(read->Seconds(), 0.75, 1e-6);
+  EXPECT_GE(read->Seconds(), kMinSeconds);
+}

@@ -29,6 +29,9 @@ struct Wav {
   double Seconds() const { return rate ? static_cast<double>(samples.size()) / rate : 0; }
 };
 
+// The tone of an alarm without a file that can be played: three short beeps.
+Wav AlarmTone();
+
 // A RIFF WAVE file of 16-bit PCM, one channel.
 std::string EncodeWav(const Wav& wav);
 

@@ -15,10 +15,17 @@ class AlsaOutput : public Output {
   ~AlsaOutput() override { Close(true); }
 
   bool Open(const Cue&, uint32_t rate, std::string* error) override {
-    int result = snd_pcm_open(&pcm_, device_.c_str(), SND_PCM_STREAM_PLAYBACK, 0);
+    // A device another process holds is an error at once, not a wait before every sound; writing then waits.
+    int result = snd_pcm_open(&pcm_, device_.c_str(), SND_PCM_STREAM_PLAYBACK, SND_PCM_NONBLOCK);
     if (result < 0) {
       pcm_ = nullptr;
       *error = "cannot open " + device_ + ": " + snd_strerror(result);
+      return false;
+    }
+    result = snd_pcm_nonblock(pcm_, 0);
+    if (result < 0) {
+      *error = "cannot set up " + device_ + ": " + snd_strerror(result);
+      Close(true);
       return false;
     }
     result = snd_pcm_set_params(pcm_, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, 1, rate, 1, kLatencyUs);

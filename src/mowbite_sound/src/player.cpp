@@ -111,18 +111,17 @@ void Player::Run() {
 void Player::PlayOne(const Cue& cue) {
   std::string error;
   std::optional<Wav> wav;
-  {
+  if (!cue.path.empty()) {
     std::string bytes;
     if (mowbite_hold::ReadSmallFile(cue.path, kMaxWavBytes, &bytes, &error) != mowbite_hold::FileRead::kText) {
       log_(cue.situation + ": cannot read " + cue.path + " " + error);
-      return;
+    } else {
+      wav = DecodeWav(bytes, &error);
+      if (!wav) log_(cue.situation + ": " + cue.path + ": " + error);
     }
-    wav = DecodeWav(bytes, &error);
   }
-  if (!wav) {
-    log_(cue.situation + ": " + cue.path + ": " + error);
-    return;
-  }
+  if (!wav && cue.alarm) wav = AlarmTone();
+  if (!wav) return;
   if (!output_->Open(cue, wav->rate, &error)) {
     log_(cue.situation + ": " + error);
     return;

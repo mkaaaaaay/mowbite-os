@@ -56,6 +56,8 @@ struct Cue {
   std::string path;
   // Factor on every sample, more than 0 and at most 1.
   double gain = 0;
+  // An alarm: without a file that can be read (also an empty path) AlarmTone plays.
+  bool alarm = false;
 };
 
 // What plays the cues, never waiting for the sound: one at a time, a newer cue replaces one that waits; Stop ends the one
@@ -178,7 +180,9 @@ class SoundService {
   void UpdateEmergency(Emergency* source, bool emergency, uint32_t bits, double now);
   bool InEmergency() const { return driver_.on || robot_.on; }
   uint32_t EmergencyBits() const { return driver_.bits | robot_.bits; }
-  // Plays the situation's file unless the emergency, volume 0 or its last play min_gap ago keep it quiet.
+  // Plays the situation's file unless the emergency, volume 0 or its last play min_gap ago keep it quiet. An alarm
+  // (EMERGENCY, LIFT_TRIGGERED) plays every time: LIFT_TRIGGERED without a file of its own as EMERGENCY, without
+  // either as the tone of the player.
   void Announce(const std::string& situation, double now);
   void OnState(const std::string& state, double now);
   double Gain() const;

@@ -1,5 +1,7 @@
 #include "mowbite_sound/wav.h"
 
+#include <cmath>
+
 namespace mowbite_sound {
 
 namespace {
@@ -23,6 +25,20 @@ uint32_t Get(const std::string& bytes, size_t at, int size) {
 }
 
 }  // namespace
+
+Wav AlarmTone() {
+  constexpr uint32_t kRate = 16000;
+  constexpr double kPitch = 2000.0, kBeep = 0.15, kPause = 0.1;
+  Wav wav;
+  wav.rate = kRate;
+  for (int beep = 0; beep < 3; ++beep) {
+    for (uint32_t i = 0; i < static_cast<uint32_t>(kBeep * kRate); ++i) {
+      wav.samples.push_back(static_cast<int16_t>(20000.0 * std::sin(2.0 * M_PI * kPitch * i / kRate)));
+    }
+    wav.samples.insert(wav.samples.end(), static_cast<size_t>(kPause * kRate), 0);
+  }
+  return wav;
+}
 
 std::string RateRange() {
   return std::to_string(kMinRate) + " to " + std::to_string(kMaxRate) + " Hz";

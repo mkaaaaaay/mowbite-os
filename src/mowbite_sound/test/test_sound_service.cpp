@@ -189,6 +189,31 @@ TEST(SoundService, ALiftIsAnnouncedAlsoWhenItJoinsAnEmergency) {
                                                      "play LIFT_TRIGGERED"}));
 }
 
+TEST(SoundService, AnAlarmPlaysEveryTimeAndAlwaysWithASound) {
+  Fixture f;
+  f.service->OnDriverEmergency(true, 1, 1);
+  f.service->OnDriverEmergency(false, 0, 2);
+  // Within min_gap of the last one.
+  f.service->OnDriverEmergency(true, 1, 8);
+  EXPECT_EQ(f.sink.calls, (std::vector<std::string>{"stop", "play EMERGENCY", "stop", "play EMERGENCY"}));
+  ASSERT_EQ(f.sink.cues.size(), 2u);
+  EXPECT_TRUE(f.sink.cues[1].alarm);
+  // Without a file of the lift it sounds as the emergency, without either as the tone of the player.
+  auto files = AllFiles();
+  files.erase("LIFT_TRIGGERED");
+  f.service->SetFiles(files);
+  f.service->OnDriverEmergency(false, 0, 9);
+  f.service->OnDriverEmergency(true, 1u << 3, 10);
+  EXPECT_EQ(f.sink.cues.back().situation, "LIFT_TRIGGERED");
+  EXPECT_EQ(f.sink.cues.back().path, f.dir.path + "/EMERGENCY.wav");
+  f.service->SetFiles({});
+  f.service->OnDriverEmergency(false, 0, 11);
+  f.service->OnDriverEmergency(true, 1, 12);
+  EXPECT_EQ(f.sink.cues.back().situation, "EMERGENCY");
+  EXPECT_EQ(f.sink.cues.back().path, "");
+  EXPECT_TRUE(f.sink.cues.back().alarm);
+}
+
 TEST(SoundService, VolumeZeroIsSilentAlsoInAnEmergency) {
   Fixture f(0);
   f.service->OnEvent(f.Event("JOB_COMPLETE"), 1);

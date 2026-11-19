@@ -406,7 +406,13 @@ void SoundService::UpdateEmergency(Emergency* source, bool emergency, uint32_t b
 void SoundService::Announce(const std::string& situation, double now) {
   const bool alarm = situation == "EMERGENCY" || situation == "LIFT_TRIGGERED";
   if (InEmergency() && !alarm) return;
-  if (!Active(situation) || volume_ == 0) return;
+  if (volume_ == 0) return;
+  if (alarm) {
+    const std::string played = Active(situation) || !Active("EMERGENCY") ? situation : "EMERGENCY";
+    sink_->Play({situation, Active(played) ? WavOf(played) : "", Gain(), true});
+    return;
+  }
+  if (!Active(situation)) return;
   const auto last = last_played_.find(situation);
   if (last != last_played_.end() && now - last->second < config_.min_gap) return;
   last_played_[situation] = now;
