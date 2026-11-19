@@ -46,6 +46,8 @@ ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
 IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 MAX_APP_VERSION = 64
+# The line of the health check for an OS that halted since data_dir has no room for its backup.
+NO_SPACE = "halted: DATA_NO_SPACE"
 
 
 # Minute of the day of HH:MM.
@@ -91,6 +93,8 @@ class Updater:
         # Ends this process after a switch of the host; whether the broker is connected, for its confirmation.
         self.restart_self = lambda: None
         self.connected = lambda: False
+        # Whether the health of a switch is judged over the broker (mowbite-host): then no OS switches without it.
+        self.judges_by_broker = False
         self._lock = threading.RLock()
         self._abort = threading.Event()
         self._worker = None
@@ -248,7 +252,14 @@ class Updater:
             if result:
                 blocked["result"] = result
             self._entry(component)["blocked"][revision] = blocked
+            self._save_or_log()
+
+    # The state kept in memory when it cannot be written (a full disk); the next save takes it along.
+    def _save_or_log(self):
+        try:
             self._save()
+        except OSError as error:
+            print(f"{self.paths.state} cannot be written: {error}", flush=True)
 
     def _finish(self, result, reason, message, component, revision, block=False):
         if block and revision:
@@ -256,8 +267,8 @@ class Updater:
         with self._lock:
             self.state["last"] = {"result": result, "reason": reason, "message": message[:500],
                                   "revision": revision, "component": component, "t": int(time.time())}
-            self._save()
             self._phase = dict(IDLE)
+            self._save_or_log()
         self._changed()
 
     def phase(self):
@@ -509,6 +520,8 @@ class Updater:
         with self._lock:
             # An abort accepted until here wins; from here on the health check decides.
             self._check_abort()
+            if self.judges_by_broker and self._stops_os(component) and not self.connected():
+                raise Refused("BUSY", "the broker of the OS is not connected: the health of a switch cannot be judged")
             if revision:
                 entry["attempts"][revision] = entry["attempts"].get(revision, 0) + 1
                 self._save()
@@ -648,12 +661,14 @@ class Updater:
             self._wait_gate(component, reset_jobs, gate_until)
             ok, line = self._switch(component, revision)
             installer.prune()
+            # An OS that halted for want of room in data_dir says nothing about the revision.
+            block = not line.startswith(NO_SPACE)
             if ok:
                 self._finish("installed", None, line, component, revision)
             elif installer.current() or place.overlay:
-                self._finish("rolled_back", "UNHEALTHY", line, component, revision, block=True)
+                self._finish("rolled_back", "UNHEALTHY", line, component, revision, block=block)
             else:
-                self._finish("failed", "UNHEALTHY", line, component, revision, block=True)
+                self._finish("failed", "UNHEALTHY", line, component, revision, block=block)
         except Aborted:
             self._finish("aborted", None, "aborted before the switch", component, revision)
         except Restarting:

@@ -93,6 +93,7 @@ def run():
     # A switch of the host ends this process; systemd starts the new one.
     tool.restart_self = lambda: stopping.append(True)
     tool.connected = lambda: client.connected
+    tool.judges_by_broker = True
     tool.host_went_back()
     tool.recover(start_stopped=True)
     installer.settle(where)

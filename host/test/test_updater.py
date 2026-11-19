@@ -4,6 +4,7 @@
 """
 import hashlib
 import io
+import itertools
 import json
 import os
 import shutil
@@ -741,6 +742,29 @@ class FlowTest(Base):
         self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
         self.assertEqual(os.readlink(self.paths.os.current), A)
 
+    # An OS that halts for want of room in data_dir goes back without blocking its revision.
+    def test_no_room_does_not_block(self):
+        self.install(A)
+        start = self.fake.start
+
+        def halting():
+            started = start()
+            self.write(self.paths.halt, "MOWBITE_OS_HALT reason=DATA_NO_SPACE data_schema=3 image_schema=3 No room.\n")
+            return started
+        self.fake.start = halting
+        last = self.install(B)
+        self.assertEqual((last["result"], last["reason"]), ("rolled_back", "UNHEALTHY"))
+        self.assertNotIn(B, self.blocked())
+
+    # mowbite-host judges a switch over the broker: without it no OS switches.
+    def test_no_switch_without_the_broker(self):
+        self.install(A)
+        self.updater.judges_by_broker = True
+        self.updater.connected = lambda: False
+        last = self.install(B)
+        self.assertEqual((last["result"], last["reason"]), ("refused", "BUSY"))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
     def test_library_missing_blocks(self):
         self.write(self.paths.os_setup, "return 1\n")
         self.bundle(A, extra={"lib/x.so": b"\x7fELF" + bytes(60)})
@@ -1068,6 +1092,49 @@ class ProcessCarrierTest(unittest.TestCase):
         with self.assertRaises(Refused):
             process.stop()
         process._pid = stays
+
+
+class HealthTest(unittest.TestCase):
+    class Running:
+        def active(self):
+            return True
+
+        def show(self):
+            return "active", None, 1
+
+    def health(self, answers, seen=None):
+        root = tempfile.mkdtemp(prefix="mowbite-host-")
+        self.addCleanup(shutil.rmtree, root)
+        check = installer.Health(paths.Paths(root), self.Running(), wait=10, stable=0.05, every=0.01)
+
+        def once(since, entered):
+            if seen is not None:
+                seen.append(since)
+            return (*next(answers), 1)
+        check.once = once
+        return check
+
+    # One late answer within the stable time is no verdict; HEALTH_MISSES in a row are.
+    def test_one_miss_is_no_verdict(self):
+        ok, late = (True, "ok"), (None, "rpc.methods does not answer")
+        answers = itertools.chain([ok, late], itertools.repeat(ok))
+        self.assertEqual(self.health(answers).wait_healthy(time.time()), (True, "ok"))
+        answers = itertools.chain([ok], itertools.repeat(late))
+        self.assertEqual(self.health(answers).wait_healthy(time.time()),
+                         (False, "no longer healthy: rpc.methods does not answer"))
+
+    # A clock set back while it waits moves the start along with it.
+    def test_clock_set_back(self):
+        seen = []
+        check = self.health(itertools.repeat((True, "ok")), seen)
+        since = time.time()
+        real = time.time
+        try:
+            installer.time.time = lambda: real() - 3600
+            self.assertTrue(check.wait_healthy(since)[0])
+        finally:
+            installer.time.time = real
+        self.assertLess(seen[-1], since - 3000)
 
 
 class HelpersTest(unittest.TestCase):

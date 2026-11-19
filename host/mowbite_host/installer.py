@@ -22,6 +22,8 @@ HEALTH_WAIT = 240.0
 # After the first healthy answer the OS has to stay healthy this long (rule M5 of the updater contract).
 HEALTH_STABLE = 60.0
 HEALTH_EVERY = 2.0
+# Looks in a row without a healthy answer after the first one before the OS counts as no longer healthy.
+HEALTH_MISSES = 3
 # The hold of a switch covers the stop, the health checks of the new OS and of the one before it when it goes back;
 # the OS ends a hold at most after 1800 s.
 HOLD_SECONDS = 900
@@ -125,21 +127,29 @@ class Health:
         return (True, line) if ok else (None, line)
 
     def wait_healthy(self, since):
-        deadline = time.monotonic() + self.wait
+        start = time.monotonic()
+        deadline = start + self.wait
         first_ok = None
+        misses = 0
         line = ""
         entered = None
         while True:
+            # A clock set back meanwhile moves the start with it: files of the new OS stay newer than it.
+            since = min(since, time.time() - (time.monotonic() - start))
             ok, line, now_entered = self.once(since, entered)
             entered = entered or now_entered
             if ok is False:
                 return False, line
-            if ok and first_ok is None:
-                first_ok = time.monotonic()
-            if ok is None and first_ok is not None:
-                return False, f"no longer healthy: {line}"
             now = time.monotonic()
-            if first_ok is not None and now - first_ok >= self.stable:
+            if ok:
+                misses = 0
+                first_ok = now if first_ok is None else first_ok
+            elif first_ok is not None:
+                # One answer that comes late is no verdict; the stable time ends only on a healthy answer.
+                misses += 1
+                if misses >= HEALTH_MISSES:
+                    return False, f"no longer healthy: {line}"
+            if ok and now - first_ok >= self.stable:
                 settled, why = self.probe.settled()
                 return (True, line) if settled else (False, why)
             if first_ok is None and now >= deadline:
@@ -339,7 +349,12 @@ class Installer:
             self.carrier.stop()
         except Exception as error:  # noqa: BLE001 - going back goes on
             log(f"stop before going back: {type(error).__name__}: {error}")
-        self._set_current(before)
+        try:
+            self._set_current(before)
+        except OSError as error:
+            # A full disk: the OS stays off with pending, recover goes back at the next start of the host.
+            log(f"current cannot be set back to {before or 'none'}: {error}")
+            return f"current cannot be set back: {error}"
         if before or self.place.overlay:
             log(f"back to {before or 'the one of the OS'}")
             try:
