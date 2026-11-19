@@ -997,6 +997,19 @@ TEST(BridgeCoreConnection, MethodsChangedWaitsForTheBroker) {
   EXPECT_EQ(sunk.size(), 1u);
 }
 
+TEST_F(Timed, TheActionsOfAProviderThatIsGoneGoWithIt) {
+  core_.OnActions("mower_logic:mowing", {{"mower_logic:mowing/start", "Start", true, ""}}, "aa");
+  core_.OnActions("mower_logic:record", {{"mower_logic:record/start", "Record", true, ""}}, "bb");
+  core_.Take();
+  core_.OnProviders({"bb"});
+  core_.OnProviders({"bb"});
+  const Outbox out = core_.Take();
+  const MqttMessage* actions = Find(out, "actions/json");
+  ASSERT_TRUE(actions);
+  EXPECT_EQ(actions->payload.find("mowing/start"), std::string::npos);
+  EXPECT_NE(actions->payload.find("record/start"), std::string::npos);
+}
+
 // M5: a provider the graph lacks twice in a row is gone with its methods, its open calls and its sensors.
 TEST_F(Timed, AProviderMissingTwiceInARowIsGone) {
   core_.OnRpcMethods("mowbite_camera", {"camera.list", "camera.stream"}, "aa");

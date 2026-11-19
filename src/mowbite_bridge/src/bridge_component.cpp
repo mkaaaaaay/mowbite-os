@@ -264,11 +264,14 @@ class BridgeNode : public rclcpp::Node {
       const bool text = known != text_sensors_.end() && known->second;
       core_.OnSensorValue(m.sensor_id, text ? Json(m.text) : Json(m.value), WallNow());
     });
-    Subscribe<msg::ActionList>("bridge/actions", Latched(50), [this](const msg::ActionList& m) {
-      std::vector<ActionItem> items;
-      for (const auto& a : m.actions) items.push_back({a.id, a.name, a.enabled, a.reason});
-      core_.OnActions(m.node_prefix, items);
-    });
+    SubscribeFrom<msg::ActionList>("bridge/actions", Latched(50),
+                                   [this](const msg::ActionList& m, const std::string& provider) {
+                                     std::vector<ActionItem> items;
+                                     for (const auto& a : m.actions) {
+                                       items.push_back({a.id, a.name, a.enabled, a.reason});
+                                     }
+                                     core_.OnActions(m.node_prefix, items, provider);
+                                   });
     Subscribe<std_msgs::msg::String>("bridge/params", Latched(50),
                                      [this](const std_msgs::msg::String& m) { core_.OnParams(m.data); });
     Subscribe<msg::MqttPublish>("bridge/publish", rclcpp::QoS(100), [this](const msg::MqttPublish& m) {

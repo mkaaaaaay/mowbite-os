@@ -297,9 +297,11 @@ void BridgeCore::OnSensorValue(const std::string& id, const Json& value, double 
   });
 }
 
-void BridgeCore::OnActions(const std::string& prefix, const std::vector<ActionItem>& items) {
+void BridgeCore::OnActions(const std::string& prefix, const std::vector<ActionItem>& items,
+                           const std::string& provider) {
   Guard("actions", [&] {
     actions_[prefix] = items;
+    action_provider_[prefix] = provider;
     Keep("actions/json", ActionsText(actions_));
   });
 }
@@ -370,6 +372,7 @@ void BridgeCore::OnProviders(const std::set<std::string>& alive) {
     };
     for (const auto& [node, provider] : node_provider_) check(provider);
     for (const auto& [id, provider] : sensor_provider_) check(provider);
+    for (const auto& [prefix, provider] : action_provider_) check(provider);
     missed_ = std::move(missed);
     if (gone.empty()) return;
 
@@ -388,6 +391,18 @@ void BridgeCore::OnProviders(const std::set<std::string>& alive) {
     }
     FailCalls(methods);
     NoteMethods();
+
+    // Actions of a process that is gone are not offered by anyone any more.
+    bool actions = false;
+    for (auto action = action_provider_.begin(); action != action_provider_.end();) {
+      if (!gone.count(action->second)) {
+        ++action;
+        continue;
+      }
+      actions = actions_.erase(action->first) != 0 || actions;
+      action = action_provider_.erase(action);
+    }
+    if (actions) Keep("actions/json", ActionsText(actions_));
 
     std::string sensors;
     for (auto sensor = sensor_provider_.begin(); sensor != sensor_provider_.end();) {

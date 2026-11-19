@@ -148,7 +148,8 @@ class BridgeCore {
   // provider names the publisher the sensor came from (OnProviders); empty: not known, the sensor stays for good.
   void OnSensor(const SensorDescription& sensor, const std::string& provider = "");
   void OnSensorValue(const std::string& id, const Json& value, double stamp);
-  void OnActions(const std::string& prefix, const std::vector<ActionItem>& items);
+  // provider: the process that sent them; its actions go with it (OnProviders).
+  void OnActions(const std::string& prefix, const std::vector<ActionItem>& items, const std::string& provider = "");
   void OnParams(std::string_view message);
   void OnPublish(const std::string& topic, const std::string& payload, bool retain);
   void OnMap(const std::string& text);
@@ -223,8 +224,10 @@ class BridgeCore {
   std::vector<std::string> told_methods_;
   // Since when rpc.methods is another list, by the clock of the open calls.
   std::optional<double> methods_changed_;
-  // The provider of each node with methods and of each sensor, and the checks in a row a provider was missing in.
+  // The provider of each node with methods, of each list of actions and of each sensor, and the checks in a row a
+  // provider was missing in.
   std::map<std::string, std::string> node_provider_;
+  std::map<std::string, std::string> action_provider_;
   std::map<std::string, std::string> sensor_provider_;
   std::map<std::string, int> missed_;
   std::map<std::string, LocalMethod> local_;
