@@ -237,6 +237,29 @@ TEST_F(IncidentsTest, AnEmergencyKeepsTheSegmentsOfItsWindowAndSealsThemWhenThey
   EXPECT_TRUE(warnings_.empty()) << warnings_.front();
 }
 
+// A log line with invalid UTF-8 (a Latin-1 text, a character cut at the end) is kept with U+FFFD in its place.
+TEST_F(IncidentsTest, ALogLineWithInvalidUtf8IsKeptReplaced) {
+  auto journal = Open();
+  Feed(*journal, 0.3);
+  now_ = mowbite_journal::MonotonicNs();
+  Make();
+  const std::string latin1 = "caster \xe4 x\xc3";
+  incidents_->OnLog(now_, json{{"t", 1.0}, {"level", 30}, {"name", "ntrip"}, {"msg", latin1}});
+  const auto notices = incidents_->OnEmergency(5, now_, Wall());
+  ASSERT_EQ(notices.size(), 1u);
+  const std::string id = notices[0]["incident"];
+  journal.reset();
+  Pass();
+  Pass();
+  const json manifest = Call("incidents.get", {{"id", id}})["manifest"];
+  EXPECT_EQ(manifest["state"], "done");
+  ASSERT_EQ(manifest["log"].size(), 1u);
+  const std::string msg = manifest["log"][0]["msg"];
+  EXPECT_EQ(msg.rfind("caster ", 0), 0u);
+  EXPECT_NE(msg.find("\xef\xbf\xbd"), std::string::npos);
+  EXPECT_NO_THROW((void)manifest.dump());
+}
+
 TEST_F(IncidentsTest, TheArchiveWithoutLocationHasNoRawBytesNoBootIdAndNoRealDate) {
   const std::string id = Sealed();
   ASSERT_FALSE(id.empty());

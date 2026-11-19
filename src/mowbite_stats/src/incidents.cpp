@@ -274,6 +274,8 @@ void Incidents::OnRobot(json robot) {
 }
 
 void Incidents::OnLog(int64_t now_ns, json line) {
+  // Invalid UTF-8 (also a character cut at the end) becomes U+FFFD, so that every later dump of it succeeds.
+  line = json::parse(line.dump(-1, ' ', false, json::error_handler_t::replace));
   if (log_.size() >= kIncidentLogLines) log_.pop_front();
   log_.emplace_back(now_ns, line);
   if (const auto& collecting = keeper_.collecting()) {

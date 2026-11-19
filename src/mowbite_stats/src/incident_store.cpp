@@ -31,6 +31,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
+// Text of a manifest; invalid UTF-8 becomes U+FFFD instead of an exception.
+std::string ManifestText(const json& manifest) {
+  return manifest.dump(1, ' ', false, json::error_handler_t::replace) + "\n";
+}
+
 constexpr char kIncidentsDir[] = "incidents";
 constexpr char kManifest[] = "manifest.json";
 constexpr char kTimeline[] = "timeline.jsonl";
@@ -286,7 +291,7 @@ std::vector<StoredIncident> IncidentStore::Load() {
     (*manifest)["state"] = "done";
     (*manifest)["cut"] = true;
     std::string why;
-    mowbite_hold::WriteFileSafely((fs::path(Folder(id)) / kManifest).string(), manifest->dump(1) + "\n", &why);
+    mowbite_hold::WriteFileSafely((fs::path(Folder(id)) / kManifest).string(), ManifestText(*manifest), &why);
   }
   return Stored();
 }
@@ -311,7 +316,7 @@ bool IncidentStore::WriteManifest(const Incident& incident, const IncidentContex
       {"robot", context.robot},
       {"log", context.log},
       {"runs", runs}};
-  return mowbite_hold::WriteFileSafely((fs::path(Folder(incident.id)) / kManifest).string(), manifest.dump(1) + "\n",
+  return mowbite_hold::WriteFileSafely((fs::path(Folder(incident.id)) / kManifest).string(), ManifestText(manifest),
                                        error);
 }
 
@@ -512,7 +517,7 @@ bool IncidentStore::Prepare(const std::string& id, bool location, std::string* e
       }
     }
     const json anon = AnonymousManifest(*manifest, Anonymous());
-    if (!mowbite_hold::WriteFileSafely((work / kManifest).string(), anon.dump(1) + "\n", error)) return false;
+    if (!mowbite_hold::WriteFileSafely((work / kManifest).string(), ManifestText(anon), error)) return false;
     fs::rename(work, folder / kAnonDir, ec);
     if (ec) {
       *error = "cannot finish " + work.string() + ": " + ec.message();
