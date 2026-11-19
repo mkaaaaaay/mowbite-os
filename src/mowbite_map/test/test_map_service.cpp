@@ -836,6 +836,15 @@ TEST(MapDatum, ADatumFileOfAnOlderVersionStillTies) {
   EXPECT_EQ(service.status().datum, DatumState::kMatch);
 }
 
+TEST(MapService, RefusesAnAreaNameThatIsNotUtf8) {
+  TempDir dir;
+  MapService service = Started(NumberedIds(dir));
+  const auto area = service.AddArea("mow", std::string("Fr\xC3"), Square(2));
+  EXPECT_FALSE(area.ok);
+  EXPECT_EQ(area.code, "INVALID");
+  EXPECT_TRUE(service.map().Empty());
+}
+
 TEST(MapDatum, TheFirstAreaTiesTheMap) {
   TempDir dir;
   MapService service = Started(NumberedIds(dir));

@@ -15,6 +15,17 @@ bool Number(const json& value) {
   return value.is_number() && std::isfinite(value.get<double>());
 }
 
+// The planner may answer with any types: a field of another type counts as missing.
+bool True(const json& object, const char* key) {
+  const auto it = object.find(key);
+  return it != object.end() && it->is_boolean() && it->get<bool>();
+}
+
+std::string Text(const json& object, const char* key) {
+  const auto it = object.find(key);
+  return it != object.end() && it->is_string() ? it->get<std::string>() : "";
+}
+
 }  // namespace
 
 std::string GeometryKey(const std::string& name) {
@@ -37,7 +48,7 @@ json Compose(const Ending& ending, const json& evaluation, double station_limit)
     status = "failed";
   } else if (evaluation.is_null()) {
     status = "not_evaluated";
-  } else if (!evaluated || !evaluation.value("ready", false)) {
+  } else if (!evaluated || !True(evaluation, "ready")) {
     status = "failed";
   } else {
     status = "done";
@@ -56,10 +67,10 @@ json Compose(const Ending& ending, const json& evaluation, double station_limit)
     if (evaluation.contains("values") && evaluation["values"].is_array()) {
       for (json value : evaluation["values"]) {
         if (!value.is_object()) continue;
-        const std::string name = value.value("name", "");
+        const std::string name = Text(value, "name");
         const std::string key = GeometryKey(name);
         value["key"] = key.empty() ? json() : json(key);
-        if ((key == "antenna_x" || key == "antenna_y") && value.value("ok", false) && Number(value["value"]) &&
+        if ((key == "antenna_x" || key == "antenna_y") && True(value, "ok") && Number(value["value"]) &&
             Number(value["old"]) &&
             std::abs(value["value"].get<double>() - value["old"].get<double>()) > station_limit) {
           station_again = true;
@@ -78,18 +89,17 @@ json Compose(const Ending& ending, const json& evaluation, double station_limit)
 }
 
 std::string Summary(const json& result) {
-  const std::string status = result.value("status", "");
+  const std::string status = Text(result, "status");
   if (status == "not_evaluated") return "Not evaluated: the recording is kept for later";
-  if (status == "failed" && result.value("reason", "") != "DONE") {
-    return "The drive stopped: " + result.value("reason", std::string("unknown"));
-  }
+  const std::string reason = Text(result, "reason");
+  if (status == "failed" && reason != "DONE") return "The drive stopped: " + (reason.empty() ? "unknown" : reason);
   if (status == "failed") return "The evaluation found no usable values";
   size_t ok = 0;
   size_t all = 0;
   if (result.contains("values") && result["values"].is_array()) {
     for (const auto& value : result["values"]) {
       all++;
-      if (value.is_object() && value.value("ok", false)) ok++;
+      if (value.is_object() && True(value, "ok")) ok++;
     }
   }
   return std::to_string(ok) + " of " + std::to_string(all) + " values ok";

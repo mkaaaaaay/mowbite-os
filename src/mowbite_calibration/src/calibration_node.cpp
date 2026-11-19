@@ -117,7 +117,8 @@ struct Dimensions {
 
 std::optional<Dimensions> ReadDimensions(const std::string& text) {
   const json parsed = json::parse(text, nullptr, false);
-  if (!parsed.is_object() || parsed.value("node", "") != "/mowbite_geometry" || !parsed.contains("params")) {
+  if (!parsed.is_object() || !parsed.contains("node") || parsed["node"] != "/mowbite_geometry" ||
+      !parsed.contains("params")) {
     return std::nullopt;
   }
   const json& p = parsed["params"];
@@ -152,7 +153,7 @@ std::optional<Dimensions> ReadDimensions(const std::string& text) {
       if (key == "imu_roll" || key == "imu_pitch") d.imu_measured = true;
     }
   }
-  d.version = p.value("version", 0);
+  d.version = p.contains("version") && p["version"].is_number_integer() ? p["version"].get<int>() : 0;
   return d;
 }
 

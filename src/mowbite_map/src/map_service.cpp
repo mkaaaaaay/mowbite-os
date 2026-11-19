@@ -35,6 +35,16 @@ std::string SaveFailedCode(int rpc_code) {
   }
 }
 
+// Whether the text can go into a JSON file; json::dump throws on invalid UTF-8.
+bool ValidUtf8(const std::string& text) {
+  try {
+    json(text).dump();
+    return true;
+  } catch (const json::exception&) {
+    return false;
+  }
+}
+
 // The recorded_body of a recording: empty for none, else a JSON object.
 std::optional<json> RecordedBody(const std::string& text, std::string* error) {
   if (text.empty()) return json();
@@ -205,6 +215,8 @@ RpcOutcome MapService::ReplaceMap(const json& map) {
 EditResult MapService::AddArea(const std::string& type, const std::string& name, const std::vector<Point>& outline,
                                const std::vector<std::vector<Point>>& obstacles, const std::string& recorded_body,
                                const std::vector<std::string>& obstacles_recorded_body) {
+  // The name goes into the map file and into the messages below.
+  if (!ValidUtf8(name)) return {false, "", "Invalid area: the name is not valid UTF-8", "INVALID"};
   if (!obstacles_recorded_body.empty() && obstacles_recorded_body.size() != obstacles.size()) {
     return {false, "", "Invalid area '" + name + "': recorded_body for " +
                            std::to_string(obstacles_recorded_body.size()) + " of " + std::to_string(obstacles.size()) +

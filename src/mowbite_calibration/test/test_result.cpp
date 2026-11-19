@@ -70,6 +70,22 @@ TEST(Result, TheStationStaysWithASmallOrRejectedChangeOfTheAntenna) {
   EXPECT_FALSE(Compose(Done(), evaluation)["station_again"].get<bool>());
 }
 
+TEST(Result, FieldsOfAnotherTypeCountAsMissing) {
+  json evaluation = Evaluation();
+  evaluation["values"][0]["name"] = 7;
+  evaluation["values"][1]["ok"] = "yes";
+  evaluation["values"][2]["ok"] = 1;
+  json result;
+  ASSERT_NO_THROW(result = Compose(Done(), evaluation));
+  EXPECT_EQ(result["status"], "done");
+  EXPECT_EQ(result["values"][0]["key"], nullptr);
+  EXPECT_FALSE(result["station_again"].get<bool>());
+  EXPECT_EQ(result["summary"], "3 of 6 values ok");
+  evaluation["ready"] = "true";
+  ASSERT_NO_THROW(result = Compose(Done(), evaluation));
+  EXPECT_EQ(result["status"], "failed");
+}
+
 TEST(Result, StatusWithoutEvaluationOrWithoutAWholeDrive) {
   const json missing = Compose(Done(), json());
   EXPECT_EQ(missing["status"], "not_evaluated");
