@@ -206,6 +206,7 @@ class Host:
             if now >= next_tick:
                 next_tick = now + TICK_EVERY
                 self._step("tick", self.updater.tick)
+                self._step("recover", self.updater.recover_due)
             if now >= next_look:
                 next_look = now + LOOK_EVERY
                 self._step("look", self.look)

@@ -80,9 +80,9 @@ def job_open(paths):
 
 
 # The reason the switch may not happen now, None when it may; active: whether the service of the OS runs, still:
-# whether it is halted or down (off).
-def before_hold(paths, active, still=False):
-    if unfinished(paths):
+# whether it is halted or down (off); recovering: for undoing an unfinished switch, which is no reason then.
+def before_hold(paths, active, still=False, recovering=False):
+    if not recovering and unfinished(paths):
         return "UNFINISHED", "an update did not finish: recover first"
     # Halted or down nobody answers a release; the file stays and holds the OS that starts next.
     if os.path.lexists(paths.restart_hold) and not still:

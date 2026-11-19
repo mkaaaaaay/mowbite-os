@@ -424,8 +424,8 @@ class Updater:
             raise Aborted()
 
     # gate.before_hold; with jobs an unfinished mowing job closes the gate as well.
-    def _closed(self, jobs, active, still=False):
-        why = gate.before_hold(self.paths, active, still)
+    def _closed(self, jobs, active, still=False, recovering=False):
+        why = gate.before_hold(self.paths, active, still, recovering)
         if why is None and jobs and gate.job_open(self.paths):
             why = "JOB_OPEN", "a mowing job is unfinished: finish or reset it, or update with reset_jobs"
         return why
@@ -462,7 +462,7 @@ class Updater:
 
     # Asks the OS for its hold: None once hold.json shows it and the files still open the gate, else why not, with
     # the hold given back.
-    def _ask_hold(self, jobs):
+    def _ask_hold(self, jobs, recovering=False):
         asked = time.time()
         self.os_rpc.request_hold(HOLD_SECONDS)
         self._holding = True
@@ -471,7 +471,7 @@ class Updater:
         while time.monotonic() < until:
             if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
                 # Granted only in IDLE; the files must still say so after it.
-                why = self._closed(jobs, self.carrier.active())
+                why = self._closed(jobs, self.carrier.active(), recovering=recovering)
                 if why is None:
                     return None
                 break
@@ -696,9 +696,30 @@ class Updater:
 
     # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
     # times is blocked.
+    # Whether an unfinished switch of component may be undone now, None when it may, else why not: an OS that runs may
+    # mow by now, so it is stopped only at rest on the station with the hold granted, as for a switch.
+    def _recover_gate(self, component):
+        if not self._stops_os(component):
+            return None
+        state, _, started = self.carrier.show()
+        if state not in SETTLED:
+            return "BUSY", "MowBite OS is starting or stopping"
+        if state != "active" or gate.off(self.paths, started) is not None:
+            return None
+        jobs = component == "planner"
+        return self._closed(jobs, True, recovering=True) or self._ask_hold(jobs, recovering=True)
+
     def recover(self, start_stopped=False):
         for component, installer in self.installers.items():
-            pending = installer.recover(start_stopped)
+            if os.path.lexists(installer.place.pending):
+                why = self._recover_gate(component)
+                if why is not None:
+                    print(f"{component}: an unfinished update waits for the gate: {why[1]}", flush=True)
+                    continue
+            try:
+                pending = installer.recover(start_stopped)
+            finally:
+                self._release_hold()
             installer.prune()
             if pending is None:
                 continue
@@ -709,6 +730,12 @@ class Updater:
             if blocked:
                 attempts.pop(revision)
             self._finish("failed", "INTERRUPTED", message, component, revision, block=blocked)
+
+    # From the main loop: an unfinished switch that waits for the gate is undone once it opens.
+    def recover_due(self):
+        if self.busy() or not gate.unfinished(self.paths):
+            return
+        self.recover()
 
     def clock_ok(self):
         return os.path.exists(self.paths.prefix + "/run/systemd/timesync/synchronized")

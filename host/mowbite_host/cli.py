@@ -30,7 +30,7 @@ import shutil
 import sys
 import time
 
-from mowbite_host import Refused, bundle, carrier, installer, origin, paths, updater
+from mowbite_host import Refused, bundle, carrier, gate, installer, origin, paths, updater
 
 # How long install and rollback wait for the broker before they go on without one; 0: never asked.
 BROKER_WAIT = float(os.environ.get("MOWBITE_UPDATE_BROKER_WAIT", 5.0))
@@ -137,7 +137,7 @@ def main(argv):
             if command == "recover":
                 tool.recover()
                 installer.settle(tool.paths)
-                return 0
+                return 1 if gate.unfinished(tool.paths) else 0
             if command == "rollback":
                 tool.rollback(component, reset_jobs)
             else:

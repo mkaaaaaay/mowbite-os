@@ -846,6 +846,24 @@ class FlowTest(Base):
         self.updater.recover()
         self.assertEqual(sorted(os.listdir(opt)), sorted([A, B, "current", "previous"]))
 
+    # A running OS that mows is not stopped to undo an unfinished switch: that waits for the gate of a switch.
+    def test_recover_waits_for_the_gate_of_a_running_os(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.fake.session(state="MOWING")
+        stops = self.fake.stops
+        self.updater.recover()
+        self.assertEqual(self.fake.stops, stops)
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), B)
+        self.fake.session()
+        self.updater.recover_due()
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertTrue(self.fake.running)
+        self.assertFalse(os.path.exists(self.paths.hold))
+
     def test_left_installations_go_before_the_space_check(self):
         self.install(A)
         self.left_behind()
