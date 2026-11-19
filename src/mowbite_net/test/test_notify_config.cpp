@@ -120,6 +120,11 @@ TEST(NotifyConfig, BrokenFileGivesTheDefaults) {
   error.clear();
   EXPECT_EQ(ConfigFromJson(nullptr, &error), DefaultConfig());
   EXPECT_EQ(error, "");
+  // Fields of another type do not throw.
+  EXPECT_EQ(ConfigFromJson(json::parse(R"({"schema": "1"})"), &error), DefaultConfig());
+  EXPECT_FALSE(error.empty());
+  error.clear();
+  EXPECT_NO_THROW(ConfigFromJson(json::parse(R"({"schema": 1, "stored": "yes"})"), &error));
 }
 
 TEST(NotifyConfig, PushesTenAtMostOldestGoes) {

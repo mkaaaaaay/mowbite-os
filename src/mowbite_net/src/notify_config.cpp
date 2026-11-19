@@ -116,7 +116,7 @@ NotifyConfig DefaultConfig() {
 NotifyConfig ConfigFromJson(const json& file, std::string* error) {
   NotifyConfig config = DefaultConfig();
   if (file.is_null()) return config;
-  if (!file.is_object() || file.value("schema", 0) != 1) {
+  if (!file.is_object() || !file.contains("schema") || file["schema"] != 1) {
     *error = "not a notify file of schema 1";
     return config;
   }
@@ -133,7 +133,7 @@ NotifyConfig ConfigFromJson(const json& file, std::string* error) {
   for (const std::string& address : Strings(pushes)) {
     if (AddPush({{"address", address}}, &config)) *error = "a push address is not an http(s) URL";
   }
-  config.stored = file.value("stored", false);
+  config.stored = file.contains("stored") && file["stored"].is_boolean() && file["stored"].get<bool>();
   return config;
 }
 

@@ -47,6 +47,8 @@ constexpr char kLogFile[] = "notify-log.json";
 constexpr size_t kMaxFileBytes = size_t{64} * 1024;
 constexpr size_t kLogSize = 50;
 constexpr size_t kWeatherQueue = 8;
+// notify.test calls that may wait; more are refused, so that they cannot hold up real pushes.
+constexpr size_t kMaxTests = 4;
 constexpr int kInvalidParams = -32602;
 
 double MonotonicSeconds() {
@@ -136,7 +138,12 @@ class NetNode : public rclcpp::Node {
   }
 
   ~NetNode() override {
-    stop_ = true;
+    // Under the mutexes of the waits, so that no thread checks stop_ and blocks right after the wake.
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      std::lock_guard<std::mutex> weather_lock(weather_mutex_);
+      stop_ = true;
+    }
     weather_wake_.notify_all();
     push_wake_.notify_all();
     if (weather_thread_.joinable()) weather_thread_.join();
@@ -152,14 +159,26 @@ class NetNode : public rclcpp::Node {
 
   std::string PathOf(const char* name) const { return (std::filesystem::path(data_dir_) / name).string(); }
 
+  // The file, or null for none; one that cannot be read is logged and kept as <name>.bad for the user, since the next
+  // change writes the defaults over it.
   json Read(const char* name) {
     if (data_dir_.empty()) return json();
     std::string text, error;
-    if (mowbite_hold::ReadSmallFile(PathOf(name), kMaxFileBytes, &text, &error) != mowbite_hold::FileRead::kText) {
-      return json();
+    const auto read = mowbite_hold::ReadSmallFile(PathOf(name), kMaxFileBytes, &text, &error);
+    if (read == mowbite_hold::FileRead::kMissing) return json();
+    if (read == mowbite_hold::FileRead::kText) {
+      json value = json::parse(text, nullptr, false);
+      if (!value.is_discarded()) return value;
     }
-    const json value = json::parse(text, nullptr, false);
-    return value.is_discarded() ? json() : value;
+    RCLCPP_ERROR(get_logger(), "%s cannot be read (%s): kept as %s.bad, the defaults hold", name,
+                 read == mowbite_hold::FileRead::kText ? "not valid JSON" : error.c_str(), name);
+    std::error_code ec;
+    const std::string bad = PathOf(name) + ".bad";
+    std::filesystem::copy_file(PathOf(name), bad, std::filesystem::copy_options::overwrite_existing, ec);
+    if (!ec) {
+      std::filesystem::permissions(bad, std::filesystem::perms::owner_read | std::filesystem::perms::owner_write, ec);
+    }
+    return json();
   }
 
   void Write(const char* name, const json& value) {
@@ -172,9 +191,11 @@ class NetNode : public rclcpp::Node {
     if (!error.empty()) RCLCPP_ERROR(get_logger(), "%s: %s; the defaults hold", kConfigFile, error.c_str());
     const json state = Read(kStateFile);
     if (state.is_object()) {
-      snooze_ = state.value("snooze", int64_t{0});
+      const auto snooze = state.find("snooze");
+      snooze_ = snooze != state.end() && snooze->is_number_integer() ? snooze->get<int64_t>() : 0;
       std::map<std::string, double> told;
-      const json maintenance = state.value("maintenance", json::object());
+      const auto found = state.find("maintenance");
+      const json maintenance = found != state.end() && found->is_object() ? *found : json::object();
       for (const auto& item : maintenance.items()) {
         if (item.value().is_number()) told[item.key()] = item.value().get<double>();
       }
@@ -292,6 +313,9 @@ class NetNode : public rclcpp::Node {
     } else {
       std::optional<std::string> address;
       bad = CheckTest(params, config_, &address);
+      if (!bad && tests_.size() >= kMaxTests) {
+        bad = Rejection{"params", "range", "at most " + std::to_string(kMaxTests) + " tests wait at a time"};
+      }
       if (!bad) {
         tests_.push_back({request.id, config_, address});
         push_wake_.notify_one();
@@ -394,11 +418,12 @@ class NetNode : public rclcpp::Node {
           push_wake_.wait(lock, ready);
         }
         if (stop_) break;
-        if (!tests_.empty()) {
+        // A push that is due goes before a test.
+        if (outbox_.Due(MonotonicSeconds())) {
+          item = outbox_.Take(MonotonicSeconds());
+        } else if (!tests_.empty()) {
           test = tests_.front();
           tests_.pop_front();
-        } else {
-          item = outbox_.Take(MonotonicSeconds());
         }
       }
       if (test) {
