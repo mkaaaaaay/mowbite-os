@@ -116,6 +116,9 @@ class World {
   Eigen::Vector2d fix_offset = Eigen::Vector2d::Zero();
   // The receiver reports its velocity turned by this (rad), at the right speed.
   double course_error = 0.0;
+  // The velocity is the chord of the antenna over this many s up to the fix (0: momentary), its window reported or not.
+  double chord = 0.0;
+  bool report_window = true;
   // The horizontal lever where the antenna really is (frame of base_link), if not lever; the tilt the IMU reports.
   std::optional<Eigen::Vector2d> true_lever;
   std::optional<Tilt> tilt;
@@ -141,8 +144,21 @@ class World {
     fix.x = then->antenna(0) + fix_offset(0);
     fix.y = then->antenna(1) + fix_offset(1);
     fix.motion_valid = true;
-    fix.motion_x = std::cos(course_error) * then->velocity(0) - std::sin(course_error) * then->velocity(1);
-    fix.motion_y = std::sin(course_error) * then->velocity(0) + std::cos(course_error) * then->velocity(1);
+    Eigen::Vector2d velocity = then->velocity;
+    if (chord > 0.0) {
+      const Past* from = then;
+      for (const Past& p : past_) {
+        if (p.t >= then->t - chord - 1e-9) {
+          from = &p;
+          break;
+        }
+      }
+      if (from->t >= then->t) return;
+      velocity = (then->antenna - from->antenna) / (then->t - from->t);
+      if (report_window) fix.motion_window = then->t - from->t;
+    }
+    fix.motion_x = std::cos(course_error) * velocity(0) - std::sin(course_error) * velocity(1);
+    fix.motion_y = std::sin(course_error) * velocity(0) + std::cos(course_error) * velocity(1);
     results.push_back(est.AddFix(fix, t));
   }
 
@@ -604,6 +620,35 @@ TEST(L7Accuracy, TheHeadingCountsOnlyWhenValid) {
   aligned.Aligned();
   EXPECT_TRUE(aligned.est.heading_valid());
   EXPECT_LT(aligned.est.PositionAccuracy(aligned.t), 0.02 + 2 * 0.1);
+}
+
+// R3-10: a chord of positions is one course per window, and it belongs to the middle of its window.
+TEST(CourseWindow, OverlappingWindowsCountOnce) {
+  World w;
+  w.Ready();
+  w.chord = 1.0;
+  w.Run(2.5, 0.3, 0.0);
+  EXPECT_FALSE(w.est.heading_valid());
+  w.Run(4.0, 0.3, 0.0);
+  EXPECT_TRUE(w.est.heading_valid());
+}
+
+TEST(CourseWindow, InATurnTheChordCountsAtTheMiddleOfItsWindow) {
+  World w;
+  w.Ready();
+  w.chord = 1.0;
+  w.Run(7.0, 0.3, 0.04);
+  ASSERT_TRUE(w.est.heading_valid());
+  w.Run(4.0, 0.3, 0.04);
+  EXPECT_LT(std::abs(w.HeadingError()), 0.008) << w.HeadingError();
+  // Taken for the moment of the fix it lags by half its window times the turn rate.
+  World lag;
+  lag.Ready();
+  lag.chord = 1.0;
+  lag.report_window = false;
+  lag.Run(11.0, 0.3, 0.04);
+  ASSERT_TRUE(lag.est.heading_valid());
+  EXPECT_GT(std::abs(lag.HeadingError()), 0.012) << lag.HeadingError();
 }
 
 // L10: the antenna offset moves base_link behind the last fix.
