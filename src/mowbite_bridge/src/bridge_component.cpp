@@ -55,6 +55,11 @@ namespace msg = mowbite_msgs::msg;
 
 constexpr auto kRetryCheck = 1s;
 constexpr std::size_t kMaxInbox = 1000;
+// Bytes of the messages waiting at most, and of one message by its topic: a request carries a whole map (1.5 MB at
+// most) as JSON text, the other inputs are short.
+constexpr std::size_t kMaxInboxBytes = std::size_t{16} * 1000 * 1000;
+constexpr std::size_t kMaxRequestBytes = std::size_t{4} * 1000 * 1000;
+constexpr std::size_t kMaxInputBytes = std::size_t{64} * 1000;
 constexpr double kRetrySeconds = 5.0;
 constexpr auto kPositionPeriod = 150ms;
 constexpr auto kSavePeriod = 30s;
@@ -392,11 +397,20 @@ class BridgeNode : public rclcpp::Node {
     });
   }
 
-  // Beyond kMaxInbox waiting messages new ones are dropped; connection changes always go in.
+  // A message over the limit of its topic, or beyond kMaxInbox messages or kMaxInboxBytes waiting, is dropped;
+  // connection changes always go in.
   void Post(Arrival arrival) {
     {
       std::lock_guard<std::mutex> lock(inbox_mutex_);
-      if (arrival.kind == Arrival::kMessage && inbox_.size() >= kMaxInbox) return;
+      if (arrival.kind == Arrival::kMessage) {
+        const std::size_t limit = arrival.topic == "rpc/request" ? kMaxRequestBytes : kMaxInputBytes;
+        if (arrival.payload.size() > limit || inbox_.size() >= kMaxInbox ||
+            inbox_bytes_ + arrival.payload.size() > kMaxInboxBytes) {
+          ++inbox_dropped_;
+          return;
+        }
+        inbox_bytes_ += arrival.payload.size();
+      }
       inbox_.push_back(std::move(arrival));
     }
     wakeup_->Wake();
@@ -404,10 +418,20 @@ class BridgeNode : public rclcpp::Node {
 
   void Drain() {
     std::deque<Arrival> arrivals;
+    std::size_t dropped = 0;
     {
       std::lock_guard<std::mutex> lock(inbox_mutex_);
       arrivals.swap(inbox_);
+      inbox_bytes_ = 0;
+      // Told once a minute at most, with the count since.
+      const auto now = std::chrono::steady_clock::now();
+      if (inbox_dropped_ > 0 && now - dropped_told_ >= std::chrono::minutes(1)) {
+        dropped = inbox_dropped_;
+        inbox_dropped_ = 0;
+        dropped_told_ = now;
+      }
     }
+    if (dropped > 0) RCLCPP_WARN(get_logger(), "MQTT: %zu message(s) over their size or the inbox dropped", dropped);
     for (const auto& a : arrivals) {
       switch (a.kind) {
         case Arrival::kConnected: OnConnected(); break;
@@ -615,6 +639,9 @@ class BridgeNode : public rclcpp::Node {
   const std::string data_dir_;
   std::mutex mutex_;
   std::mutex inbox_mutex_;
+  std::size_t inbox_bytes_ = 0;
+  std::size_t inbox_dropped_ = 0;
+  std::chrono::steady_clock::time_point dropped_told_{};
   std::deque<Arrival> inbox_;
   BridgeCore core_;
   EventLog events_;
