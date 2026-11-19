@@ -122,12 +122,13 @@ class Net:
         return bool(self._thread and self._thread.is_alive())
 
     # Starts a refresh unless one runs; done is set when it ended, with its result in result.
-    def start(self, channel, index_serial, serial_of):
+    def start(self, channel, index_serial, serial_of, platform=None):
         if self.busy():
             return
         # A result not taken yet is replaced by the one of this refresh.
         self.done.clear()
-        self._thread = threading.Thread(target=self._run, args=(channel, index_serial, serial_of), daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(channel, index_serial, serial_of, platform),
+                                        daemon=True)
         self._thread.start()
 
     def _run(self, *args):
@@ -140,7 +141,7 @@ class Net:
 
     # Index, then the newest bundle per component newer than serial_of(component) in channel; {result, message,
     # index_serial, index_date}.
-    def refresh(self, channel, index_serial, serial_of):
+    def refresh(self, channel, index_serial, serial_of, platform=None):
         os.makedirs(self.folder, mode=0o700, exist_ok=True)
         new = os.path.join(self.folder, NEW)
         shutil.rmtree(new, ignore_errors=True)
@@ -148,7 +149,7 @@ class Net:
         try:
             index = self._index(new, index_serial)
             failure = None
-            for entry in self._wanted(index["bundles"], channel, serial_of):
+            for entry in self._wanted(index["bundles"], channel, serial_of, platform):
                 try:
                     self._bundle(new, entry)
                 except Failed as why:
@@ -182,11 +183,12 @@ class Net:
         return index
 
     @staticmethod
-    def _wanted(entries, channel, serial_of):
+    def _wanted(entries, channel, serial_of, platform=None):
         best = {}
         for entry in entries:
             component = entry["component"]
-            if entry["channel"] in CHANNELS[channel] and entry["serial"] > serial_of(component):
+            if (entry["channel"] in CHANNELS[channel] and entry["serial"] > serial_of(component)
+                    and origin.fits_platform(entry, platform)):
                 if component not in best or entry["serial"] > best[component]["serial"]:
                     best[component] = entry
         return list(best.values())

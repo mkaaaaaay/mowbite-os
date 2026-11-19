@@ -208,6 +208,13 @@ class InboxTest(Base):
         self.updater.check()
         self.assertEqual(self.updater.status()["components"][0]["available"]["revision"], A)
 
+    def test_another_platform_does_not_hide_this_one(self):
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=tron\n")
+        self.bundle(A, platforms=["tron"])
+        self.bundle(B, platforms=["nx60i"])
+        self.updater.check()
+        self.assertEqual(self.updater.status()["components"][0]["available"]["revision"], A)
+
     def index(self, entries, namespace="mowbite-index"):
         path = os.path.join(self.paths.inbox, origin.INDEX)
         with open(path, "w") as f:
@@ -304,6 +311,14 @@ class NetTest(Base):
 
     def available(self):
         return self.updater.status()["components"][0]["available"]
+
+    # A newer bundle of another platform neither comes down nor hides the one that fits.
+    def test_only_bundles_of_this_platform(self):
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=tron\n")
+        self.index([self.publish(A, "stable", platforms=["tron"]), self.publish(B, "stable", platforms=["nx60i"])])
+        self.refresh()
+        self.assertEqual(self.available()["revision"], A)
+        self.assertFalse(any(path.startswith(f"os-{B}/") for path in self.fetched))
 
     def test_preview_only_in_preview(self):
         self.index([self.publish(A)])

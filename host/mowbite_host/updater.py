@@ -19,7 +19,7 @@ import threading
 import time
 
 import mowbite_host
-from mowbite_host import Refused, bundle, carrier as carriers, compat, files, gate, net
+from mowbite_host import Refused, bundle, carrier as carriers, compat, files, gate, net, origin
 from mowbite_host.compat import app_suffices
 from mowbite_host.installer import HOLD_SECONDS, AppFiles, HostInstaller, Installer, WithPlanner, os_meta, skipped
 
@@ -186,7 +186,9 @@ class Updater:
 
     def _available(self, component):
         have = self.serial_of(component)
-        newer = [c for c in self._candidates if c["component"] == component and c["serial"] > have]
+        platform = self._platform()
+        newer = [c for c in self._candidates if c["component"] == component and c["serial"] > have and
+                 origin.fits_platform(c, platform)]
         if not newer:
             return None
         best = max(newer, key=lambda c: c["serial"])
@@ -344,7 +346,8 @@ class Updater:
         with self._lock:
             self._candidates = candidates
         if fetch and self.net:
-            self.net.start(self.state["origin"]["channel"], self.state["origin"]["index_serial"], self.serial_of)
+            self.net.start(self.state["origin"]["channel"], self.state["origin"]["index_serial"], self.serial_of,
+                           self._platform())
         self._changed()
 
     # From the main loop: the result of a refresh from the net that ended, then its bundles as candidates.

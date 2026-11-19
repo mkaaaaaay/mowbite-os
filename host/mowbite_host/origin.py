@@ -18,7 +18,14 @@ MAX_INDEX = 1024 * 1024
 MAX_PER_COMPONENT = 2
 MAX_BYTES = 1024 * 1024 * 1024
 # What a candidate carries of its bundle.json to tell before the install whether it goes with the OS.
-FIELDS = ("min_app", "version", "api", "api_break", "interface", "files_version")
+FIELDS = ("min_app", "version", "api", "api_break", "interface", "files_version", "platforms")
+
+
+# Whether a candidate (or index entry) goes with the platform of this mower; one without platforms goes with any, and
+# so does every one while the platform is unknown.
+def fits_platform(candidate, platform):
+    platforms = candidate.get("platforms")
+    return not (platform and isinstance(platforms, list) and platforms and platform not in platforms)
 
 
 def sha256(path):
