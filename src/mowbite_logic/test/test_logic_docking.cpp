@@ -553,6 +553,7 @@ TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {
   EXPECT_FALSE(core.TakeDockingLeg());
 }
 
+// A contact while mowing pauses it (DOCK_CONTACT); the way home after the job: AfterTheJobTheMowerBacksOntoTheStation.
 TEST(Docking, AContactWhileMowingPausesIt) {
   TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
@@ -565,25 +566,6 @@ TEST(Docking, AContactWhileMowingPausesIt) {
   }
   EXPECT_TRUE(paused);
   EXPECT_FALSE(core.BladeWanted());
-}
-
-// A contact while mowing pauses it (DOCK_CONTACT); after the end of the job it goes home, and a contact there is the
-// station once the charge holds.
-TEST(Docking, AfterTheEndOfTheJobTheContactsDockOnceTheChargeHolds) {
-  TestCore core = Ready();
-  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
-  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
-  core.TakeEvents();
-  core.OnJobPlanned({}, "fp");
-  core.NextJobStep(0);
-  EXPECT_TRUE(core.Docking());
-  EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
-  core.OnHardwareStatus(At(Healthy(true), 10.0));
-  core.OnHardwareStatus(Charging(11.0));
-  EXPECT_TRUE(core.Docking());
-  core.OnHardwareStatus(Charging(16.0));
-  EXPECT_TRUE(core.Idle());
-  EXPECT_TRUE(Find(core.TakeEvents(), "DOCKED"));
 }
 
 // At the gate without a heading: the gate fails, and no way out is planned from that pose.
