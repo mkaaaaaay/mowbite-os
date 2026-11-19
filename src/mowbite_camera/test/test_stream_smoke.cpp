@@ -160,7 +160,10 @@ TEST(StreamSmoke, ARealSessionTakesAPlaceUntilItIsKicked) {
 
   viewer.Stop();
   const double before = Now();
+  // Stop asks it to end without waiting; it ends on SIGINT well within the grace before SIGKILL.
   media.Stop();
+  std::string how;
+  EXPECT_TRUE(Until([&] { return !media.Running(&how); }, 1.5)) << "the stream server did not end on SIGINT";
   EXPECT_LT(Now() - before, 1.5) << "the stream server did not end on SIGINT";
   EXPECT_TRUE(supervisor.Tick(true));
   camera.Stop();

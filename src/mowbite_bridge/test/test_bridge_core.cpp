@@ -449,43 +449,51 @@ TEST(BridgeCoreCalls, OpenCallsWaitAtMostAndAreBounded) {
     EXPECT_EQ(out.requests.size(), 1u);
     return out.requests.empty() ? std::string("?") : out.requests[0].id;
   };
+  // The answers to the clients only; the bridge sends its events beside them (METHODS_CHANGED).
+  const auto answers = [](const Outbox& out) {
+    std::vector<MqttMessage> found;
+    for (const auto& message : out.mqtt) {
+      if (message.topic == "rpc/response") found.push_back(message);
+    }
+    return found;
+  };
   const std::string first = forward(1);
   now += kCallWaitS - 1;
   const std::string second = forward(2);
   // The first is past its wait: the client gets an error with the next tick.
   now += 2;
   core.Tick(now);
-  Outbox expired = core.Take();
-  ASSERT_EQ(expired.mqtt.size(), 1u);
-  EXPECT_EQ(Json::parse(expired.mqtt[0].payload)["id"], 1);
-  EXPECT_EQ(Json::parse(expired.mqtt[0].payload)["error"]["code"], kInternalError);
+  const auto expired = answers(core.Take());
+  ASSERT_EQ(expired.size(), 1u);
+  EXPECT_EQ(Json::parse(expired[0].payload)["id"], 1);
+  EXPECT_EQ(Json::parse(expired[0].payload)["error"]["code"], kInternalError);
   const std::string third = forward(3);
   core.OnRpcResponse(first, "1");
   core.OnRpcResponse(second, "2");
-  Outbox out = core.Take();
-  ASSERT_EQ(out.mqtt.size(), 1u);
-  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 2);
+  auto out = answers(core.Take());
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(Json::parse(out[0].payload)["id"], 2);
   // With kMaxOpenCalls open the oldest goes, with an error to its client.
   std::string last;
   for (size_t i = 0; i + 1 < kMaxOpenCalls; i++) last = forward(1000 + static_cast<int>(i));
   core.OnMqtt("rpc/request", Json{{"jsonrpc", "2.0"}, {"method", "x"}, {"id", 9999}}.dump(), false);
   const Outbox displaced = core.Take();
-  ASSERT_EQ(displaced.mqtt.size(), 1u);
-  EXPECT_EQ(Json::parse(displaced.mqtt[0].payload)["id"], 3);
+  ASSERT_EQ(answers(displaced).size(), 1u);
+  EXPECT_EQ(Json::parse(answers(displaced)[0].payload)["id"], 3);
   last = displaced.requests.at(0).id;
   core.OnRpcResponse(third, "3");
   core.OnRpcResponse(last, "4");
-  out = core.Take();
-  ASSERT_EQ(out.mqtt.size(), 1u);
-  EXPECT_EQ(Json::parse(out.mqtt[0].payload)["id"], 9999);
+  out = answers(core.Take());
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(Json::parse(out[0].payload)["id"], 9999);
   // A node that drops a method ends its open calls.
   const std::string dropped = forward(4);
   core.OnRpcMethods("mowbite_logic", {"y"});
-  out = core.Take();
+  out = answers(core.Take());
   // The calls still open from above and this one.
-  ASSERT_EQ(out.mqtt.size(), kMaxOpenCalls);
-  EXPECT_EQ(Json::parse(out.mqtt.back().payload)["id"], 4);
-  for (const auto& message : out.mqtt) EXPECT_EQ(Json::parse(message.payload)["error"]["code"], kMethodNotFound);
+  ASSERT_EQ(out.size(), kMaxOpenCalls);
+  EXPECT_EQ(Json::parse(out.back().payload)["id"], 4);
+  for (const auto& message : out) EXPECT_EQ(Json::parse(message.payload)["error"]["code"], kMethodNotFound);
 }
 
 // AS4: only rpc/response/<token> with a token of 1 to 64 of [A-Za-z0-9._-].

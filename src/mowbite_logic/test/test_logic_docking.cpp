@@ -553,16 +553,32 @@ TEST(Docking, AnApproachPointOutsideOfTheAreasFailsAtOnce) {
   EXPECT_FALSE(core.TakeDockingLeg());
 }
 
-TEST(Docking, OnTheContactsAtTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
+TEST(Docking, AContactWhileMowingPausesIt) {
   TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
+  core.TakeEvents();
   core.OnHardwareStatus(At(Healthy(true), 10.0));
+  bool paused = false;
+  for (const auto& event : core.TakeEvents()) {
+    paused = paused || (event.type == "STATE" && event.details.value("reason", "") == "DOCK_CONTACT");
+  }
+  EXPECT_TRUE(paused);
+  EXPECT_FALSE(core.BladeWanted());
+}
+
+// A contact while mowing pauses it (DOCK_CONTACT); one after the end of the job is the station.
+TEST(Docking, OnTheContactsAfterTheEndOfTheJobItIsDockedOnceTheChargeHolds) {
+  TestCore core = Ready();
+  ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
+  ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.TakeEvents();
   core.OnJobPlanned({}, "fp");
   core.NextJobStep(0);
   EXPECT_TRUE(core.Idle());
   EXPECT_EQ(Types(core.TakeEvents()), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
+  core.OnHardwareStatus(At(Healthy(true), 10.0));
+  core.TakeEvents();
   EXPECT_FALSE(core.TakeDockingLeg());
   core.OnHardwareStatus(Charging(11.0));
   core.OnHardwareStatus(Charging(16.0));

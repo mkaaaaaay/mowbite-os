@@ -91,7 +91,10 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
                                                                {"STATE SCHEDULE", {"info", "user"}},
                                                                {"AREA_SKIPPED SCHEDULE", {"info", "auto"}},
                                                                // The hold for obstacles of api 51 goes on by itself.
-                                                               {"STATE OBSTACLE", {"warning", "auto"}}};
+                                                               {"STATE OBSTACLE", {"warning", "auto"}},
+                                                               // New in api 53.
+                                                               {"CALIBRATION_FAILED POSITION_JUMP", {"warning", "user"}},
+                                                               {"EMERGENCY_RESET_REFUSED SILENT", {"warning", "user"}}};
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED", "CALIBRATION_REFUSED",
                             "CALIBRATION_FAILED", "STATE", "DRIVE", "POSITION_JUMP", "AREA_SKIPPED", "UNDOCKING_FAILED",
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {

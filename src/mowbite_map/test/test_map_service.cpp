@@ -181,13 +181,18 @@ TEST(MapService, LoadsTheStoredMapAfterARestart) {
 TEST(MapService, RefusesAWrongParameterList) {
   TempDir dir;
   MapService service = Started(ConfigFor(dir));
-  for (const json& params : {json(), json::array(), json::array({AppMap(), AppMap()}), json(AppMap())}) {
+  for (const json& params : {json(), json::array(), json::array({AppMap(), json::object(), 1}), json(AppMap())}) {
     auto answer = service.Call("map.replace", params);
     ASSERT_TRUE(answer.has_value());
     EXPECT_FALSE(answer->ok);
     EXPECT_EQ(answer->code, -32602);
     EXPECT_EQ(answer->message, "Missing map parameter");
   }
+  // A second parameter other than {expected_sha256}, such as a second map.
+  auto answer = service.Call("map.replace", json::array({AppMap(), AppMap()}));
+  ASSERT_TRUE(answer.has_value());
+  EXPECT_EQ(answer->code, -32602);
+  EXPECT_NE(answer->message.find("expected_sha256"), std::string::npos) << answer->message;
 }
 
 TEST(MapService, RefusesAnInvalidMapWithTheReasonAndChangesNothing) {
