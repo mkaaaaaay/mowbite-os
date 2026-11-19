@@ -41,6 +41,8 @@ AUTO_AGAIN = 20 * 3600.0
 SETTLED = ("active", "inactive", "failed")
 # A revision cut off this often during its switch (power cut) is blocked.
 MAX_ATTEMPTS = 2
+# An unfinished switch whose hold the OS refused is undone at the earliest this long after.
+RECOVER_RETRY = 5 * 60.0
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
 ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
 IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
@@ -102,6 +104,9 @@ class Updater:
         self._candidates = []
         # Whether a hold of this updater may stand: asked for at the gate or written by the switch.
         self._holding = False
+        # Monotonic time before which recover_due does not ask the OS for its hold again; why each component waits.
+        self._recover_after = 0.0
+        self._recover_waits = {}
         self._bad_app_logged = False
         self.gate_wait = GATE_WAIT
         self.state = self._load()
@@ -723,7 +728,15 @@ class Updater:
         if state != "active" or gate.off(self.paths, started) is not None:
             return None
         jobs = component == "planner"
-        return self._closed(jobs, True, recovering=True) or self._ask_hold(jobs, recovering=True)
+        why = self._closed(jobs, True, recovering=True)
+        if why is not None:
+            return why
+        if self.judges_by_broker and not self.connected():
+            return "NO_BROKER", "the broker is not connected"
+        why = self._ask_hold(jobs, recovering=True)
+        if why is not None:
+            self._recover_after = time.monotonic() + RECOVER_RETRY
+        return why
 
     # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
     # times is blocked.
@@ -732,8 +745,11 @@ class Updater:
             if os.path.lexists(installer.place.pending):
                 why = self._recover_gate(component)
                 if why is not None:
-                    print(f"{component}: an unfinished update waits for the gate: {why[1]}", flush=True)
+                    if self._recover_waits.get(component) != why:
+                        print(f"{component}: an unfinished update waits for the gate: {why[1]}", flush=True)
+                    self._recover_waits[component] = why
                     continue
+            self._recover_waits.pop(component, None)
             try:
                 pending = installer.recover(start_stopped)
             finally:
@@ -751,7 +767,7 @@ class Updater:
 
     # From the main loop: an unfinished switch that waits for the gate is undone once it opens.
     def recover_due(self):
-        if self.busy() or not gate.unfinished(self.paths):
+        if self.busy() or time.monotonic() < self._recover_after or not gate.unfinished(self.paths):
             return
         self.recover()
 

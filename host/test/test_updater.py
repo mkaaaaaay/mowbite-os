@@ -903,6 +903,28 @@ class FlowTest(Base):
         self.assertTrue(self.fake.running)
         self.assertFalse(os.path.exists(self.paths.hold))
 
+    # One that waited while the OS stopped is undone at the next look; after a refused hold not before RECOVER_RETRY.
+    def test_recover_due_asks_again_only_after_a_refused_hold(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        holds = len(self.fake.holds)
+        self.fake.state = "deactivating"
+        self.updater.recover()
+        self.assertEqual(len(self.fake.holds), holds)
+        self.fake.state = None
+        self.fake.grant = False
+        self.updater.recover_due()
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
+        holds = len(self.fake.holds)
+        self.fake.grant = True
+        self.updater.recover_due()
+        self.assertEqual(len(self.fake.holds), holds)
+        self.updater._recover_after = 0.0
+        self.updater.recover_due()
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
     def test_left_installations_go_before_the_space_check(self):
         self.install(A)
         self.left_behind()

@@ -583,8 +583,10 @@ class EndToEnd(unittest.TestCase):
         self.check()
         self.app.call("update.start", component="host")
         self.assertEqual(self.host.wait(WAIT), 0)
-        self.start_host(seed=True, wait=False)
-        self.assertNotEqual(self.host.wait(WAIT), 0)
+        # A broken host gets two tries (MAX_TRIES of mowbite_boot), the next start goes back.
+        for _ in range(2):
+            self.start_host(seed=True, wait=False)
+            self.assertNotEqual(self.host.wait(WAIT), 0)
         self.start_host(seed=True)
         self.app.wait(lambda: (self.app.update().get("last") or {}).get("revision") == C, "result of the way back")
         last = self.app.update()["last"]
