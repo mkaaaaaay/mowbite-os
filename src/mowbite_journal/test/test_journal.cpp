@@ -592,6 +592,17 @@ TEST_F(TimelineTest, KeepsToTheWindow) {
   EXPECT_EQ(methods, 10);
 }
 
+TEST_F(TimelineTest, TheLineOfTheCutCountsToo) {
+  const std::string full = Run(INT64_MIN, INT64_MAX, 1 << 20);
+  size_t fixed = 0;
+  for (const auto& line : Lines(full)) {
+    if (!line.contains("method")) fixed += line.dump().size() + 1;
+  }
+  for (size_t max_bytes = fixed + 20; max_bytes <= full.size(); ++max_bytes) {
+    EXPECT_LE(Run(INT64_MIN, INT64_MAX, max_bytes).size(), max_bytes);
+  }
+}
+
 TEST_F(TimelineTest, CutsTheEarliestMethodsFirstAndKeepsTheViews) {
   const std::string full = Run(INT64_MIN, INT64_MAX, 1 << 20);
   size_t fixed = 0;

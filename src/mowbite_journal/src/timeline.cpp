@@ -202,11 +202,13 @@ std::string Timeline(const std::vector<std::string>& run_dirs, int64_t from_ns, 
   std::sort(calls.begin(), calls.end(), [](const Call& a, const Call& b) {
     return std::tie(a.t_ns, a.run, a.seq) > std::tie(b.t_ns, b.run, b.seq);
   });
+  // Room for the line that says how many were cut, unless the last call fits too.
+  const size_t marker = std::string("{\"truncated\":}\n").size() + std::to_string(calls.size()).size();
   size_t kept = 0;
   for (; kept < calls.size(); ++kept) {
     const Call& call = calls[kept];
     std::string text = Text(call.t_ns, *call.process, *call.stream, "method", Dump(*call.method));
-    if (used + text.size() + 1 > max_bytes) break;
+    if (used + text.size() + 1 + (kept + 1 < calls.size() ? marker : 0) > max_bytes) break;
     used += text.size() + 1;
     lines.push_back({call.t_ns, call.run, call.seq, std::move(text)});
   }
