@@ -70,9 +70,9 @@ void SyncDirectory(const std::string& dir) {
 
 struct ReadResult {
   std::optional<MapData> map;
+  std::string sha256;
   // Empty if the file is missing or fine.
   std::string problem;
-  std::string sha256;
 };
 
 ReadResult ReadMap(const fs::path& path, size_t max_bytes) {
@@ -81,16 +81,17 @@ ReadResult ReadMap(const fs::path& path, size_t max_bytes) {
   if (ec) return {};
   const std::string name = path.filename().string();
   if (size > max_bytes) {
-    return {std::nullopt, name + " has " + std::to_string(size) + " bytes, the limit is " + std::to_string(max_bytes)};
+    return {std::nullopt, "",
+            name + " has " + std::to_string(size) + " bytes, the limit is " + std::to_string(max_bytes)};
   }
   std::ifstream file(path, std::ios::binary);
-  if (!file) return {std::nullopt, "cannot read " + name};
+  if (!file) return {std::nullopt, "", "cannot read " + name};
   const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   const json parsed = json::parse(text, nullptr, false);
-  if (parsed.is_discarded()) return {std::nullopt, name + " is not valid JSON"};
+  if (parsed.is_discarded()) return {std::nullopt, "", name + " is not valid JSON"};
   ParseResult result = ParseMap(parsed);
-  if (!result.map) return {std::nullopt, name + ": " + result.error};
-  return {std::move(result.map), "", Sha256Hex(text)};
+  if (!result.map) return {std::nullopt, "", name + ": " + result.error};
+  return {std::move(result.map), Sha256Hex(text), ""};
 }
 
 }  // namespace
@@ -163,20 +164,20 @@ MapStore::LoadedDatum MapStore::LoadDatum() const {
   std::error_code ec;
   const auto size = fs::file_size(path, ec);
   if (ec) return {};
-  if (size > kDatumMaxBytes) return {std::nullopt, std::string(kDatumFile) + " is too large"};
+  if (size > kDatumMaxBytes) return {std::nullopt, "", std::string(kDatumFile) + " is too large"};
   std::ifstream file(path, std::ios::binary);
-  if (!file) return {std::nullopt, std::string("cannot read ") + kDatumFile};
+  if (!file) return {std::nullopt, "", std::string("cannot read ") + kDatumFile};
   const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
   const json parsed = json::parse(text, nullptr, false);
   if (parsed.is_discarded() || !parsed.is_object()) {
-    return {std::nullopt, std::string(kDatumFile) + " is not valid JSON"};
+    return {std::nullopt, "", std::string(kDatumFile) + " is not valid JSON"};
   }
   const auto schema = parsed.find("schema");
   if (schema == parsed.end() || !schema->is_number_integer()) {
-    return {std::nullopt, std::string(kDatumFile) + " has no schema"};
+    return {std::nullopt, "", std::string(kDatumFile) + " has no schema"};
   }
   if (schema->get<long long>() != kDatumSchema) {
-    return {std::nullopt, std::string(kDatumFile) + " has the schema " + std::to_string(schema->get<long long>()) +
+    return {std::nullopt, "", std::string(kDatumFile) + " has the schema " + std::to_string(schema->get<long long>()) +
                               ", this version reads " + std::to_string(kDatumSchema)};
   }
   Datum datum;
@@ -185,16 +186,16 @@ MapStore::LoadedDatum MapStore::LoadDatum() const {
   for (const auto& [key, field] : fields) {
     const auto value = parsed.find(key);
     if (value == parsed.end() || !value->is_number()) {
-      return {std::nullopt, std::string(kDatumFile) + " holds no valid datum"};
+      return {std::nullopt, "", std::string(kDatumFile) + " holds no valid datum"};
     }
     *field = value->get<double>();
   }
-  if (!IsValid(datum)) return {std::nullopt, std::string(kDatumFile) + " holds no valid datum"};
+  if (!IsValid(datum)) return {std::nullopt, "", std::string(kDatumFile) + " holds no valid datum"};
   const auto sha = parsed.find("map_sha256");
   if (sha != parsed.end() && (!sha->is_string() || !IsSha256Hex(sha->get<std::string>()))) {
-    return {std::nullopt, std::string(kDatumFile) + " holds no valid map_sha256"};
+    return {std::nullopt, "", std::string(kDatumFile) + " holds no valid map_sha256"};
   }
-  return {datum, "", sha != parsed.end() ? sha->get<std::string>() : ""};
+  return {datum, sha != parsed.end() ? sha->get<std::string>() : "", ""};
 }
 
 std::string MapStore::SaveDatum(const Datum& datum, const std::string& map_sha256) {
