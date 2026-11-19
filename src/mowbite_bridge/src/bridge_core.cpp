@@ -22,6 +22,9 @@ constexpr int kRefusedProtocol311 = 1;
 constexpr int kRefusedProtocol5 = 0x84;
 constexpr char kEventsTopic[] = "events/json";
 constexpr std::size_t kMaxDataDepth = 64;
+// The host offers a handful of methods: more, or longer names, would only bloat rpc.methods and METHODS_CHANGED.
+constexpr std::size_t kMaxHostMethods = 32;
+constexpr std::size_t kMaxMethodBytes = 64;
 
 }  // namespace
 
@@ -213,7 +216,10 @@ void BridgeCore::OnHostStatus(std::string_view payload) {
   if (status.is_object() && status.value("online", Json()) == Json(true) && status.contains("methods") &&
       status["methods"].is_array()) {
     for (const auto& method : status["methods"]) {
-      if (method.is_string()) methods.push_back(method.get<std::string>());
+      if (methods.size() >= kMaxHostMethods) break;
+      if (method.is_string() && method.get_ref<const std::string&>().size() <= kMaxMethodBytes) {
+        methods.push_back(method.get<std::string>());
+      }
     }
   }
   const std::size_t before = methods_.All().size();

@@ -334,6 +334,17 @@ TEST_F(Core, MethodsOfTheHostAreNeverAnsweredWhileItIsOnline) {
   }
 }
 
+TEST_F(Core, MethodsOfTheHostAreLimitedInNumberAndLength) {
+  Json names = Json::array({"update." + std::string(100, 'x')});
+  for (int i = 0; i < 100; ++i) names.push_back("update.m" + std::to_string(i));
+  core_.OnMqtt("mowbite/host/status", Json{{"online", true}, {"methods", names}}.dump(), false);
+  const Json methods = Call(core_, "rpc.methods")["result"];
+  EXPECT_EQ(std::count_if(methods.begin(), methods.end(),
+                          [](const Json& m) { return m.get<std::string>().rfind("update.", 0) == 0; }),
+            32);
+  EXPECT_EQ(std::find(methods.begin(), methods.end(), names[0]), methods.end());
+}
+
 TEST(BridgeCoreConnection, TheStatusOfTheBridgeGoesOfflineAtTheEnd) {
   BridgeCore core({});
   core.Connected();
