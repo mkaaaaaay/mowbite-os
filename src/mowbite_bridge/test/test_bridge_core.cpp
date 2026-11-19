@@ -202,7 +202,10 @@ TEST_F(Core, ActionWithANulByteIsDropped) {
   EXPECT_EQ(out.actions, (std::vector<std::string>{"mower_logic/a"}));
   ASSERT_EQ(out.logs.size(), 1u);
   EXPECT_EQ(out.logs[0].level, kLogWarn);
-  EXPECT_EQ(out.logs[0].text, "Bridge: an action with a NUL byte was dropped");
+  EXPECT_EQ(out.logs[0].text, "Bridge: 1 action(s) with a NUL byte dropped");
+  // More within the minute: no line each.
+  for (int i = 0; i < 100; ++i) core_.OnMqtt("action", std::string("x\0", 2), false);
+  EXPECT_TRUE(core_.Take().logs.empty());
 }
 
 // B7

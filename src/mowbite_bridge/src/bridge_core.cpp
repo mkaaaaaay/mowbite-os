@@ -25,6 +25,7 @@ constexpr std::size_t kMaxDataDepth = 64;
 // The host offers a handful of methods: more, or longer names, would only bloat rpc.methods and METHODS_CHANGED.
 constexpr std::size_t kMaxHostMethods = 32;
 constexpr std::size_t kMaxMethodBytes = 64;
+constexpr double kNulLogPeriodS = 60;
 
 }  // namespace
 
@@ -166,7 +167,14 @@ void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool
     if (topic == "action") {
       // A NUL byte breaks the ROS publisher for good; no action id has one.
       if (payload.find('\0') != std::string_view::npos) {
-        Log(kLogWarn, "Bridge: an action with a NUL byte was dropped");
+        // One line a minute at most, with the count: a flood would push the real warnings out of logs.recent.
+        ++nul_actions_;
+        const double now = Now();
+        if (!nul_logged_ || now - *nul_logged_ >= kNulLogPeriodS) {
+          Log(kLogWarn, "Bridge: " + std::to_string(nul_actions_) + " action(s) with a NUL byte dropped");
+          nul_actions_ = 0;
+          nul_logged_ = now;
+        }
       } else {
         out_.actions.push_back(CleanUtf8(payload));
       }

@@ -228,6 +228,9 @@ class BridgeCore {
   // provider was missing in.
   std::map<std::string, std::string> node_provider_;
   std::map<std::string, std::string> action_provider_;
+  // Actions with a NUL byte dropped since the last line about them, and when that was.
+  std::size_t nul_actions_ = 0;
+  std::optional<double> nul_logged_;
   std::map<std::string, std::string> sensor_provider_;
   std::map<std::string, int> missed_;
   std::map<std::string, LocalMethod> local_;
