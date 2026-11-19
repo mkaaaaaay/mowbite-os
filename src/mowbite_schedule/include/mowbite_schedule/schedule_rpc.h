@@ -12,6 +12,8 @@ namespace mowbite_schedule {
 // schedule.set named another version than the one stored.
 constexpr int kVersionChanged = -32001;
 constexpr int kInvalidParams = -32602;
+// The change could not be stored: it holds until the OS restarts, then the stored one comes back.
+constexpr int kInternalError = -32603;
 
 // A refused call: its code, text and data (null for none).
 struct RpcError {

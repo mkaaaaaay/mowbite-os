@@ -431,6 +431,9 @@ class ScheduleNode : public rclcpp::Node {
       }
       if (!error) {
         Carry();
+        error = Stored();
+      }
+      if (!error) {
         const ScheduleFile& file = core_.View().file();
         RCLCPP_INFO(get_logger(), "schedule.set: version %lld, %s, %zu plan(s)", static_cast<long long>(file.version),
                     file.schedule.enabled ? "on" : "off", file.schedule.plans.size());
@@ -451,6 +454,7 @@ class ScheduleNode : public rclcpp::Node {
           error = InvalidError(*invalid);
         }
         Carry();
+        if (!error) error = Stored();
       }
       if (!error) result = LeftoversToJson(core_.View().file().leftovers);
     }
@@ -462,6 +466,15 @@ class ScheduleNode : public rclcpp::Node {
     response.id = request.id;
     response.result = result.dump();
     response_pub_->publish(response);
+  }
+
+  // A change is answered once schedule.json is on the disk (an off or a pause has to survive a restart).
+  std::optional<RpcError> Stored() {
+    if (data_dir_.empty() || writer_.WaitFor(PathOf(kFile), kMarkWait) == mowbite_hold::FileWriter::Wait::kWritten) {
+      return std::nullopt;
+    }
+    return RpcError{kInternalError, "The change holds until the OS restarts: " + PathOf(kFile) + " was not stored",
+                    nullptr};
   }
 
   void Refuse(const std::string& id, const RpcError& error) {
