@@ -151,6 +151,21 @@ TEST(CheckEvent, ClientAndSource) {
   EXPECT_TRUE(Has(CheckEvent("COMMAND_REFUSED", Json::object()), "does not know"));
 }
 
+// The items of a list of one type are checked too.
+TEST(CheckParams, ItemsOfAListOfOneType) {
+  int checked = 0;
+  for (const Command& command : Commands()) {
+    for (const Field& list : command.params) {
+      if (list.type != Type::kArray || !list.fields.empty() || list.items != Type::kString) continue;
+      std::string field;
+      const std::string problem = CheckParams(command, Json{{list.name, Json::array({7})}}, &field);
+      EXPECT_NE(problem.find(list.name + "[0]: string expected"), std::string::npos) << command.name << problem;
+      ++checked;
+    }
+  }
+  EXPECT_GT(checked, 0);
+}
+
 // A list of rows: each one an object of the fields of the catalog.
 TEST(CheckParams, EachRowOfAListOfObjects) {
   const Command& start = *FindCommand("mowing.start");

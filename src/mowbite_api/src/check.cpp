@@ -62,6 +62,15 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
       !std::regex_search(value.get<std::string>(), std::regex(field.pattern, std::regex::ECMAScript))) {
     problems->push_back(where + "." + field.name + ": " + value.dump() + " does not match " + field.pattern);
   }
+  if (field.type == Type::kArray && field.fields.empty() && field.items && *field.items != Type::kAny) {
+    for (size_t i = 0; i < value.size(); ++i) {
+      if (!HasType(value[i], *field.items)) {
+        problems->push_back(where + "." + field.name + "[" + std::to_string(i) + "]: " + TypeName(*field.items) +
+                            " expected, got " + value[i].dump());
+      }
+    }
+    return;
+  }
   if (field.type == Type::kArray && !field.fields.empty()) {
     // Each row is an object of these fields.
     Field row = field;
