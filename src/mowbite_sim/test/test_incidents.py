@@ -154,7 +154,12 @@ class TestIncidents(unittest.TestCase):
         p.result("notify.set", {"server": "http://127.0.0.1:9", "topic": "decoy_topic", "token": TOKEN, "lang": "en",
                                 "events": ["emergency"]})
         p.result("notify.push_add", {"address": PUSH})
-        status = p.result("journal.status")
+        # The runs are listed every kIncidentRunsEvery (10 s): the first list may come before the journals.
+        def active():
+            status = p.result("journal.status")
+            return status if status["active"] > 0 else None
+
+        status = wait_until(active, 15, poll=0.5) or p.result("journal.status")
         self.assertTrue(status["enabled"], status)
         self.assertEqual(status["problem"], "", status)
         self.assertGreater(status["active"], 0, status)
