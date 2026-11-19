@@ -54,6 +54,9 @@ double MonotonicSeconds() {
   return duration<double>(steady_clock::now().time_since_epoch()).count();
 }
 
+// A fix that waited longer than this in the queue (s, by its stamp) is dropped: it is no position of now.
+constexpr double kMaxFixAge = 0.5;
+
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
 }
@@ -101,7 +104,9 @@ class LocalizationNode : public rclcpp::Node {
     wheel_sub_ = create_subscription<geometry_msgs::msg::TwistStamped>(
         "hw/wheel_odom", 10, [this](geometry_msgs::msg::TwistStamped::ConstSharedPtr msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          estimator_.Call<&Estimator::AddWheels>(MonotonicSeconds(), msg->twist.linear.x, msg->twist.angular.z);
+          const double now = MonotonicSeconds();
+          wheels_t_ = std::clamp(now - AgeOf(msg->header.stamp), wheels_t_, now);
+          estimator_.Call<&Estimator::AddWheels>(wheels_t_, msg->twist.linear.x, msg->twist.angular.z);
         });
     gps_sub_ = create_subscription<GnssMsg>(
         "gps/absolute_pose", 10, [this](GnssMsg::ConstSharedPtr msg) { OnGps(*msg); });
@@ -289,9 +294,11 @@ class LocalizationNode : public rclcpp::Node {
   void OnImu(const GyroMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
+    // Samples that waited in the queue keep their spacing by their stamps.
+    imu_t_ = std::clamp(now - AgeOf(msg.header.stamp), imu_t_, now);
     AddTilt(msg, now);
     const bool was_calibrated = estimator_.View().calibrated();
-    const bool moved = estimator_.Call<&Estimator::AddImu>(now, msg.angular_velocity.z);
+    const bool moved = estimator_.Call<&Estimator::AddImu>(imu_t_, msg.angular_velocity.z);
     for (const auto& warning : estimator_.Call<&Estimator::TakeGyroWarnings>()) {
       RCLCPP_WARN(get_logger(), "%s", warning.c_str());
     }
@@ -302,6 +309,12 @@ class LocalizationNode : public rclcpp::Node {
     if (dock_) dock_->Call<&DockEstimator::AddMotion>(estimator_.View().motion());
     Publish(now);
     PublishDock(now);
+  }
+
+  // Age of a stamp on the ROS clock (s); 0 without a stamp or for one from the future.
+  double AgeOf(const builtin_interfaces::msg::Time& stamp) {
+    if (stamp.sec == 0 && stamp.nanosec == 0) return 0.0;
+    return std::max(0.0, (this->now() - rclcpp::Time(stamp, get_clock()->get_clock_type())).seconds());
   }
 
   // Called with the mutex held: the tilt from the orientation of the IMU, else from its gravity, ten times a second.
@@ -322,6 +335,11 @@ class LocalizationNode : public rclcpp::Node {
 
   void OnGps(const GnssMsg& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
+    const double age = AgeOf(msg.header.stamp);
+    if (age > kMaxFixAge) {
+      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 10000, "GPS fix dropped: %.2f s old on arrival", age);
+      return;
+    }
     GnssFix fix;
     fix.solution = msg.solution;
     fix.accuracy = msg.accuracy;
@@ -560,6 +578,9 @@ class LocalizationNode : public rclcpp::Node {
   GravityFilter gravity_filter_;
   Tilt imu_mounting_;
   std::optional<double> tilt_sent_;
+  // Times of the last IMU sample and wheel report on the monotonic clock, by their stamps.
+  double imu_t_ = 0;
+  double wheels_t_ = 0;
   double driver_ticks_per_m_ = 0;
   double ticks_per_m_ = 0;
   rclcpp::Service<mowbite_msgs::srv::SetPose>::SharedPtr set_pose_srv_;
