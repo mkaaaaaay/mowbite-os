@@ -119,7 +119,7 @@ class Probe(SimProbe):
         time.sleep(0.3)
         self.flags(place=DOCKED, **flags)
         assert self.wait(lambda: self.hw and self.hw.dock_contact, 10), "no contact on the station"
-        assert self.wait(lambda: self.pose and self.pose.position_accuracy <= 0.03
+        assert self.wait(lambda: self.pose and self.pose.position_accuracy_at_heading <= 0.03
                          and abs(self.pose.x + 1.0) < 0.05, 30), "no RTK position there"
         assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE", 10)
         self.flags(**flags)
@@ -392,8 +392,8 @@ class TestDock(Base):
     def test_09_a_nearly_full_battery_needs_no_charge_current(self):
         p = self.probe
         p.flags(battery_percentage=97, charge_current=0.0)
-        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy < 0.03 and abs(p.pose.x - 0.5) < 0.05, 30),
-                        p.pose)
+        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy_at_heading < 0.03
+                               and abs(p.pose.x - 0.5) < 0.05, 30), p.pose)
         since = len(p.events)
         self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
         self.assertIsNotNone(p.event(since, "DOCKED", 150), p.events[since:])

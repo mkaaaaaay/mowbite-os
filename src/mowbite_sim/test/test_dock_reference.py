@@ -201,7 +201,7 @@ class TestDockReference(unittest.TestCase):
         # Back onto the contacts by hand for the checks that follow.
         p.flags(place=[-1.0, 0.0, 0.0])
         self.assertTrue(p.wait(lambda: p.hw.dock_contact and abs(p.truth()["x"] + 1.0) < 0.001, 10), p.truth())
-        self.assertTrue(p.wait(lambda: p.pose.position_accuracy <= 0.03
+        self.assertTrue(p.wait(lambda: p.pose.position_accuracy_at_heading <= 0.03
                                and abs(p.pose.x + 1.0) < 0.05, 20), (p.pose.x, p.pose.y))
 
     def test_04_a_moved_station_is_a_reference_mismatch(self):

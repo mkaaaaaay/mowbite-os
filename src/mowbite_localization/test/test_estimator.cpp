@@ -429,6 +429,8 @@ TEST(L5Outliers, ContradictingFixesSetThePositionAfterFiveInARow) {
   EXPECT_TRUE(w.est.heading_valid());
   // The fix, and the loosened heading over the lever of 0.1 m.
   EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02 + EstimatorConfig().disturbed_heading_sigma * 0.1, 1e-9);
+  // Without that part, for the reference check on a station that sets the heading.
+  EXPECT_NEAR(w.est.PositionAccuracyAtHeading(w.t), 0.02, 1e-9);
   const auto jump = w.est.TakeJump();
   ASSERT_TRUE(jump);
   EXPECT_EQ(jump->reason, WarmupReason::kOutliers);
@@ -597,6 +599,7 @@ TEST(L7Accuracy, TheHeadingCountsOnlyWhenValid) {
   w.Ready();
   EXPECT_FALSE(w.est.heading_valid());
   EXPECT_NEAR(w.est.PositionAccuracy(w.t), 0.02, 1e-9);
+  EXPECT_NEAR(w.est.PositionAccuracyAtHeading(w.t), 0.02, 1e-9);
   World aligned;
   aligned.Aligned();
   EXPECT_TRUE(aligned.est.heading_valid());

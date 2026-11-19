@@ -895,14 +895,18 @@ Reason LogicCore::AccuracyReason(float accuracy, double limit) const {
 
 Reason LogicCore::PositionProblem() const {
   if (!pose_) return Reason("NO_POSITION", "No position from the localization");
-  // On the docking station the reference check sets the heading, and it wants a better position.
-  const double limit = DockContact() ? DockAccuracyLimit() : config_.max_position_accuracy;
-  if (!(pose_->position_accuracy <= limit)) {
-    Reason why = AccuracyReason(pose_->position_accuracy, limit);
-    if (DockContact()) why.message += " on the docking station";
+  // On the docking station the reference check sets the heading, and it wants a better position; until then the
+  // spread of the heading counts not.
+  const bool docked = DockContact();
+  const double limit = docked ? DockAccuracyLimit() : config_.max_position_accuracy;
+  const float accuracy =
+      docked ? std::min(pose_->position_accuracy, pose_->position_accuracy_at_heading) : pose_->position_accuracy;
+  if (!(accuracy <= limit)) {
+    Reason why = AccuracyReason(accuracy, limit);
+    if (docked) why.message += " on the docking station";
     return why;
   }
-  if (!pose_->orientation_valid && !DockContact()) {
+  if (!pose_->orientation_valid && !docked) {
     return Reason("NO_HEADING", "The heading is not aligned yet");
   }
   return {};

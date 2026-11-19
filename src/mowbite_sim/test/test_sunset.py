@@ -126,8 +126,8 @@ class TestSunset(unittest.TestCase):
         since = len(p.events)
         p.flags(place=DOCKED)
         self.assertTrue(p.wait(lambda: p.hw and p.hw.dock_contact, 10), "no contact on the station")
-        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy <= 0.03 and abs(p.pose.x + 1.0) < 0.05,
-                               30), "no RTK position there")
+        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy_at_heading <= 0.03
+                               and abs(p.pose.x + 1.0) < 0.05, 30), "no RTK position there")
         p.flags()
         self.assertIsNotNone(p.event(since, "DOCKED", 30), p.events[since:])
 

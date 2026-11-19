@@ -108,7 +108,7 @@ class Probe(SimProbe):
         time.sleep(0.3)
         self.flags(place=DOCKED)
         assert self.wait(lambda: self.hw and self.hw.dock_contact, 10), "no contact on the station"
-        assert self.wait(lambda: self.pose and self.pose.position_accuracy <= 0.03
+        assert self.wait(lambda: self.pose and self.pose.position_accuracy_at_heading <= 0.03
                          and abs(self.pose.x + 1.0) < 0.05, 30), "no RTK position there"
         assert self.wait(lambda: self.robot and self.robot.current_state == "IDLE", 10)
         self.flags()

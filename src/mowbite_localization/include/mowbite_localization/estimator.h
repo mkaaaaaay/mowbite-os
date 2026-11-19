@@ -151,6 +151,8 @@ class Estimator {
   // A fix counted (warmup included) within gps_timeout before t.
   bool RecentGps(double t) const;
   double PositionAccuracy(double t) const;
+  // PositionAccuracy without the part of the heading: what a check needs that sets the heading itself (on the station).
+  double PositionAccuracyAtHeading(double t) const;
   // s since the estimate took its last fix, kNoAccuracy without one.
   double FixAge(double t) const;
   bool geometry_known() const { return geometry_known_; }

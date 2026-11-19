@@ -123,7 +123,8 @@ class TestDockFront(unittest.TestCase):
         request.pose.position.x, request.pose.position.y = DOCKED[0], DOCKED[1]
         request.pose.orientation.z, request.pose.orientation.w = 1.0, 0.0
         p.call(p.set_pose, request)
-        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy <= 0.03 and abs(p.pose.x + 1.0) < 0.05, 30))
+        self.assertTrue(p.wait(lambda: p.pose and p.pose.position_accuracy_at_heading <= 0.03
+                               and abs(p.pose.x + 1.0) < 0.05, 30))
         p.flags(dock_hollow_speed=0.0)
         self.assertIsNotNone(p.event(since, "DOCKED", 20), p.events[since:])
         # Docking is offered with the contacts in front too.

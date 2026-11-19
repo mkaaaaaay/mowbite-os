@@ -194,6 +194,25 @@ TEST(Undock, TheNodeRefusesAStartWhoseCheckCameBack) {
   EXPECT_EQ(core.RefuseDockCheck(Reason("PLANNER_MISSING", "")).code, "STOPPED");
 }
 
+// Carried onto the station the heading is loose: its part counts not, the reference check sets it.
+TEST(Undock, OnTheStationOnlyThePositionWithoutTheHeadingCounts) {
+  TestCore core = Docked();
+  PoseSnapshot loose = PoseAt(kDock.x, kDock.y, 0.052f);
+  loose.orientation_accuracy = 0.35f;
+  loose.position_accuracy_at_heading = 0.02f;
+  core.OnPose(loose);
+  EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().message;
+  loose.position_accuracy_at_heading = 0.04f;
+  core.OnPose(loose);
+  EXPECT_EQ(core.StartProblem().code, "POSITION_ACCURACY");
+  // Off the station the whole of it counts.
+  core.OnHardwareStatus(Healthy(false));
+  loose.position_accuracy = 0.2f;
+  loose.position_accuracy_at_heading = 0.02f;
+  core.OnPose(loose);
+  EXPECT_EQ(core.StartProblem().code, "POSITION_ACCURACY");
+}
+
 TEST(Undock, ACheckThatPassesStartsWithChargingOff) {
   TestCore core = Docked();
   StartUndocking(core);

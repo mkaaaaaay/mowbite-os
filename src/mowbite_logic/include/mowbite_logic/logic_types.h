@@ -60,6 +60,8 @@ struct PoseSnapshot {
   float position_accuracy = 999;
   float orientation_accuracy = 999;
   bool orientation_valid = false;
+  // position_accuracy without the part of the heading, for the station: its reference check sets the heading.
+  float position_accuracy_at_heading = 999;
 };
 
 // The calibration drive: before a start a position this accurate (m) with a heading and min_battery percent of

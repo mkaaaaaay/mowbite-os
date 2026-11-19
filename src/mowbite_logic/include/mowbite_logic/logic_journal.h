@@ -78,8 +78,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot::Motor, ok, rpm, current, te
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(HardwareSnapshot, telemetry_ok, emergency, emergency_reason, rain, dock_contact,
                                    dock_contact_raw, hold, battery_ok, battery_voltage, battery_current,
                                    battery_percentage, battery_temperature, blade, left, right, time_s)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(PoseSnapshot, x, y, heading, position_accuracy, orientation_accuracy,
-                                   orientation_valid)
+// With defaults: journals before position_accuracy_at_heading have none.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(PoseSnapshot, x, y, heading, position_accuracy, orientation_accuracy,
+                                                orientation_valid, position_accuracy_at_heading)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationConfig, max_position_accuracy, min_battery, status_timeout, timeout)
 // With defaults: driving around objects came later, journals from before stay readable.
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(ObstacleConfig, free_wait, near_wait, near_ahead, stale, avoid_wait,

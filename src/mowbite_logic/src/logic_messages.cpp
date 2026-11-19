@@ -108,6 +108,9 @@ PoseSnapshot ToPose(const mowbite_msgs::msg::RobotPose& msg) {
   pose.position_accuracy = msg.position_accuracy;
   pose.orientation_accuracy = msg.heading_accuracy;
   pose.orientation_valid = msg.heading_valid;
+  // A publisher that leaves it out (0) gets no allowance for the heading.
+  pose.position_accuracy_at_heading =
+      msg.position_accuracy_at_heading > 0 ? msg.position_accuracy_at_heading : msg.position_accuracy;
   return pose;
 }
 

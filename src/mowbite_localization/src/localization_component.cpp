@@ -475,6 +475,7 @@ class LocalizationNode : public rclcpp::Node {
     msg.heading = WrapAngle(pose.heading);
     msg.heading_valid = estimator_.View().heading_valid();
     msg.position_accuracy = static_cast<float>(estimator_.View().PositionAccuracy(now));
+    msg.position_accuracy_at_heading = static_cast<float>(estimator_.View().PositionAccuracyAtHeading(now));
     msg.heading_accuracy = static_cast<float>(estimator_.View().HeadingAccuracy());
     msg.gnss_recent = estimator_.View().RecentGps(now);
     msg.fix_age = static_cast<float>(estimator_.View().FixAge(now));
@@ -526,6 +527,7 @@ class LocalizationNode : public rclcpp::Node {
     msg.heading = WrapAngle(pose.heading);
     msg.heading_valid = dock.has_estimate();
     msg.position_accuracy = static_cast<float>(dock.PositionAccuracy(now));
+    msg.position_accuracy_at_heading = msg.position_accuracy;
     msg.heading_accuracy = static_cast<float>(dock.HeadingAccuracy());
     msg.gnss_recent = false;
     msg.speed = estimator_.View().speed();

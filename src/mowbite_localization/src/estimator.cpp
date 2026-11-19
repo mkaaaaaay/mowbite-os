@@ -364,6 +364,12 @@ double Estimator::PositionAccuracy(double t) const {
   return std::max(accuracy_.Value(t), std::sqrt(std::max(p(0, 0), p(1, 1))) + turn);
 }
 
+double Estimator::PositionAccuracyAtHeading(double t) const {
+  if (!gate_.initialized()) return kNoAccuracy;
+  const Covariance& p = filter_.covariance();
+  return std::max(accuracy_.Value(t), std::sqrt(std::max(p(0, 0), p(1, 1))));
+}
+
 double Estimator::FixAge(double t) const {
   return gate_.initialized() && last_fix_ ? std::max(0.0, t - last_fix_->time) : kNoAccuracy;
 }
