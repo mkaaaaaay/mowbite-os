@@ -169,7 +169,8 @@ class ScheduleNode : public rclcpp::Node {
   }
 
   // A file of data_dir as JSON; null when missing or not readable (with a warning).
-  json ReadJson(const char* name) {
+  // The file as JSON, null when it is missing or cannot be read; unreadable tells the second case.
+  json ReadJson(const char* name, bool* unreadable = nullptr) {
     if (data_dir_.empty()) return nullptr;
     std::string text;
     std::string error;
@@ -186,6 +187,7 @@ class ScheduleNode : public rclcpp::Node {
       }
     }
     RCLCPP_WARN(get_logger(), "Cannot read %s: %s", path.c_str(), error.c_str());
+    if (unreadable) *unreadable = true;
     return nullptr;
   }
 
@@ -208,7 +210,10 @@ class ScheduleNode : public rclcpp::Node {
                     error.c_str());
       }
     }
-    start.state = ReadJson(kStateFile);
+    bool lost = false;
+    start.state = ReadJson(kStateFile, &lost);
+    // Its marks are gone: no plan of today that began already starts again (S4).
+    if (lost) start.state = json{{"lost", true}};
     start.log = ReadJson(kLogFile);
     RCLCPP_INFO(get_logger(), "Schedule %s, %s on this platform, version %lld",
                 start.file.schedule.enabled ? "on" : "off", start.available ? "allowed" : "not allowed",

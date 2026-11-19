@@ -101,6 +101,15 @@ Scheduler::Scheduler(const SchedulerStart& start) : file_(start.file), available
     }
     while (log_.size() > kLogEntries) log_.pop_front();
   }
+  if (state.is_object() && state.value("lost", false) == true) {
+    // The state file could not be read: the plans of today up to now count as handled.
+    const Date today = file_.schedule.zone.ToLocal(start.now).date;
+    for (const Plan& plan : file_.schedule.plans) {
+      const PlanKey key{today, plan.time};
+      if (PlanAt(file_.schedule, today, plan.time) == &plan && PlanUnix(key) <= start.now) Mark(key);
+    }
+    return;
+  }
   if (!state.is_object() || state.value("schema", 0) != kStateSchema) return;
   if (state.contains("handled") && state["handled"].is_object()) {
     for (const auto& item : state["handled"].items()) {

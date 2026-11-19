@@ -756,6 +756,15 @@ TEST_F(SchedulerTest, SummerTimeBegins) {
 }
 
 // time and end in the hour the clock skips: both the same moment, over before it began.
+// A state file that cannot be read: what began today does not start again, a later plan does.
+TEST_F(SchedulerTest, LostMarksStartNothingThatBeganToday) {
+  const ScheduleFile file =
+      File({{"plans", {{{"days", {1}}, {"time", "10:00"}}, {{"days", {1}}, {"time", "12:00"}}}}});
+  scheduler_.emplace(SchedulerStart{file, true, json{{"lost", true}}, nullptr, At(kMonday, "10:00", 30)});
+  EXPECT_FALSE(TickAt(kMonday, "10:00", 31).start);
+  EXPECT_TRUE(TickAt(kMonday, "12:00").start);
+}
+
 TEST_F(SchedulerTest, SummerTimeBeginsWithTheEndInTheSkippedHour) {
   const Date sunday{2026, 3, 29};
   ScheduleFile file = File({{"plans", {{{"days", {7}}, {"time", "02:30"}, {"end", "02:45"}, {"dark", 1}}}}});
