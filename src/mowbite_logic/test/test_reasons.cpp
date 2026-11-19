@@ -60,6 +60,10 @@ TEST(Reasons, TheDockingStationWaitsForTheUser) {
 
 TEST(Reasons, ARefusedResetWaitsForTheUser) {
   ExpectRating("EMERGENCY_RESET_REFUSED", "STILL_TILTED", "warning", "user");
+  // The codes the driver answers itself (SetEmergency.srv).
+  for (const char* code : {"STILL_ACTIVE", "LATCH_CHANGED", "LEARNING", "SILENT"}) {
+    ExpectRating("EMERGENCY_RESET_REFUSED", code, "warning", "user");
+  }
   for (const char* code : {"TILT_UNKNOWN", "FOREIGN_HOST", "DRIVER_MISSING", "SAFETY_MISSING", "NO_ANSWER"}) {
     ExpectRating("EMERGENCY_RESET_REFUSED", code, "error", "user");
   }
