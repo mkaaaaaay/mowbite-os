@@ -4,6 +4,7 @@
 #include <optional>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/button_event.hpp>
+#include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -12,6 +13,7 @@
 #include <mowbite_msgs/msg/rpc_response.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/int64.hpp>
 #include <string>
 #include <vector>
 
@@ -29,8 +31,12 @@ namespace {
 constexpr int64_t kMaxBufferLeds = 300;
 // An unchanged frame goes out again after this long, in case the chain lost one.
 constexpr double kRepeat = 1.0;
-// After a failed open or write the output is tried again this much later.
+// After a failed open the output is tried again this much later; after a failed write once at once (kRetry), then
+// so too.
 constexpr double kReopen = 30.0;
+constexpr double kRetry = 0.5;
+// robot_state is sent every second: one older than this shows as the emergency.
+constexpr double kStateStale = 3.0;
 
 rclcpp::QoS LatchedQos(size_t depth) {
   return rclcpp::QoS(rclcpp::KeepLast(depth)).reliable().transient_local();
@@ -53,7 +59,8 @@ struct NodeConfig {
 
 }  // namespace
 
-// The lights: the effect of the state of robot_state (the emergency over all) as WS2812 frames on spidev or into a file
+// The lights: the effect of the state of robot_state (the emergency over all, also that of hw/status and a robot_state
+// that stopped coming) as WS2812 frames on spidev or into a file
 // for the simulation, and light.get_profile, light.set_profile, light.preview and light.reset through the bridge.
 // With output none it offers no method and sends nothing.
 class LightNode : public rclcpp::Node {
@@ -79,6 +86,15 @@ class LightNode : public rclcpp::Node {
     state_sub_ = create_subscription<mowbite_msgs::msg::RobotState>(
         "bridge/robot_state", 10, [this](const mowbite_msgs::msg::RobotState::ConstSharedPtr& msg) {
           service_.SetRobotState(msg->current_state, msg->emergency, msg->is_charging, msg->battery_percentage);
+          state_at_ = MonotonicSeconds();
+        });
+    status_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
+        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
+          service_.SetDriverEmergency(msg->emergency);
+        });
+    hold_sub_ = create_subscription<std_msgs::msg::Int64>(
+        "logic/hold", LatchedQos(1), [this](const std_msgs::msg::Int64::ConstSharedPtr& msg) {
+          service_.SetHold(msg->data);
         });
     publish_sub_ = create_subscription<mowbite_msgs::msg::MqttPublish>(
         "bridge/publish", 100, [this](const mowbite_msgs::msg::MqttPublish::ConstSharedPtr& msg) {
@@ -158,18 +174,21 @@ class LightNode : public rclcpp::Node {
 
   void Tick() {
     const double now = MonotonicSeconds();
+    service_.SetStateLost(!state_at_ || now - *state_at_ > kStateStale);
     if (!output_ && now >= next_open_) Open(now);
     if (!output_) return;
     std::vector<Rgb> leds = service_.Frame(now);
     if (written_ && leds == last_leds_ && now - last_write_ < kRepeat) return;
     std::string error;
     if (!output_->Write(EncodeWs2812(leds, config_.buffer_leds), &error)) {
-      RCLCPP_ERROR(get_logger(), "Cannot send a frame: %s; trying again in %.0f s", error.c_str(), kReopen);
+      const double wait = write_failures_++ == 0 ? kRetry : kReopen;
+      RCLCPP_ERROR(get_logger(), "Cannot send a frame: %s; trying again in %.1f s", error.c_str(), wait);
       output_.reset();
-      next_open_ = now + kReopen;
+      next_open_ = now + wait;
       written_ = false;
       return;
     }
+    write_failures_ = 0;
     last_leds_ = std::move(leds);
     last_write_ = now;
     written_ = true;
@@ -219,6 +238,7 @@ class LightNode : public rclcpp::Node {
       error.code = outcome->code;
       error.message = outcome->message;
       error.id = request.id;
+      if (!outcome->data.is_null()) error.data = outcome->data.dump();
       error_pub_->publish(error);
     }
   }
@@ -230,12 +250,16 @@ class LightNode : public rclcpp::Node {
   std::vector<Rgb> last_leds_;
   double last_write_ = 0;
   bool written_ = false;
+  int write_failures_ = 0;
+  std::optional<double> state_at_;
 
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcError>::SharedPtr error_pub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RobotState>::SharedPtr state_sub_;
+  rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr status_sub_;
+  rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_sub_;
   rclcpp::TimerBase::SharedPtr timer_;

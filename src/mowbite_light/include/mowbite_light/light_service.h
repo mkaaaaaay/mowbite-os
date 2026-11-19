@@ -25,6 +25,8 @@ struct RpcOutcome {
   Json result;
   int code = 0;
   std::string message;
+  // Details of a refusal, null for none.
+  Json data;
 };
 
 struct LightConfig {
@@ -56,6 +58,12 @@ class LightService {
   std::optional<RpcOutcome> Call(const std::string& method, const Json& params, double now);
 
   void SetRobotState(const std::string& current_state, bool emergency, bool is_charging, double battery);
+  // The emergency of the driver (hw/status), which the logic tells only later; and robot_state too old to be
+  // believed. Either shows as the emergency.
+  void SetDriverEmergency(bool emergency) { driver_emergency_ = emergency; }
+  void SetStateLost(bool lost) { state_lost_ = lost; }
+  // The hold of an update in unix s, 0 for none: the profile is not changed meanwhile.
+  void SetHold(int64_t until) { hold_until_ = until; }
   // SCHEDULE_START shows SCHEDULE_START for its seconds over every state until SCHEDULE_START_CANCELED, a change of
   // the state or an emergency; other events change nothing.
   void OnEvent(const Json& event, double now);
@@ -73,11 +81,16 @@ class LightService {
   RpcOutcome SetProfile(const Json& params);
   RpcOutcome Preview(const Json& params, double now);
   RpcOutcome Reset();
+  RpcOutcome RefuseInHold() const;
+  bool InEmergency() const { return emergency_ || driver_emergency_ || state_lost_; }
 
   LightConfig config_;
   Profile profile_;
   std::string state_ = "IDLE";
   bool emergency_ = false;
+  bool driver_emergency_ = false;
+  bool state_lost_ = false;
+  int64_t hold_until_ = 0;
   bool charging_ = false;
   // 0..1 as robot_state gives it.
   double battery_ = 1.0;

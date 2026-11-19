@@ -129,6 +129,40 @@ TEST(LightService, TheFrameFollowsTheStateAndTheEmergencyGoesOverAll) {
   EXPECT_EQ(service.Frame(11.0)[0], Render(DefaultProfile().at("CHARGING"), 10, 0)[0]);
 }
 
+// The driver's emergency and a robot_state that stopped coming show as the emergency, before the logic tells it.
+TEST(LightService, TheDriverAndALostStateShowTheEmergency) {
+  LightService service(Config());
+  service.Call("light.set_profile", Json{{"profile", {{"MOWING", kOrange}}}}, 0);
+  service.SetRobotState("MOWING", false, false, 0.8);
+  EXPECT_EQ(service.Frame(1.0)[9], (Rgb{255, 136, 0}));
+  service.SetDriverEmergency(true);
+  EXPECT_EQ(service.Frame(2.0)[0], kRed);
+  service.SetDriverEmergency(false);
+  EXPECT_EQ(service.Frame(3.0)[9], (Rgb{255, 136, 0}));
+  service.SetStateLost(true);
+  EXPECT_EQ(service.Frame(4.0)[0], kRed);
+  service.SetStateLost(false);
+  EXPECT_EQ(service.Frame(5.0)[9], (Rgb{255, 136, 0}));
+}
+
+TEST(LightService, AnUpdateHoldKeepsTheProfile) {
+  LightService service(Config());
+  service.SetHold(2000000000);
+  const auto set = service.Call("light.set_profile", Json{{"profile", {{"MOWING", kOrange}}}}, 0);
+  ASSERT_TRUE(set && !set->ok);
+  EXPECT_EQ(set->code, mowbite_bridge::kHold);
+  EXPECT_EQ(set->data["reason"], "HOLD");
+  const auto reset = service.Call("light.reset", Json::object(), 0);
+  ASSERT_TRUE(reset && !reset->ok);
+  EXPECT_EQ(reset->code, mowbite_bridge::kHold);
+  // The preview writes nothing and goes on.
+  const auto preview =
+      service.Call("light.preview", Json{{"effect", {{"effect", "solid"}, {"colors", {"#0000ff"}}}}}, 0);
+  EXPECT_TRUE(preview && preview->ok);
+  service.SetHold(0);
+  EXPECT_TRUE(service.Call("light.reset", Json::object(), 0)->ok);
+}
+
 TEST(LightService, TheAnnouncementOfAStartBlinksOverChargingUntilItEnds) {
   LightService service(Config());
   const Rgb yellow{255, 160, 0};

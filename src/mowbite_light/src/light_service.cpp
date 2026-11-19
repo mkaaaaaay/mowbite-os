@@ -61,7 +61,7 @@ void LightService::SetRobotState(const std::string& current_state, bool emergenc
                                  double battery) {
   state_ = current_state;
   emergency_ = emergency;
-  if (!emergency) stop_ready_until_.reset();
+  if (!InEmergency()) stop_ready_until_.reset();
   charging_ = is_charging;
   battery_ = battery;
 }
@@ -81,7 +81,7 @@ void LightService::OnEvent(const Json& event, double now) {
 }
 
 void LightService::OnStopPress(StopPress press, double now) {
-  if (!emergency_ || press == StopPress::kCanceled) {
+  if (!InEmergency() || press == StopPress::kCanceled) {
     stop_ready_until_.reset();
     return;
   }
@@ -90,14 +90,15 @@ void LightService::OnStopPress(StopPress press, double now) {
 
 std::vector<Rgb> LightService::Frame(double now) {
   if (preview_ && now >= preview_until_) preview_.reset();
-  if (stop_ready_until_ && now >= *stop_ready_until_) stop_ready_until_.reset();
-  if (announce_until_ && (now >= *announce_until_ || emergency_ || state_ != announce_state_)) announce_until_.reset();
+  if (!InEmergency() || (stop_ready_until_ && now >= *stop_ready_until_)) stop_ready_until_.reset();
+  const bool emergency = InEmergency();
+  if (announce_until_ && (now >= *announce_until_ || emergency || state_ != announce_state_)) announce_until_.reset();
   std::string key;
   Effect effect;
-  if (emergency_ && stop_ready_until_) {
+  if (emergency && stop_ready_until_) {
     key = "STOP_READY";
     effect = StopReadyEffect();
-  } else if (emergency_) {
+  } else if (emergency) {
     key = "EMERGENCY";
     effect = EmergencyEffect();
   } else if (announce_until_) {
@@ -138,6 +139,7 @@ RpcOutcome LightService::GetProfile() const {
 }
 
 RpcOutcome LightService::SetProfile(const Json& params) {
+  if (hold_until_ > 0) return RefuseInHold();
   if (!params.is_object() || !params.contains("profile")) return Invalid("params are {\"profile\": {state: effect}}");
   std::string error;
   const auto profile = ProfileFromJson(params["profile"], &error);
@@ -166,10 +168,16 @@ RpcOutcome LightService::Preview(const Json& params, double now) {
   preview_ = *effect;
   preview_until_ = now + duration.get<double>();
   ++previews_;
-  return {true, Json{{"duration", duration.get<double>()}, {"emergency", emergency_}}, 0, ""};
+  return {true, Json{{"duration", duration.get<double>()}, {"emergency", InEmergency()}}, 0, ""};
+}
+
+RpcOutcome LightService::RefuseInHold() const {
+  return {false, Json(), mowbite_bridge::kHold, "An update holds the mower. The profile changes after it",
+          Json{{"reason", "HOLD"}, {"until", hold_until_}}};
 }
 
 RpcOutcome LightService::Reset() {
+  if (hold_until_ > 0) return RefuseInHold();
   std::string error;
   if (!config_.profile_path.empty() && !mowbite_hold::RemoveFileSynced(config_.profile_path, &error)) {
     return {false, Json(), mowbite_bridge::kInternalError, error};

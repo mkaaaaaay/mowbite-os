@@ -17,6 +17,7 @@ find_package(mowbite_component REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_serial REQUIRED)
 find_package(mowbite_watch REQUIRED)
+find_package(std_msgs REQUIRED)
 
 # Effects, profiles, the RPC methods and the WS2812 frames without ROS, testable on any machine.
 add_library(mowbite_light_core STATIC src/ws2812.cpp src/effect.cpp src/light_service.cpp src/output.cpp)
@@ -29,7 +30,7 @@ set_target_properties(mowbite_light_core PROPERTIES POSITION_INDEPENDENT_CODE ON
 
 add_library(mowbite_light_component SHARED src/light_node.cpp)
 target_link_libraries(mowbite_light_component mowbite_light_core mowbite_serial::mowbite_serial mowbite_watch::mowbite_watch)
-ament_target_dependencies(mowbite_light_component rclcpp rclcpp_components mowbite_msgs)
+ament_target_dependencies(mowbite_light_component rclcpp rclcpp_components mowbite_msgs std_msgs)
 mowbite_component_register(mowbite_light_component
   PLUGIN "mowbite_light::LightNode"
   EXECUTABLE mowbite_light_node)
