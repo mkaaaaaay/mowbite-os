@@ -295,8 +295,11 @@ class CameraNode : public rclcpp::Node {
     std::vector<std::string> sessions;
     if (supervisor_->Starting()) {
       if (StreamSessions(api_, &sessions)) supervisor_->Answered();
-    } else if (supervisor_->Up() && !service_->WebrtcSessions().empty() && StreamSessions(api_, &sessions)) {
-      service_->OnSessions(sessions);
+    } else if (supervisor_->Up() && !service_->WebrtcSessions().empty()) {
+      const bool answered = StreamSessions(api_, &sessions);
+      if (answered) service_->OnSessions(sessions);
+      // An API that stops answering would keep every place taken.
+      if (supervisor_->Asked(answered)) service_->OnStreamServerGone();
     }
     const std::string reason = problem.empty() ? supervisor_->reason() : kNotSetUp;
     const std::string& detail = problem.empty() ? supervisor_->detail() : problem;

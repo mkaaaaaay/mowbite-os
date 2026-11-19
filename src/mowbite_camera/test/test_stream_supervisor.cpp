@@ -57,6 +57,21 @@ class StreamSupervisorTest : public ::testing::Test {
   StreamSupervisor supervisor_{&server_, [this] { return now_; }};
 };
 
+// An API that stops answering while it runs: after kStreamApiMisses the server counts as ended and is stopped.
+TEST_F(StreamSupervisorTest, AnApiWithoutAnswersEndsTheServer) {
+  supervisor_.Tick(true);
+  supervisor_.Answered();
+  ASSERT_TRUE(supervisor_.Up());
+  for (int i = 1; i < kStreamApiMisses; ++i) EXPECT_FALSE(supervisor_.Asked(false)) << i;
+  // One answer counts anew.
+  EXPECT_FALSE(supervisor_.Asked(true));
+  for (int i = 1; i < kStreamApiMisses; ++i) EXPECT_FALSE(supervisor_.Asked(false)) << i;
+  EXPECT_TRUE(supervisor_.Asked(false));
+  EXPECT_EQ(server_.stops, 1);
+  EXPECT_FALSE(supervisor_.Up());
+  EXPECT_EQ(supervisor_.reason(), kNoSignal);
+}
+
 TEST_F(StreamSupervisorTest, NothingStartsBeforeACameraNeedsIt) {
   EXPECT_EQ(Run(5.0, false), 0);
   EXPECT_EQ(server_.starts, 0);

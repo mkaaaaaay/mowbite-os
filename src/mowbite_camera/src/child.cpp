@@ -26,6 +26,11 @@ constexpr int kMaxDescriptors = 65536;
 // How often Stop looks whether the child has ended.
 constexpr auto kStopStep = std::chrono::milliseconds(20);
 
+double SteadySeconds() {
+  using namespace std::chrono;
+  return duration<double>(steady_clock::now().time_since_epoch()).count();
+}
+
 std::vector<char*> Pointers(std::vector<std::string>& texts) {
   std::vector<char*> pointers;
   pointers.reserve(texts.size() + 1);
@@ -104,8 +109,14 @@ bool Child::Start(const ChildSpec& spec, std::string* error) {
 bool Child::Running(std::string* how) {
   if (pid_ <= 0) return false;
   int status = 0;
-  const pid_t ended = ::waitpid(pid_, &status, WNOHANG);
+  pid_t ended = ::waitpid(pid_, &status, WNOHANG);
+  if ((ended == 0 || (ended < 0 && errno == EINTR)) && kill_at_ >= 0 && SteadySeconds() >= kill_at_) {
+    ::kill(pid_, SIGKILL);
+    while ((ended = ::waitpid(pid_, &status, 0)) < 0 && errno == EINTR) {
+    }
+  }
   if (ended == 0 || (ended < 0 && errno == EINTR)) return true;
+  kill_at_ = -1.0;
   if (how) {
     *how = ended < 0             ? "nothing known"
            : WIFEXITED(status)   ? "exit code " + std::to_string(WEXITSTATUS(status))
@@ -116,7 +127,14 @@ bool Child::Running(std::string* how) {
   return false;
 }
 
+void Child::Interrupt(double grace_s) {
+  if (pid_ <= 0 || kill_at_ >= 0) return;
+  ::kill(pid_, SIGINT);
+  kill_at_ = SteadySeconds() + grace_s;
+}
+
 void Child::Stop(double grace_s) {
+  kill_at_ = -1.0;
   if (pid_ <= 0) return;
   ::kill(pid_, SIGINT);
   const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double>(grace_s);

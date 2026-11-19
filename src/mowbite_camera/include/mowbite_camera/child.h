@@ -38,9 +38,13 @@ class Child {
   bool Running(std::string* how = nullptr);
   // SIGINT, and SIGKILL when it has not ended grace_s later; returns when it is gone.
   void Stop(double grace_s = 2.0);
+  // SIGINT without waiting: Running() sends SIGKILL once it has not ended grace_s later.
+  void Interrupt(double grace_s = 2.0);
 
  private:
   pid_t pid_ = -1;
+  // Since Interrupt: when SIGKILL follows (steady s), negative without one.
+  double kill_at_ = -1.0;
 };
 
 }  // namespace mowbite_camera

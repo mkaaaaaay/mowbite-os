@@ -27,6 +27,7 @@ class MediaServer : public StreamServer {
   bool Start(std::string* error) override;
   bool Running(std::string* how) override;
   void Stop() override;
+  void Reap() override;
 
  private:
   const std::string program_;

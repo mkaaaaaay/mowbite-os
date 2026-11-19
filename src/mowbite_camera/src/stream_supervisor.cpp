@@ -14,6 +14,7 @@ void StreamSupervisor::Tell(const std::string& reason, const std::string& detail
 
 bool StreamSupervisor::Tick(bool wanted) {
   const double now = now_();
+  server_->Reap();
   bool ended = false;
   if (phase_ == Phase::kStarting || phase_ == Phase::kUp) {
     std::string how;
@@ -73,7 +74,18 @@ void StreamSupervisor::Ended(double now, bool ran, const std::string& how) {
 void StreamSupervisor::Answered() {
   if (phase_ != Phase::kStarting) return;
   phase_ = Phase::kUp;
+  api_misses_ = 0;
   Tell("", "");
+}
+
+bool StreamSupervisor::Asked(bool answered) {
+  if (phase_ != Phase::kUp) return false;
+  api_misses_ = answered ? 0 : api_misses_ + 1;
+  if (api_misses_ < kStreamApiMisses) return false;
+  api_misses_ = 0;
+  server_->Stop();
+  Ended(now_(), true, "no answer of its API " + std::to_string(kStreamApiMisses) + " times in a row");
+  return true;
 }
 
 }  // namespace mowbite_camera

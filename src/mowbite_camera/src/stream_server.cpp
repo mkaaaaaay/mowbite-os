@@ -31,6 +31,8 @@ bool MediaServer::Installed() {
 }
 
 bool MediaServer::Start(std::string* error) {
+  // One that was asked to end and has not yet: now it goes, within its grace.
+  if (child_.Running()) child_.Stop();
   ChildSpec spec;
   spec.program = program_;
   spec.args = {directory_ + "/" + kStreamConfigFile};
@@ -46,7 +48,11 @@ bool MediaServer::Running(std::string* how) {
 }
 
 void MediaServer::Stop() {
-  child_.Stop();
+  child_.Interrupt();
+}
+
+void MediaServer::Reap() {
+  child_.Running();
 }
 
 bool ParseSessions(const std::string& body, std::vector<std::string>* ids) {

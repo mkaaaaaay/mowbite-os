@@ -117,6 +117,22 @@ TEST_F(ChildTest, StopEndsWhatIgnoresSigintAfterTheGrace) {
   EXPECT_FALSE(child_.Running());
 }
 
+// Interrupt returns at once; what ignores SIGINT ends with the first look after the grace.
+TEST_F(ChildTest, InterruptWaitsForNothing) {
+  ChildSpec spec = Shell("trap '' INT; touch ready; exec sleep 30");
+  spec.directory = dir_.string();
+  ASSERT_TRUE(child_.Start(spec, &error_)) << error_;
+  ASSERT_TRUE(WaitForFile(dir_ / "ready"));
+  const auto before = std::chrono::steady_clock::now();
+  child_.Interrupt(0.3);
+  EXPECT_LT(std::chrono::steady_clock::now() - before, std::chrono::milliseconds(100));
+  EXPECT_TRUE(child_.Running());
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  std::string how;
+  EXPECT_FALSE(child_.Running(&how));
+  EXPECT_EQ(how, "signal 9");
+}
+
 TEST_F(ChildTest, EndsWithTheThreadThatStartedIt) {
   // The thread stays until the program runs: the child asks for the signal as its first step, before that.
   std::thread starter([this] {

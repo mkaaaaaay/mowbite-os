@@ -15,6 +15,8 @@ constexpr double kStreamStableAfter = 600.0;
 constexpr double kStreamStartSeconds = 20.0;
 // A running server is stopped once no camera has wanted it for this long, in s; a stop is no end.
 constexpr double kStreamIdleStop = 60.0;
+// Questions in a row a running server's API leaves without an answer before it counts as ended.
+constexpr int kStreamApiMisses = 5;
 
 // The stream server as its supervisor drives it.
 class StreamServer {
@@ -25,7 +27,10 @@ class StreamServer {
   virtual bool Start(std::string* error) = 0;
   // Whether it runs; the call that finds it ended tells in *how what it ended with.
   virtual bool Running(std::string* how) = 0;
+  // Asks it to end without waiting for it; Reap finishes that.
   virtual void Stop() = 0;
+  // Once a tick: ends what a stop left running.
+  virtual void Reap() {}
 };
 
 // Starts the stream server with the first camera that needs it and again after it ended, stops it while none needs
@@ -41,6 +46,9 @@ class StreamSupervisor {
   bool Tick(bool wanted);
   // The API of the server answered.
   void Answered();
+  // Asked for its sessions while it is up: after kStreamApiMisses in a row without an answer it counts as ended (and
+  // is stopped), true then: its sessions are gone with it.
+  bool Asked(bool answered);
   // It runs and its API has not answered yet: to be asked.
   bool Starting() const {
     return phase_ == Phase::kStarting;
@@ -67,6 +75,7 @@ class StreamSupervisor {
   Phase phase_ = Phase::kIdle;
   // Ends in a row, when the next start is due, when the last one was and when the server was last wanted.
   int ends_ = 0;
+  int api_misses_ = 0;
   double next_start_ = 0;
   double began_ = 0;
   double wanted_at_ = 0;
