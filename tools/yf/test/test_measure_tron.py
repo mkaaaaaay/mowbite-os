@@ -389,6 +389,62 @@ class TestLiftAngles(unittest.TestCase):
         self.assertEqual(self.t73_items(("front",), {"front": (False, None)}), [])
 
 
+def hold_programme(reason=None, delay=0.1):
+    """A TronMeasurement whose driver goes silent `delay` s after the frame and shows the latch with `reason` only at
+    the end of the silence, as tron_mcu does; reason None: no silence begins."""
+    run = m.TronMeasurement.__new__(m.TronMeasurement)
+    run.findings = []
+    run.finding = lambda step, text: run.findings.append(text)
+    run.check_keys = lambda: None
+    mower = types.SimpleNamespace(emergency_since=None, end=None)
+    run.mower = mower
+
+    def frame():
+        run.sent = time.monotonic()
+        if reason is not None:
+            mower.end = run.sent + delay + SILENCE
+            mower.emergency_since = mower.end
+
+    def snapshot():
+        on = mower.end is not None and time.monotonic() >= mower.end
+        status = types.SimpleNamespace(emergency=on, emergency_reason=reason if on else 0)
+        return status, 0.0, (0.0, 0.0), 0.0
+    mower.snapshot = snapshot
+    run.start_hold = lambda: run.hold_start("T9", "V0", 1, SILENCE, lambda: types.SimpleNamespace(success=True),
+                                            frame)
+    return run
+
+
+SILENCE = 0.3
+
+
+class TestHoldStart(unittest.TestCase):
+    def test_the_start_comes_from_the_latch_at_the_end_of_the_silence(self):
+        run = hold_programme(m.HOLD_END_REASON)
+        began = run.start_hold()
+        self.assertAlmostEqual(began, run.sent + 0.1, places=6)
+        self.assertGreaterEqual(time.monotonic(), run.sent + 0.1 + SILENCE)
+        self.assertEqual(run.findings, [])
+
+    def test_stop_during_the_silence_aborts(self):
+        run = hold_programme(1 << 0 | 1 << 2)
+        with self.assertRaises(m.Abort):
+            run.start_hold()
+        self.assertIn("LATCH|STOP instead of the end", run.findings[0])
+
+    def test_no_silence_aborts(self):
+        run = hold_programme(None)
+        with self.assertRaises(m.Abort):
+            run.start_hold()
+        self.assertIn("no latch", run.findings[0])
+
+    def test_a_silence_long_after_the_frame_aborts(self):
+        run = hold_programme(m.HOLD_END_REASON, delay=m.HOLD_ARM_S + 0.2)
+        with self.assertRaises(m.Abort):
+            run.start_hold()
+        self.assertIn("after the frame", run.findings[0])
+
+
 class TestLimits(unittest.TestCase):
     def test_within(self):
         self.assertEqual(m.holding_problems([1.9, 2.0, 2.1, 2.05, 2.2]), [])

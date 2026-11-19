@@ -128,6 +128,9 @@ HOLD_DRIVE_S = 1.0
 HOLD_HELD_S = 1.0
 HOLD_QUIET_S = 3.0
 HOLD_ARM_S = 0.5
+# The driver latches LATCH|HIGH_LEVEL at the end of a silence; a start this much before the frame still counts.
+HOLD_END_REASON = 1 << 0 | 1 << 7
+HOLD_SLACK_S = 0.05
 HOLD_CASES = {
     "V0": ("the heartbeat ahead of the setpoint only", {"speed_heartbeat": "", "silence_after": "speed"}, 3.0, None),
     "V1": ("a heartbeat right after each setpoint, in one write", {"speed_heartbeat": "after",
@@ -2644,20 +2647,30 @@ class TronMeasurement(Measurement):
                       f"{held} of {len(times)} runs")
             self.rec.write("hold_case", step=step, case=case, stand_s=times, held=held)
 
-    def hold_start(self, step, case, n, ask_silence, frame):
-        """hw/silence asked, then `frame` (called every 0.1 s) until the driver is silent: the time it began."""
+    def hold_start(self, step, case, n, silence, ask_silence, frame):
+        """hw/silence asked, then one `frame`, after which the driver goes silent: the time it began. hw/status shows
+        no emergency while the driver is silent, only the HIGH_LEVEL latch at its end, so this returns after the
+        silence with that time less `silence`."""
         answer = ask_silence()
         if answer is None or not answer.success:
             self.finding(step, f"{case} run {n}: hw/silence refused: {answer.code if answer else 'no answer'}")
             raise Abort()
-        end = time.monotonic() + HOLD_ARM_S
-        while time.monotonic() < end:
-            if self.in_emergency():
-                return self.mower.emergency_since
-            frame()
-            time.sleep(0.1)
-        self.finding(step, f"{case} run {n}: the silence did not begin within {HOLD_ARM_S} s")
-        raise Abort()
+        sent = time.monotonic()
+        frame()
+        self.wait(HOLD_ARM_S + silence + 1.0, until=self.in_emergency)
+        s, latched = self.status(), self.mower.emergency_since
+        if not self.in_emergency() or latched is None or latched < sent:
+            self.finding(step, f"{case} run {n}: no latch at the end of a silence after the frame")
+            raise Abort()
+        if s.emergency_reason != HOLD_END_REASON:
+            self.finding(step, f"{case} run {n}: emergency {reason_text(s.emergency_reason)} instead of the end "
+                               "of the silence")
+            raise Abort()
+        began = latched - silence
+        if not sent - HOLD_SLACK_S <= began <= sent + HOLD_ARM_S:
+            self.finding(step, f"{case} run {n}: the silence began {began - sent:+.2f} s after the frame")
+            raise Abort()
+        return began
 
     def hold_run(self, step, case, silence, n):
         """Wheels at TRON_FIRST_SPEED, then silent right after a setpoint: s from then until they stood."""
@@ -2666,7 +2679,7 @@ class TronMeasurement(Measurement):
             self.mower.stop_wheels()
             self.finding(step, f"{case} run {n}: the wheels did not turn, or an emergency came first")
             raise Abort()
-        since = self.hold_start(step, case, n, lambda: self.mower.silence(silence),
+        since = self.hold_start(step, case, n, silence, lambda: self.mower.silence(silence),
                                 lambda: self.mower.drive(TRON_FIRST_SPEED, 0.0))
         quiet = HOLD_CASES[case][1].get("silence_stop_delay", 0.0)
         stand = self.stand_after(since, silence + quiet + 1.0)
@@ -2695,7 +2708,7 @@ class TronMeasurement(Measurement):
         first = self.args.blade_percent[0]
         second = first - 10 if first > 20 else first + 10
         self.blade_turning(step, first)
-        since = self.hold_start(step, case, n, lambda: self.mower.silence(silence, blade=True),
+        since = self.hold_start(step, case, n, silence, lambda: self.mower.silence(silence, blade=True),
                                 lambda: self.mower.set_blade(True, self.blade_lease_s, second, TRON_BLADE_HEIGHT_MM))
         still = self.blade_stands(step, since, "the silence began", silence + self.blade_stop_s)
         self.rec.write("hold", step=step, case=case, run=n, since=since, stand_s=still)
