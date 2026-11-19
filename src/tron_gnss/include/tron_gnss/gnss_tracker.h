@@ -49,6 +49,8 @@ struct GnssPose {
   double motion_east_mps = 0;
   double motion_north_mps = 0;
   double motion_heading = 0;  // yaw, counter-clockwise from east
+  // The motion is the mean over this many s up to this fix; 0 for the course of the receiver.
+  double motion_window_s = 0;
   int satellites = 0;
 };
 

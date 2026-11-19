@@ -165,6 +165,7 @@ void GnssTracker::MotionFromFixes(GnssPose& pose) {
   pose.motion_east_mps = (b.east - a.east) / dt;
   pose.motion_north_mps = (b.north - a.north) / dt;
   pose.motion_heading = std::atan2(pose.motion_north_mps, pose.motion_east_mps);
+  pose.motion_window_s = dt;
 }
 
 }  // namespace tron

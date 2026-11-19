@@ -374,6 +374,7 @@ class GnssNode : public rclcpp::Node {
     msg.velocity_valid = pose.motion_valid;
     msg.velocity_east = pose.motion_east_mps;
     msg.velocity_north = pose.motion_north_mps;
+    msg.velocity_window = static_cast<float>(pose.motion_window_s);
     pose_pub_->publish(msg);
   }
 

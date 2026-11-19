@@ -24,3 +24,6 @@ float32 accuracy
 bool velocity_valid
 float64 velocity_east
 float64 velocity_north
+# The velocity is the mean over this many s up to this solution (a chord of earlier positions); 0 for a momentary
+# one (Doppler of the receiver).
+float32 velocity_window

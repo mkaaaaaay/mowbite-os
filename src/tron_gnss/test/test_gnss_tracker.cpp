@@ -136,6 +136,8 @@ TEST_F(TrackerTest, RmcWorksLikeVtg) {
   ASSERT_TRUE(p);
   EXPECT_TRUE(p->motion_valid);
   EXPECT_NEAR(p->motion_east_mps, 1.0, 1e-9);
+  // The course of the receiver is momentary.
+  EXPECT_EQ(p->motion_window_s, 0.0);
 }
 
 TEST_F(TrackerTest, StaleMotionIsNotUsed) {
@@ -372,6 +374,18 @@ TEST_F(FixMotionTest, TheWayGivesTheMotionNotTheCourseOfTheBoard) {
     EXPECT_NEAR(std::hypot(pose->motion_east_mps, pose->motion_north_mps), 0.25, 0.005) << heading;
     EXPECT_NEAR(std::remainder(pose->motion_heading - heading, 2.0 * M_PI), 0.0, 0.01) << heading;
   }
+}
+
+// The chord ends at the fix of the pose and spans the shortest window with 0.1 m: 0.4 s at 0.3 m/s, 0.7 s at 0.15.
+TEST_F(FixMotionTest, TheWindowIsTheChordUpToThisFix) {
+  double e = 0.0;
+  double n = 0.0;
+  const auto pose = Drive(e, n, 0.0, 0.3, 3.0);
+  ASSERT_TRUE(pose && pose->motion_valid);
+  EXPECT_NEAR(pose->motion_window_s, 0.4, 1e-6);
+  const auto slow = Drive(e, n, 0.0, 0.15, 3.0);
+  ASSERT_TRUE(slow && slow->motion_valid);
+  EXPECT_NEAR(slow->motion_window_s, 0.7, 1e-6);
 }
 
 TEST_F(FixMotionTest, NothingBeforeTheWayAndNothingStanding) {
