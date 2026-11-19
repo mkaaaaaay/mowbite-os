@@ -211,11 +211,9 @@ void Estimator::Fuse(const Eigen::Vector2d& antenna, double accuracy, const Mome
 }
 
 bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
-  // Without a velocity, or too slow, a fix says nothing about the heading; an inconsistent course breaks the run.
-  if (!fix.motion_valid) return false;
-  // A course over a window shares its positions with the courses whose windows overlap it: one per window counts.
-  const bool windowed = fix.motion_window > 0.0;
-  if (windowed && t - fix.motion_window < course_window_end_) return false;
+  // Without a velocity, with a window that is no time, or too slow, a fix says nothing about the heading; an
+  // inconsistent course breaks the run.
+  if (!fix.motion_valid || !(fix.motion_window >= 0.0) || !std::isfinite(fix.motion_window)) return false;
   const Eigen::Vector2d velocity(fix.motion_x, fix.motion_y);
   const CourseHeading course = HeadingFromCourse(velocity, speed_, turn_rate_, Lever(then.tilt), config_.course);
   if (course.kind == CourseKind::kInconsistent) course_.Clear();
@@ -230,12 +228,20 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
     case TrackCheck::kAgrees:
       break;
   }
-  if (windowed) course_window_end_ = t;
+  // A course over a window shares its positions with the courses whose windows overlap it: a run takes one per
+  // window, and a single update counts as much less as its window overlaps the course before.
+  const double window = fix.motion_window;
+  const bool independent = t - window >= course_window_end_;
+  // At least 1 ms between courses keeps the weight finite.
+  const double overlap = std::max(1.0, window / std::max(t - last_course_time_, 1e-3));
+  if (independent) course_window_end_ = t;
+  last_course_time_ = t;
   const std::optional<double> heading = course.heading;
   const double variance = CourseVariance(velocity.norm(), config_.course);
   const double heading_variance = filter_.covariance()(2, 2);
   // On the gyro alone the courses of a run agree whatever the estimate did meanwhile.
-  const std::optional<double> run = course_.Add(WrapAngle(*heading - then.gyro_heading), t);
+  const std::optional<double> run =
+      independent ? course_.Add(WrapAngle(*heading - then.gyro_heading), t) : std::nullopt;
   if (run) {
     // The heading the run says for now, against the estimate.
     const double from_run = WrapAngle(gyro_heading_ + *run);
@@ -259,7 +265,7 @@ bool Estimator::Course(const GnssFix& fix, const Moment& then, double t) {
     return false;
   }
   const State before = filter_.state();
-  filter_.UpdateHeading(difference, variance);
+  filter_.UpdateHeading(difference, variance * overlap);
   ShiftHistory(before);
   return false;
 }

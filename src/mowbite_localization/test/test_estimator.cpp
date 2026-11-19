@@ -651,6 +651,22 @@ TEST(CourseWindow, InATurnTheChordCountsAtTheMiddleOfItsWindow) {
   EXPECT_GT(std::abs(lag.HeadingError()), 0.012) << lag.HeadingError();
 }
 
+// Every course corrects the heading, but overlapping ones count as much less as they share their positions.
+TEST(CourseWindow, ASingleUpdateWeighsItsOverlap) {
+  const auto heading_variance = [](double chord, bool report_window) {
+    World w;
+    w.Aligned();
+    w.chord = chord;
+    w.report_window = report_window;
+    w.Run(10.0, 0.3, 0.0);
+    return w.est.covariance()(2, 2);
+  };
+  const double momentary = heading_variance(0.0, true);
+  // A chord of 1 s at 5 fixes per second: each course shares four fifths of its positions with the one before.
+  EXPECT_GT(heading_variance(1.0, true), 1.5 * momentary);
+  EXPECT_NEAR(heading_variance(1.0, false), momentary, 0.05 * momentary);
+}
+
 // L10: the antenna offset moves base_link behind the last fix.
 TEST(L10AntennaOffset, AChangeMovesBaseLinkBehindTheLastFix) {
   World w({}, Eigen::Vector2d(0.3, 0.0));
