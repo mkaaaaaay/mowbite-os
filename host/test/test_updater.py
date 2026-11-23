@@ -1062,6 +1062,35 @@ class AutoTest(Base):
         self.updater.tick()
         self.assertIsNone(self.updater.state["last"])
 
+    # An OS that halted for want of room is not switched to again each night, only once data_dir has more room.
+    def test_no_room_not_again_until_there_is_more(self):
+        self.bundle(A)
+        self.updater.tick()
+        self.updater.join()
+        start, free = self.fake.start, [10 ** 9]
+        self.updater._data_free = lambda: free[0]
+
+        def halting():
+            started = start()
+            self.write(self.paths.halt, "MOWBITE_OS_HALT reason=DATA_NO_SPACE data_schema=3 image_schema=3 No room.\n")
+            return started
+        self.fake.start = halting
+        self.bundle(B)
+        now = time.time()
+        self.updater.tick(now)
+        self.assertEqual(self.updater.join()["reason"], "UNHEALTHY")
+        self.fake.start = start
+        os.remove(self.paths.halt)
+        self.updater.state["last"] = None
+        later = now + updater.AUTO_AGAIN + 1
+        self.updater.tick(later)
+        self.assertFalse(self.updater.busy())
+        self.assertIsNone(self.updater.state["last"])
+        free[0] += updater.NO_SPACE_MORE
+        self.updater.tick(later)
+        self.assertEqual(self.updater.join()["result"], "installed")
+        self.assertIsNone(self.updater.state["no_space"])
+
     # A gate that stays closed is not tried again every few minutes with a copy of the bundle each time.
     def test_each_revision_once_a_night(self):
         self.bundle(A)

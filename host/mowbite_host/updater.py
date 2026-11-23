@@ -50,6 +50,8 @@ HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 MAX_APP_VERSION = 64
 # The line of the health check for an OS that halted since data_dir has no room for its backup.
 NO_SPACE = "halted: DATA_NO_SPACE"
+# After such a halt the automatic leaves the OS and its planner alone until data_dir has this much more room.
+NO_SPACE_MORE = 256 * 1024 * 1024
 
 
 # Minute of the day of HH:MM.
@@ -116,7 +118,8 @@ class Updater:
 
     # update.json: {auto, origin {channel, index_serial, last}, app_version, last, components {id: {serial,
     # installed_at, crashes_since_install, last_crash, blocked {revision: {reason, result?, t}}, attempts {revision: n},
-    # auto_tried {revision, t}}}}.
+    # auto_tried {revision, t}}}, no_space {free, t} | None}; no_space: room in data_dir when an OS halted for the
+    # want of it in a switch.
     def _load(self):
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
@@ -124,6 +127,7 @@ class Updater:
         if not self._app_ok(state.setdefault("app_version", None)):
             state["app_version"] = None
         state.setdefault("last", None)
+        state.setdefault("no_space", None)
         components = state.setdefault("components", {})
         for component in COMPONENTS:
             entry = components.setdefault(component, {})
@@ -674,6 +678,8 @@ class Updater:
             installer.prune()
             # An OS that halted for want of room in data_dir says nothing about the revision.
             block = not line.startswith(NO_SPACE)
+            with self._lock:
+                self.state["no_space"] = None if block else {"free": self._data_free(), "t": int(time.time())}
             if ok:
                 self._finish("installed", None, line, component, revision)
             elif installer.current() or place.overlay:
@@ -821,6 +827,19 @@ class Updater:
     def clock_ok(self):
         return os.path.exists(self.paths.prefix + "/run/systemd/timesync/synchronized")
 
+    def _data_free(self):
+        try:
+            return shutil.disk_usage(self.paths.data).free
+        except OSError:
+            return 0
+
+    # Whether the automatic leaves a component that restarts the OS alone: the last switch halted for want of room in
+    # data_dir and it has not got NO_SPACE_MORE since, else the same stop, switch and way back came every night.
+    def _wants_room(self, component):
+        no_space = self.state["no_space"]
+        return (bool(no_space) and self._stops_os(component) and
+                self._data_free() < no_space.get("free", 0) + NO_SPACE_MORE)
+
     # Called every few minutes: starts one available update at night when auto is on, the clock is sure and the app
     # the user has is new enough for it; each revision once a night, then the next component has its turn.
     def tick(self, now=None):
@@ -838,7 +857,7 @@ class Updater:
         platform = self._platform()
         for component in AUTO_ORDER:
             available = self._available(component, platform)
-            if (left_alone.get(component) or not available or available["blocked"] or
+            if (left_alone.get(component) or not available or available["blocked"] or self._wants_room(component) or
                     not app_suffices(self.state["app_version"], available.get("min_app"))):
                 continue
             entry = self._entry(component)

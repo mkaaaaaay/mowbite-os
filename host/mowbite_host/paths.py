@@ -55,6 +55,7 @@ class Paths:
         self.boot_id = p + "/proc/sys/kernel/random/boot_id"
         # Written by MowBite OS in its data_dir (mowbite_hold, stack.py).
         data = p + data_dir
+        self.data = data
         self.session = data + "/os-session.json"
         self.restart_hold = data + "/restart-hold.json"
         self.hold = data + "/hold.json"
