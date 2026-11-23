@@ -107,6 +107,9 @@ class Updater:
         # Monotonic time before which recover_due does not ask the OS for its hold again; why each component waits.
         self._recover_after = 0.0
         self._recover_waits = {}
+        # The running OS while an unfinished switch of it or its planner waits: started of its service, since when it
+        # is looked at (monotonic), whether it answered healthy once and the last line.
+        self._judged = None
         self._bad_app_logged = False
         self.gate_wait = GATE_WAIT
         self.state = self._load()
@@ -727,6 +730,10 @@ class Updater:
             return "BUSY", "MowBite OS is starting or stopping"
         if state != "active" or gate.off(self.paths, started) is not None:
             return None
+        broken = self._broken(started)
+        if broken is not None:
+            print(f"{component}: the running OS is undone without its gate: {broken}", flush=True)
+            return None
         jobs = component == "planner"
         why = self._closed(jobs, True, recovering=True)
         if why is not None:
@@ -737,6 +744,42 @@ class Updater:
         if why is not None:
             self._recover_after = time.monotonic() + RECOVER_RETRY
         return why
+
+    # Why the OS that runs while an unfinished switch waits is undone without its gate, None while it is not: it did
+    # not answer healthy once in HEALTH_WAIT of looks, or an emergency since the update stands after them (rule M5),
+    # and its files say it does not move the mower. Nobody could bring such an OS to its gate.
+    def _broken(self, started):
+        health = self.installer.health
+        judged = self._judged
+        if judged is None or judged["started"] != started:
+            judged = self._judged = {"started": started, "t": time.monotonic(), "healthy": False, "line": ""}
+        if not judged["healthy"]:
+            ok, judged["line"], _ = health.once(started or 0.0)
+            judged["healthy"] = ok is True
+        if time.monotonic() - judged["t"] < health.wait:
+            return None
+        if judged["healthy"]:
+            settled, why = health.probe.settled()
+            if settled:
+                return None
+        else:
+            why = f"never healthy: {judged['line'] or 'no answer'}"
+        session = gate.session_of_this_boot(self.paths)
+        if (session is not None and session.get("clean") is False and session.get("emergency") is not True and
+                session.get("state") != "IDLE"):
+            return None
+        return why
+
+    # _broken for the OS that runs now, also while recover_due does not ask for its hold.
+    def _running_broken(self):
+        if not any(self._stops_os(component) and os.path.lexists(installer.place.pending)
+                   for component, installer in self.installers.items()):
+            self._judged = None
+            return None
+        state, _, started = self.carrier.show()
+        if state != "active" or gate.off(self.paths, started) is not None:
+            return None
+        return self._broken(started)
 
     # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
     # times is blocked.
@@ -757,6 +800,8 @@ class Updater:
             installer.prune()
             if pending is None:
                 continue
+            if self._stops_os(component):
+                self._judged = None
             revision = pending.get("to") or None
             attempts = self._entry(component)["attempts"]
             message = f"the switch to {revision} was cut off; back to {pending.get('from') or 'none'}"
@@ -765,9 +810,11 @@ class Updater:
                 attempts.pop(revision)
             self._finish("failed", "INTERRUPTED", message, component, revision, block=blocked)
 
-    # From the main loop: an unfinished switch that waits for the gate is undone once it opens.
+    # From the main loop: an unfinished switch that waits for the gate is undone once it opens or the OS is broken.
     def recover_due(self):
-        if self.busy() or time.monotonic() < self._recover_after or not gate.unfinished(self.paths):
+        if self.busy() or not gate.unfinished(self.paths):
+            return
+        if time.monotonic() < self._recover_after and self._running_broken() is None:
             return
         self.recover()
 

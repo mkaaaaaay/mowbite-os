@@ -903,6 +903,56 @@ class FlowTest(Base):
         self.assertTrue(self.fake.running)
         self.assertFalse(os.path.exists(self.paths.hold))
 
+    # The new OS runs but its logic never starts: after HEALTH_WAIT of looks it is undone without its gate (N1).
+    def test_recover_undoes_a_running_os_never_healthy(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        os.remove(self.paths.session)
+        self.updater.installer.health.wait = 0.3
+        self.updater.recover()
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), B)
+        time.sleep(0.35)
+        self.updater.recover_due()
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        self.assertTrue(self.fake.running)
+        self.assertEqual(self.updater.status()["last"]["reason"], "INTERRUPTED")
+
+    # Healthy, but an emergency since the update stands that nobody can release: undone as well; one that answered
+    # healthy and mows waits for its gate (test above).
+    def test_recover_undoes_a_running_os_in_an_emergency_since_the_update(self):
+        class Unsettled(installer.FilesOnly):
+            def settled(self):
+                return False, "emergency since the update: FIRMWARE_INCOMPATIBLE"
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.fake.session(emergency=True)
+        health = self.updater.installer.health
+        health.probe = Unsettled()
+        self.updater.recover()
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+        health.probe = installer.FilesOnly()
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.fake.session(emergency=True)
+        self.updater.recover()
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
+
+    # A never healthy OS is looked at also while recover_due waits after a refused hold.
+    def test_recover_due_looks_at_the_os_while_it_waits_after_a_refused_hold(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.updater._recover_after = time.monotonic() + 3600
+        os.remove(self.paths.session)
+        self.updater.recover_due()
+        self.assertFalse(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), A)
+
     # One that waited while the OS stopped is undone at the next look; after a refused hold not before RECOVER_RETRY.
     def test_recover_due_asks_again_only_after_a_refused_hold(self):
         self.install(A)
