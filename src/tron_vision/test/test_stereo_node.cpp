@@ -53,10 +53,13 @@ uint16_t FreePort() {
 
 rclcpp::NodeOptions Options(const std::string& crash_dir, uint16_t port, const std::string& library) {
   rclcpp::NodeOptions options;
+  // The memory of the test process, far more under ASan, is not the node's: over the limit the node would shut ROS
+  // down for every later test.
   options.parameter_overrides({{"crash_dir", crash_dir},
                                {"rtsp_port", static_cast<int64_t>(port)},
                                {"encoder_library", library},
-                               {"process", "stereo"}});
+                               {"process", "stereo"},
+                               {"max_rss_mb", int64_t{1} << 20}});
   return options;
 }
 
