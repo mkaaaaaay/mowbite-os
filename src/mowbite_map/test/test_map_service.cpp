@@ -821,6 +821,32 @@ TEST(MapDatum, AMapWhoseDatumWasNotWrittenAfterItIsNotTiedToTheOldOne) {
   EXPECT_FALSE(again.status().mowing_allowed);
 }
 
+// Unbound after a cut write: the reason names the datum recorded before, so the user can compare before tying.
+TEST(MapDatum, AnUnboundMapNamesTheDatumRecordedBefore) {
+  TempDir dir;
+  StoreAppMap(dir);
+  {
+    MapService service(ConfigFor(dir));
+    service.SetDatum(kDatum);
+    // The map is written, its datum not (power cut between the two).
+    fs::create_directory(dir.path() / "map_datum.json.tmp");
+    EXPECT_FALSE(service.AddArea("mow", "New", Square(3)).ok);
+    EXPECT_EQ(service.status().datum, DatumState::kUnbound);
+    EXPECT_NE(service.status().reason.find("the last one recorded was"), std::string::npos) << service.status().reason;
+  }
+  fs::remove(dir.path() / "map_datum.json.tmp");
+  MapService again(ConfigFor(dir));
+  again.SetDatum(Moved(1000.0));
+  EXPECT_EQ(again.status().datum, DatumState::kUnbound);
+  EXPECT_NE(again.status().reason.find("the last one recorded was"), std::string::npos) << again.status().reason;
+  EXPECT_NE(again.status().reason.find("1000.00 m from the datum in use"), std::string::npos)
+      << again.status().reason;
+  EXPECT_TRUE(HasEvent(Checked(again.TakeEvents()), "unbound"));
+  ASSERT_TRUE(again.Call("map.replace", json::array({AppMap()}))->ok);
+  EXPECT_EQ(again.status().datum, DatumState::kMatch);
+  EXPECT_TRUE(again.status().reason.empty());
+}
+
 TEST(MapDatum, EveryChangeOfTheMapKeepsItsTie) {
   TempDir dir;
   StoreAppMap(dir);

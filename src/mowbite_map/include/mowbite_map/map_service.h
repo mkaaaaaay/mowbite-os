@@ -177,6 +177,9 @@ class MapService {
   std::string text_;
   // The datum the map was recorded in, and the one in use.
   std::optional<Datum> recorded_;
+  // The datum recorded before the map lost it (a datum file of another map version, a datum that failed to store):
+  // named while the map is unbound, so the user can compare before tying it to the datum in use.
+  std::optional<Datum> lost_;
   std::optional<Datum> current_;
   Status status_;
   // Whether map.json holds the current map; false when it came from the previous version.

@@ -113,6 +113,7 @@ MapService::MapService(const Config& config)
   if (!datum.problem.empty()) notices_.push_back({Notice::Level::kWarn, "Datum file problem: " + datum.problem});
   // A datum of another map file: the map was written but not its datum after it (error or power loss).
   if (recorded_ && !datum.map_sha256.empty() && datum.map_sha256 != loaded.sha256) {
+    lost_ = recorded_;
     recorded_.reset();
     if (loaded.map) {
       notices_.push_back({Notice::Level::kWarn, "The datum file belongs to another version of the map: the map counts "
@@ -362,11 +363,13 @@ RpcOutcome MapService::Commit(MapData candidate, bool replaces) {
     const Datum datum = bind ? *current_ : *recorded_;
     const std::string datum_error = store_.SaveDatum(datum, Sha256Hex(text_));
     if (!datum_error.empty()) {
+      if (recorded_) lost_ = recorded_;
       recorded_.reset();
       Refresh();
       return Failure(kRpcInternal, "Stored the map but not its datum: " + datum_error);
     }
     recorded_ = datum;
+    lost_.reset();
   }
   Refresh();
   return {};
@@ -385,6 +388,11 @@ Status MapService::Evaluate() const {
   } else if (!recorded_) {
     status.datum = DatumState::kUnbound;
     status.reason = "The map has no recorded datum";
+    if (lost_) {
+      char apart[32];
+      std::snprintf(apart, sizeof(apart), "%.2f", DistanceM(*lost_, *current_));
+      status.reason += "; the last one recorded was " + Describe(*lost_) + ", " + apart + " m from the datum in use";
+    }
   } else if (DistanceM(*recorded_, *current_) > tolerance_m_) {
     char apart[32];
     std::snprintf(apart, sizeof(apart), "%.2f", DistanceM(*recorded_, *current_));
