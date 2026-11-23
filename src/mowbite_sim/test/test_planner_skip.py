@@ -14,6 +14,7 @@ import unittest
 import rclpy
 from mowbite_msgs.msg import MapStatus, RobotPose, RobotState
 from mowbite_msgs.srv import ReplaceMap, SetPose
+from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E402
@@ -49,6 +50,7 @@ class Probe(SimProbe):
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
+        self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
         self.start()
 
 

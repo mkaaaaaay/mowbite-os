@@ -187,7 +187,8 @@ class TestXcoreGuards(unittest.TestCase):
     def test_e_wheels_faster_than_any_command_latch(self, proc_output, driver):
         set_flags(wheel_speed=0.6)
         self.probe.drive(0.3, 1.5)
-        s = self.probe.status
+        # hw/status of the latch may follow the last command by one report.
+        s = self.probe.wait_for(lambda p: p.status.emergency and p.status, 0.5) or self.probe.status
         set_flags()
         self.assertTrue(s.emergency, "no latch")
         self.assertEqual(s.emergency_reason & (WHEEL_RUNAWAY | LATCH | HIGH_LEVEL), WHEEL_RUNAWAY | LATCH)

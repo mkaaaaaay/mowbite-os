@@ -219,7 +219,8 @@ class TestGoingHome(unittest.TestCase):
 
     def test_05_rain_with_rain_mode_0_changes_nothing(self):
         p = self.probe
-        p.set_params(rain_check_seconds=RAIN_CHECK)
+        # rain_mode 1 is the default: 0 is set here.
+        p.set_params(rain_check_seconds=RAIN_CHECK, rain_mode=0)
         since = self.mowing()
         p.flags(rain=1)
         time.sleep(RAIN_CHECK + 6)
