@@ -362,7 +362,9 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
       if (channel_id == emergency::kOutReason && value.size() == 2) {
         board_reason_ = Reader(value).U16();
         last_emergency_s_ = now;
-        if (*board_reason_ & reason::kLatch) latched_causes_ |= *board_reason_ & kLatchedCauses;
+        if (clear_remaining_ == 0 && (*board_reason_ & reason::kLatch)) {
+          latched_causes_ |= *board_reason_ & kLatchedCauses;
+        }
         // The board stops without the host's messages but lets go again once they come; the host keeps it stopped.
         if (*board_reason_ & reason::kTimeoutHighLevel) {
           if (board_heard_us_) link_lost_ = true;

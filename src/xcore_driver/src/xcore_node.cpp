@@ -181,6 +181,12 @@ class XcoreNode : public rclcpp::Node {
     bind_ip_ = io.bind_ip;
     group_port_ = io.group_port;
     io.services = LoadServices();
+    // A configuration longer than one datagram would go out empty and the service would wait for it for ever.
+    for (const auto& [id, sections] : io.services) {
+      if (xcore::EncodeSections(sections).size() > xcore::kMaxPayload) {
+        throw std::invalid_argument("the configuration of service " + std::to_string(id) + " does not fit one datagram");
+      }
+    }
     if (safety_measurement_date_.empty()) {
       RCLCPP_WARN(get_logger(), "No safety measurement of this mower yet: remote control only");
     }
@@ -218,8 +224,9 @@ class XcoreNode : public rclcpp::Node {
     if (hold_watch_->path().empty()) RCLCPP_WARN(get_logger(), "No hold_file: an update cannot hold this driver");
     PollHold();
 
+    // Only the newest command counts: after a stall of the executor no old ones come in a row.
     cmd_vel_sub_ = create_subscription<geometry_msgs::msg::Twist>(
-        "hw/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
+        "hw/cmd_vel", 1, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
           Io().OnCmdVel(msg->linear.x, msg->angular.z);
         });
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(

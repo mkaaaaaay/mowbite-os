@@ -53,7 +53,7 @@ struct Harness {
 
   void Announce(uint16_t sid, const ServiceDescription& d, double now, uint16_t port = kBoard.port) {
     auto bytes = AnnouncementPacket(sid, d, port);
-    link.OnAnnouncement(bytes.data(), bytes.size(), now, events);
+    link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip, now, events);
   }
   void Receive(const Bytes& bytes, double now, Endpoint from = kBoard) {
     link.OnDatagram(bytes.data(), bytes.size(), from, now, outputs, events);
@@ -250,7 +250,7 @@ TEST(Link, RtcmMayRunLongerThanAnnounced) {
   std::vector<LinkEvent> events;
   std::vector<Output> outputs;
   auto a = AnnouncementPacket(kGpsService, ExpectedGps());
-  link.OnAnnouncement(a.data(), a.size(), 0, events);
+  link.OnAnnouncement(a.data(), a.size(), kBoard.ip, 0, events);
   link.Tick(0, events);
   auto ack = FromBoard(kGpsService, MessageType::kClaim, kClaimAck);
   link.OnDatagram(ack.data(), ack.size(), kBoard, 0.1, outputs, events);
@@ -366,7 +366,7 @@ TEST(Link, NeverWritesTheChargeCurrentOverride) {
   auto bytes = EncodePacket(header, EncodeAnnouncement(a));
   std::vector<LinkEvent> events;
   std::vector<Output> outputs;
-  link.OnAnnouncement(bytes.data(), bytes.size(), 0, events);
+  link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip, 0, events);
   link.Tick(0, events);
   auto ack = FromBoard(kPowerService, MessageType::kClaim, kClaimAck);
   link.OnDatagram(ack.data(), ack.size(), kBoard, 0.1, outputs, events);
@@ -394,13 +394,13 @@ TEST(Link, ChargeRegistersNeedTheirFloatType) {
   ServiceDescription d = ExpectedPower();
   d.registers.push_back(Channel{power::kRegChargeVoltage, "charge voltage", *ParseValueType("uint32_t")});
   auto bytes = AnnouncementPacket(kPowerService, d);
-  link.OnAnnouncement(bytes.data(), bytes.size(), 0, events);
+  link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip, 0, events);
   EXPECT_EQ(link.State(kPowerService), ServiceState::kIncompatible);
   ASSERT_FALSE(events.empty());
   EXPECT_NE(events.back().text.find("register 6"), std::string::npos);
   d.registers.back().type = *ParseValueType("float");
   bytes = AnnouncementPacket(kPowerService, d);
-  link.OnAnnouncement(bytes.data(), bytes.size(), 1, events);
+  link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip, 1, events);
   EXPECT_EQ(link.State(kPowerService), ServiceState::kClaiming);
 }
 
@@ -422,4 +422,13 @@ TEST(Link, DataBeforeTheConfigurationDoNotMakeItRun) {
   EXPECT_EQ(out[0].header.arg1, kTransactionConfig);
   h.Receive(data, 0.12);
   EXPECT_EQ(h.link.State(kDiffDriveService), ServiceState::kRunning);
+}
+
+TEST(Link, AnAnnouncementNamesItsSender) {
+  Harness h;
+  auto bytes = AnnouncementPacket(kDiffDriveService, ExpectedDiffDrive());
+  h.link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip + 1, 0, h.events);
+  EXPECT_EQ(h.link.State(kDiffDriveService), ServiceState::kUnseen);
+  h.link.OnAnnouncement(bytes.data(), bytes.size(), kBoard.ip, 0, h.events);
+  EXPECT_EQ(h.link.State(kDiffDriveService), ServiceState::kClaiming);
 }

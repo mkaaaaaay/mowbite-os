@@ -75,7 +75,8 @@ std::vector<std::string> XcoreLink::CheckConfig(uint16_t id, const ServiceDescri
   return problems;
 }
 
-void XcoreLink::OnAnnouncement(const uint8_t* data, size_t size, double now, std::vector<LinkEvent>& events) {
+void XcoreLink::OnAnnouncement(const uint8_t* data, size_t size, uint32_t sender_ip, double now,
+                               std::vector<LinkEvent>& events) {
   auto packet = DecodePacket(data, size);
   if (!packet || packet->header.type != MessageType::kAdvertisement) return;
   auto announcement = ParseAnnouncement(packet->payload.data(), packet->payload.size());
@@ -87,6 +88,11 @@ void XcoreLink::OnAnnouncement(const uint8_t* data, size_t size, double now, std
   Endpoint endpoint;
   // A service without a port yet cannot be claimed.
   if (!ParseIpv4(announcement->ip, endpoint.ip) || announcement->port == 0) return;
+  // Another machine in the group must not move a service to an address of its choice.
+  if (endpoint.ip != sender_ip) {
+    dropped_++;
+    return;
+  }
   endpoint.port = announcement->port;
   if (s.state != ServiceState::kUnseen && s.state != ServiceState::kIncompatible && endpoint == s.endpoint) return;
 

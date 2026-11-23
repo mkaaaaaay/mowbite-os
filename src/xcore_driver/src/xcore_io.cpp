@@ -81,7 +81,9 @@ uint64_t BlockOf(const ControlStatus& status) {
          (uint64_t{status.held} << 34);
 }
 
-std::optional<std::string> ForeignHosts(uint32_t bind_ip, uint16_t group_port) {
+namespace {
+
+std::optional<std::string> ForeignHostsOnce(uint32_t bind_ip, uint16_t group_port) {
   std::vector<ForeignSocket> found;
   std::vector<std::string> tables;
   for (const char* path : {"/proc/net/udp", "/proc/net/udp6"}) {
@@ -118,6 +120,15 @@ std::optional<std::string> ForeignHosts(uint32_t bind_ip, uint16_t group_port) {
                      std::to_string(group_port) + ":";
   for (const auto& socket : found) text += " " + ForeignSocketText(socket);
   return text;
+}
+
+}  // namespace
+
+// A hit counts only when a second reading finds it too: a socket this process closed between reading the tables and
+// its own descriptors would otherwise look foreign.
+std::optional<std::string> ForeignHosts(uint32_t bind_ip, uint16_t group_port) {
+  if (!ForeignHostsOnce(bind_ip, group_port)) return std::nullopt;
+  return ForeignHostsOnce(bind_ip, group_port);
 }
 
 XcoreIo::XcoreIo(const IoConfig& config, const ControlConfig& control, const InputMap& inputs)
@@ -325,7 +336,7 @@ void XcoreIo::Loop() {
       std::vector<LinkEvent> events;
       {
         std::lock_guard<std::mutex> lock(mutex_);
-        Link().OnAnnouncement(buffer, static_cast<size_t>(n), MonotonicSeconds(), events);
+        Link().OnAnnouncement(buffer, static_cast<size_t>(n), from.ip, MonotonicSeconds(), events);
       }
       HandleEvents(events);
     }
@@ -443,7 +454,8 @@ void XcoreIo::Send(const std::vector<Datagram>& datagrams, std::optional<double>
       outbox_.log.Warn(Format("Dropped %zu datagrams computed %.2f s ago", datagrams.size() - i, age));
       return;
     }
-    if (!service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) outbox_.send_failed.Add();
+    // An empty datagram is a packet that did not fit: it counts as failed, never as sent.
+    if (d.bytes.empty() || !service_socket_.Send(d.bytes.data(), d.bytes.size(), d.to)) outbox_.send_failed.Add();
   }
 }
 

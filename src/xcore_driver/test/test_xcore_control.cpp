@@ -469,10 +469,11 @@ TEST(XcoreControl, CauseStillThereLatchesAgainAfterRelease) {
   Fixture f;
   f.Board(reason::kStop | reason::kLatch, 0);
   f.control.ReleaseEmergency(0.1);
-  f.Board(reason::kStop | reason::kLatch, 0.2);
-  EXPECT_EQ(f.control.Status(0.2).emergency_reason, kReasonStop | kReasonLatch);
-  f.Board(reason::kLatch, 0.3);
-  EXPECT_EQ(f.control.Status(0.3).emergency_reason, kReasonStop | kReasonLatch);
+  for (double t : {0.1, 0.2, 0.3}) f.control.Tick(t);
+  f.Board(reason::kStop | reason::kLatch, 0.35);
+  EXPECT_EQ(f.control.Status(0.35).emergency_reason, kReasonStop | kReasonLatch);
+  f.Board(reason::kLatch, 0.4);
+  EXPECT_EQ(f.control.Status(0.4).emergency_reason, kReasonStop | kReasonLatch);
 }
 
 TEST(XcoreControl, EveryReasonThatLatchesCounts) {
@@ -491,7 +492,9 @@ TEST(XcoreControl, EveryReasonThatLatchesCounts) {
   // After the release the reason counts again.
   f.Board(reason::kLatch, 0.4);
   EXPECT_FALSE(f.control.ReleaseEmergency(0.4).has_value());
+  for (double t : {0.4, 0.5}) f.control.Tick(t);
   f.Board(0, 0.5);
+  f.control.Tick(0.6);
   f.Board(reason::kStop | reason::kLatch, 0.6);
   f.control.Tick(0.6);
   EXPECT_EQ(f.control.Status(0.6).latch_count, 3u);
@@ -2171,4 +2174,27 @@ TEST(XcoreControl, AServiceThatRunsAgainGetsItsStops) {
   const auto next = Of(f.control.Tick(0.5), kDiffDriveService);
   ASSERT_EQ(next.size(), 1u);
   EXPECT_GT(TwistOf(next[0])[0], 0);
+}
+
+TEST(XcoreControl, AReportFromBeforeTheClearDoesNotTakeBackTheRelease) {
+  Fixture f;
+  f.Board(reason::kStop | reason::kLatch, 0);
+  ASSERT_TRUE(f.control.Status(0).latched);
+  ASSERT_FALSE(f.control.ReleaseEmergency(0.1));
+  int clears = 0;
+  for (int i = 10; i <= 50; i++) {
+    const double t = i * 0.01;
+    // Built before the board saw a clear: it changes nothing kept by the driver.
+    if (i == 12) f.Board(reason::kStop | reason::kLatch, t);
+    for (const auto& v : Of(f.control.Tick(t), kEmergencyService)) {
+      if (EmergencyOf(v).second & reason::kLatch) clears++;
+    }
+  }
+  EXPECT_EQ(clears, 3);
+  f.Board(0, 0.5);
+  EXPECT_FALSE(f.control.Status(0.5).latched);
+  // A report after the clears that still latches: the cause stays until the next release.
+  f.Board(reason::kStop | reason::kLatch, 0.6);
+  f.Board(reason::kLatch, 0.7);
+  EXPECT_TRUE(f.control.Status(0.7).emergency_reason & reason::kStop);
 }

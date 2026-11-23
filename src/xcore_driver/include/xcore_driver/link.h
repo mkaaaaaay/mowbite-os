@@ -69,7 +69,8 @@ class XcoreLink {
   explicit XcoreLink(const LinkConfig& config);
 
   // A datagram from the announcement group.
-  void OnAnnouncement(const uint8_t* data, size_t size, double now, std::vector<LinkEvent>& events);
+  // sender_ip is where the announcement came from: a service must announce its own address.
+  void OnAnnouncement(const uint8_t* data, size_t size, uint32_t sender_ip, double now, std::vector<LinkEvent>& events);
   // A datagram on the service socket; outputs of running services are appended.
   void OnDatagram(const uint8_t* data, size_t size, const Endpoint& from, double now, std::vector<Output>& outputs,
                   std::vector<LinkEvent>& events);
