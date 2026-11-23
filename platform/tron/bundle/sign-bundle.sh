@@ -5,8 +5,8 @@
 #   sign-bundle.sh [--yes] <bundle.tar.gz> <private key>
 # --yes signs without asking, only when the gate result of its commit is there and ok (for publishing after a merge).
 # The last serial per component and a log of what was signed stay in $MOWBITE_SIGN_STATE (default
-# ~/.local/state/mowbite-sign). The gate result is <commit, 7 digits>.json in $MOWBITE_GATE (a folder or host:folder,
-# as start.sh of the test gate writes it); without MOWBITE_GATE it is not looked up.
+# ~/.local/state/mowbite-sign). The gate result is <commit, first 7 digits or more>.json in $MOWBITE_GATE (a folder or
+# host:folder, as start.sh of the test gate writes it); without MOWBITE_GATE it is not looked up.
 set -euo pipefail
 yes=false
 if [ "${1:-}" = --yes ]; then
@@ -72,19 +72,38 @@ if [ "$serial" -le "$last" ]; then
     exit 1
 fi
 
-if [ -n "${MOWBITE_GATE:-}" ] && [ -n "$commit" ]; then
-    file="${commit:0:7}.json"
+# gate_dir <ls|cat> [file]: lists the folder of gate results or reads one file of it.
+gate_dir() {
     if [[ $MOWBITE_GATE == *:* ]]; then
-        gate=$(ssh "${MOWBITE_GATE%%:*}" cat "${MOWBITE_GATE#*:}/$file" 2> /dev/null || true)
+        ssh "${MOWBITE_GATE%%:*}" "$1" "${MOWBITE_GATE#*:}${2:+/$2}"
     else
-        gate=$(cat "$MOWBITE_GATE/$file" 2> /dev/null || true)
-    fi
+        "$1" "$MOWBITE_GATE${2:+/$2}"
+    fi 2> /dev/null || true
+}
+
+if [ -n "${MOWBITE_GATE:-}" ] && [ -n "$commit" ]; then
+    # The test gate names the file as git abbreviates the commit: the longest name that begins the commit counts.
+    file=$(gate_dir ls | awk -v commit="$commit" '
+        /^[0-9a-f]+\.json$/ {
+            digits = length($0) - 5
+            if (digits >= 7 && digits > best && substr($0, 1, digits) == substr(commit, 1, digits)) {
+                best = digits
+                name = $0
+            }
+        }
+        END { print name }')
+    gate=
+    [ -z "$file" ] || gate=$(gate_dir cat "$file")
     if [ -z "$gate" ]; then
         echo "  test gate: NO RESULT for ${commit:0:7}"
     else
-        python3 -I - "$gate" <<'PY' && gate_ok=true
+        python3 -I - "$gate" "$commit" <<'PY' && gate_ok=true
 import json, sys
 gate = json.loads(sys.argv[1])
+noted = gate.get("commit")
+if not isinstance(noted, str) or len(noted) < 7 or not sys.argv[2].startswith(noted):
+    print(f"  test gate: NO RESULT, the file is of commit {noted}")
+    sys.exit(1)
 print(f"  test gate: {'ok' if gate.get('ok') else 'NOT OK'}, updated {gate.get('updated')}")
 for name, step in sorted(gate.get("steps", {}).items()):
     print(f"    {'ok  ' if step.get('ok') else 'FAIL'} {name} ({step.get('at')}, {step.get('res')})")

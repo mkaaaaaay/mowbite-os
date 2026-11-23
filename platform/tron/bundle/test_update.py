@@ -717,12 +717,44 @@ class UpdateTest(Base):
         os.remove(path + ".sig")
         self.assertEqual(self.sign(path, "y", yes=True).returncode, 1)
         self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
-                   json.dumps({"ok": False, "updated": "now", "steps": {"gtest": {"ok": False}}}))
+                   json.dumps({"commit": B, "ok": False, "updated": "now", "steps": {"gtest": {"ok": False}}}))
         self.assertEqual(self.sign(path, "y", yes=True).returncode, 1)
         self.assertFalse(os.path.exists(path + ".sig"))
         self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
-                   json.dumps({"ok": True, "updated": "now", "steps": {"gtest": {"ok": True}}}))
+                   json.dumps({"commit": B, "ok": True, "updated": "now", "steps": {"gtest": {"ok": True}}}))
         signed = self.sign(path, "n", yes=True)
+        self.assertEqual(signed.returncode, 0, signed.stderr)
+        self.assertEqual(self.install(path), 0)
+
+    # The gate file has as many digits as git needs for the commit; a result of another commit does not count.
+    def test_sign_finds_the_gate_by_the_commit(self):
+        commit = B + "0123456789abc"
+        meta = {"format": 2, "component": "os", "revision": B, "commit": commit, "serial": 2000, "base": 1,
+                "min_app": "1.4.0", "runtime_packages": [], "api": 15, "planner_interface": 1,
+                "planner_files_version": 1}
+        path = self.bundle(B, meta=meta)
+        os.remove(path + ".sig")
+
+        def gate(name, noted, ok):
+            self.write(os.path.join(self.root, "gate", name),
+                       json.dumps({"commit": noted, "ok": ok, "updated": "now", "steps": {}}))
+
+        gate(B + "0-old.json", B + "0", True)
+        gate(B + "1.json", B + "1", True)
+        self.assertIn("test gate: NO RESULT for " + B, self.sign(path, yes=True).stdout)
+        gate(B + ".json", B + "1", True)
+        refused = self.sign(path, yes=True)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn(f"NO RESULT, the file is of commit {B}1", refused.stdout)
+        # The longer name counts before the shorter one.
+        gate(B + ".json", B, True)
+        gate(B + "0.json", B + "0", False)
+        refused = self.sign(path, yes=True)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("test gate: NOT OK", refused.stdout)
+        self.assertFalse(os.path.exists(path + ".sig"))
+        gate(B + "0.json", B + "0", True)
+        signed = self.sign(path, yes=True)
         self.assertEqual(signed.returncode, 0, signed.stderr)
         self.assertEqual(self.install(path), 0)
 
@@ -730,7 +762,7 @@ class UpdateTest(Base):
     def test_sign_newer_serials_only(self):
         os.makedirs(os.path.join(self.root, "gate"))
         self.write(os.path.join(self.root, "gate", "bbbbbbb.json"),
-                   json.dumps({"ok": False, "updated": "now", "steps": {"chk:update": {"ok": False}}}))
+                   json.dumps({"commit": B, "ok": False, "updated": "now", "steps": {"chk:update": {"ok": False}}}))
         path = self.bundle(B, serial=2000)
         os.remove(path + ".sig")
         self.assertEqual(self.sign(path, "n").returncode, 1)
