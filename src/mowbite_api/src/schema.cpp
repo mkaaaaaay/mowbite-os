@@ -216,11 +216,20 @@ Json BuildSchema(const Json& planner) {
     if (!event.reasons.empty()) reasons[event.type] = Reasons(event);
   }
   for (const auto& group : Refusals()) reasons[group.type] = Reasons(group);
-  // The data of a refusal, whatever its group: the fields of COMMAND_REFUSED and, open, those of its reason.
-  // Every group sends event, reason and message; the other fields of COMMAND_REFUSED only some.
+  // The data of a refusal, whatever its group: the fields of COMMAND_REFUSED and, open, those of its reason; required
+  // only what every group requires. A group without event lists the reasons of a status and is no refusal.
+  const auto field_of = [](const EventEntry& group, const std::string& name) {
+    const auto found = std::find_if(group.fields.begin(), group.fields.end(),
+                                    [&name](const Field& field) { return field.name == name; });
+    return found == group.fields.end() ? nullptr : &*found;
+  };
   std::vector<Field> refusal = Refusals().front().fields;
   for (auto& field : refusal) {
-    if (field.name != "event" && field.name != "reason" && field.name != "message") field.required = false;
+    field.required = std::all_of(Refusals().begin(), Refusals().end(), [&](const EventEntry& group) {
+      if (!field_of(group, "event")) return true;
+      const Field* same = field_of(group, field.name);
+      return same && same->required;
+    });
   }
   defs["refusal"] = Object("data of the -32600 of a refused command; event names the group of its reason in x-reasons",
                            Pointers(refusal), false);
@@ -264,9 +273,7 @@ Json BuildSchema(const Json& planner) {
                              {"description", command.text},
                              {"params", "#/$defs/" + command.name + ".params"},
                              {"result", "#/$defs/" + command.name + ".result"},
-                             {"offered", command.name == "docking.start"  ? "only where the OS docks by itself"
-                                        : command.name == "docking.test" ? "only where the platform has a dock marker"
-                                                                         : ""}};
+                             {"offered", command.offered}};
   }
   for (const auto& method : Methods()) {
     Json params = Property(method.params);

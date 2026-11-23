@@ -124,6 +124,8 @@ struct Command {
   // COMMAND_REFUSED (Refusals) may come with any command.
   std::string refused;
   std::vector<CommandAction> actions;
+  // When rpc.methods lists it, empty for always.
+  std::string offered = {};
 };
 
 // Another RPC method of the OS: what it takes and gives, and which node answers it.

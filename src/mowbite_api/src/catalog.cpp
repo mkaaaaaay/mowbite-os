@@ -51,10 +51,10 @@ std::vector<Field> Answer(std::vector<Field> fields = {}, std::vector<std::strin
 
 // A command of the logic: client and the params of the command, its answer, the event of its refusal and its actions.
 Command Logic(std::string name, std::string text, std::vector<Field> params, std::vector<Field> result,
-              std::string refused, std::vector<CommandAction> actions) {
+              std::string refused, std::vector<CommandAction> actions, std::string offered = "") {
   params.insert(params.begin(), Client());
   return {std::move(name), std::move(text), std::move(params), std::move(result), std::move(refused),
-          std::move(actions)};
+          std::move(actions), std::move(offered)};
 }
 
 const std::string kIdle = "mower_logic:idle/";
@@ -618,7 +618,7 @@ const std::vector<Command>& Commands() {
             {{"mower_logic:docking/abort_docking"}}),
       Logic("docking.start",
             "Drives home from IDLE to the docking station where the OS docks by itself; offered only there", {},
-            Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
+            Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}, "only where the OS docks by itself"),
       Logic("docking.test",
             "Docks by the dock camera alone from where the mower stands in front of the station, without map or "
             "position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
@@ -627,7 +627,7 @@ const std::vector<Command>& Commands() {
                      "start of the line by the marker and docks again; DOCKING_TEST_RUN ends every run, the first "
                      "failure ends the series without a further try",
                      false)},
-            Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}),
+            Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}, "only where the platform has a dock marker"),
       Logic("recording.start", "Enters the recording of areas from IDLE", {}, Answer(), "RECORDING_REFUSED",
             {{kIdle + "start_area_recording"}}),
       Logic("recording.exit", "Leaves the recording; what was not saved is gone", {}, Answer(), "COMMAND_REFUSED",
