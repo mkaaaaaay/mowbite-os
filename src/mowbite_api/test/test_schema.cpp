@@ -148,6 +148,13 @@ TEST(Additive, WhatIsTakenAwayIsFound) {
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-emergency-bits"][3]["name"] = "LIFTED"; }), "x-emergency-bits"));
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-commands"].erase("docking.start"); }), "x-commands.docking.start"));
   EXPECT_TRUE(Has(changed([](Json& s) { s["x-methods"].erase("map.replace"); }), "x-methods.map.replace: gone"));
+  // Action ids, units, the words of schedule.log and the keys of the setup are read by HA and the app.
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-commands"]["docking.abort"]["actions"][0]["action"] = "x:y/z"; }),
+                  "action mower_logic:docking/abort_docking gone"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["camera.stream.result"]["properties"]["expires"]["x-unit"] = "s"; }),
+                  "unit changed"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-schedule-log"].erase("skip_battery"); }), "x-schedule-log.skip_battery"));
+  EXPECT_TRUE(Has(changed([](Json& s) { s["x-setup"].erase("checks"); }), "x-setup.checks: gone"));
   // A parameter newly limited breaks callers; a result's limit may only narrow.
   EXPECT_TRUE(Has(changed([](Json& s) { s["$defs"]["docking.test.params"]["properties"]["runs"]["maximum"] = 10; }),
                   "maximum tighter"));

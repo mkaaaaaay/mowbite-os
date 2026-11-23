@@ -196,7 +196,7 @@ Field Schedule(bool required) {
        Switch("dark", "1: also starts and mows in the dark"), Switch("sunset", "With dark 1: still home at sunset"),
        Switch("fresh", "1: a job of its own, the open one is dropped"),
        Ranged("angle_offset_deg", "deg", -180, 180, "Added to the lane direction of the planner for its job", false)});
-  return Object(
+  Field schedule = Object(
       "schedule", "The schedule; its times local after tz",
       {Switch("enabled", "1: the plans start the mower"), Integer("min_battery", "% a plan waits for, 0 to 100"),
        Switch("skip_rain", "1: no start while the rain sensor is wet"),
@@ -208,6 +208,18 @@ Field Schedule(bool required) {
                        {Text("until", "YYYY-MM-DD local"),
                         Field{"areas", Type::kAny, "", true, "all, or a list of area ids", {}, false, {}, ""}}))},
       required);
+  return schedule;
+}
+
+Field Required(Field field) {
+  field.required = true;
+  return field;
+}
+
+// The fields of an object all optional: what is left out stays as it is.
+Field Partial(Field object) {
+  for (auto& field : object.fields) field.required = false;
+  return object;
 }
 
 Field ScheduleAnswer() {
@@ -674,7 +686,7 @@ const std::vector<Method>& Methods() {
       {"logs.recent", "mowbite_bridge", "The last log lines from WARN on, oldest first, logins hidden",
        Object("params", "All optional",
               {Number("since", "unix s", "Only lines after this time", false),
-               Text("level", "Lowest level: DEBUG, INFO, WARN, ERROR or FATAL; another counts as WARN", false),
+               Text("level", "Lowest level: WARN, ERROR or FATAL; another, also DEBUG or INFO, counts as WARN", false),
                Integer("limit", "Only the newest lines", false)},
               false),
        Rows("result", "A log line",
@@ -806,7 +818,7 @@ const std::vector<Method>& Methods() {
        "Changes keys of the schedule, all or nothing: -32602 with data {field, reason}, -32001 when version is not the "
        "one of the last schedule.get",
        Object("params", "The change",
-              {Schedule(true), Integer("version", "version of the last schedule.get", false)}),
+              {Partial(Schedule(true)), Integer("version", "version of the last schedule.get", false)}),
        ScheduleAnswer(), ""},
       {"schedule.log", "mowbite_schedule", "The log of the schedule, oldest first; words in x-schedule-log",
        Object("params", "How many", {Integer("limit", "The last so many, at most 100", false)}, false),
@@ -924,7 +936,7 @@ const std::vector<Method>& Methods() {
                Count("offset", "B", "Where the piece begins, 0 without"),
                Whole("size", "B", 1, kSetupImageBytes, "Its size at most, the whole image without", false)}),
        Object("result", "The piece",
-              {Whole("size", "B", 0, kSetupImageBytes, "Size of the whole image"),
+              {Required(Count("size", "B", "Size of the whole image")),
                Whole("offset", "B", 0, kSetupImageBytes, "Where the piece begins"),
                Text("data", "The piece in base64, empty at the end"), Text("sha256", "sha256 of the whole image"),
                Text("type", "Always image/svg+xml")}),

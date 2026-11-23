@@ -217,8 +217,13 @@ Json BuildSchema(const Json& planner) {
   }
   for (const auto& group : Refusals()) reasons[group.type] = Reasons(group);
   // The data of a refusal, whatever its group: the fields of COMMAND_REFUSED and, open, those of its reason.
+  // Every group sends event, reason and message; the other fields of COMMAND_REFUSED only some.
+  std::vector<Field> refusal = Refusals().front().fields;
+  for (auto& field : refusal) {
+    if (field.name != "event" && field.name != "reason" && field.name != "message") field.required = false;
+  }
   defs["refusal"] = Object("data of the -32600 of a refused command; event names the group of its reason in x-reasons",
-                           Pointers(Refusals().front().fields), false);
+                           Pointers(refusal), false);
   if (planner.is_object()) {
     const Json events = planner.value("events", Json::object());
     for (const auto& [type, part] : events.items()) {
@@ -259,7 +264,9 @@ Json BuildSchema(const Json& planner) {
                              {"description", command.text},
                              {"params", "#/$defs/" + command.name + ".params"},
                              {"result", "#/$defs/" + command.name + ".result"},
-                             {"offered", command.name == "docking.start" ? "only where the OS docks by itself" : ""}};
+                             {"offered", command.name == "docking.start"  ? "only where the OS docks by itself"
+                                        : command.name == "docking.test" ? "only where the platform has a dock marker"
+                                                                         : ""}};
   }
   for (const auto& method : Methods()) {
     Json params = Property(method.params);
@@ -432,6 +439,9 @@ void Compare(const Json& older, const Json& newer, const std::string& path, bool
   if (params && newer.contains("pattern") && (!older.contains("pattern") || older["pattern"] != newer["pattern"])) {
     out->push_back(path + ": pattern newly set or changed");
   }
+  if (older.contains("x-unit") && newer.value("x-unit", Json()) != older["x-unit"]) {
+    out->push_back(path + ": unit changed");
+  }
   if (older.contains("const") && (!newer.contains("const") || newer["const"] != older["const"])) {
     out->push_back(path + ": const changed");
   }
@@ -523,11 +533,24 @@ std::vector<std::string> CheckAdditive(const Json& older, const Json& newer) {
     if (!kept) out.push_back("x-emergency-bits." + bit.value("name", "?") + ": gone or renamed");
   }
   // Ratings in x-reasons may change; what an app may call or read may not go.
-  for (const char* section : {"x-commands", "x-methods", "x-settings", "x-geometry", "x-sensors"}) {
+  for (const char* section :
+       {"x-commands", "x-methods", "x-settings", "x-geometry", "x-sensors", "x-schedule-log", "x-setup"}) {
     const Json& now = newer.value(section, Json::object());
     const Json before = older.value(section, Json::object());
     for (const auto& [name, entry] : before.items()) {
       if (!now.contains(name)) out.push_back(std::string(section) + "." + name + ": gone");
+    }
+  }
+  // HA and the app steer by the action ids of a command: none may go.
+  const Json& commands = newer.value("x-commands", Json::object());
+  for (const auto& [name, entry] : older.value("x-commands", Json::object()).items()) {
+    if (!commands.contains(name)) continue;
+    const Json& now = commands[name].value("actions", Json::array());
+    for (const auto& action : entry.value("actions", Json::array())) {
+      const bool kept = std::any_of(now.begin(), now.end(), [&action](const Json& a) {
+        return a.value("action", "") == action.value("action", "");
+      });
+      if (!kept) out.push_back("x-commands." + name + ": action " + action.value("action", "?") + " gone");
     }
   }
   return out;
