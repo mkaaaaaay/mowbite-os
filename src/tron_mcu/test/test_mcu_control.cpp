@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cmath>
 #include <iterator>
+#include <limits>
+#include <stdexcept>
 
 #include "tron_mcu/mcu_control.h"
 #include "tron_mcu/mcu_journal.h"
@@ -2649,6 +2651,46 @@ TEST_F(ControlTest, TheFarewellLeavesTheStopOutOnTheChargingContactsWithoutComma
   farewell = control_.Farewell();
   ASSERT_EQ(farewell.size(), 2u);
   EXPECT_TRUE(IsZeroSpeed(farewell[0]));
+}
+
+// R15-3/8 on the Tron: a time that would switch a check off refuses the start.
+TEST(McuConfigTest, TheDefaultsAndTheTronValuesPass) {
+  tron::McuControlConfig config;
+  EXPECT_NO_THROW(tron::CheckConfig(config));
+  config.imu_timeout_s = 0.5;
+  config.imu_start_timeout_s = 2.0;
+  EXPECT_NO_THROW(tron::CheckConfig(config));
+}
+
+TEST(McuConfigTest, NotFiniteZeroOrHugeTimesRefuseTheStart) {
+  const double nan = std::nan("");
+  constexpr double kHuge = std::numeric_limits<double>::infinity();
+  using Field = double tron::McuControlConfig::*;
+  for (Field field : {&tron::McuControlConfig::cmd_vel_timeout_s, &tron::McuControlConfig::telemetry_timeout_s,
+                      &tron::McuControlConfig::blade_lease_max_s}) {
+    for (double value : {nan, kHuge, -kHuge, 0.0, -0.1, 1e9}) {
+      tron::McuControlConfig config;
+      config.*field = value;
+      EXPECT_THROW(tron::CheckConfig(config), std::invalid_argument) << value;
+    }
+  }
+  for (Field field : {&tron::McuControlConfig::imu_timeout_s, &tron::McuControlConfig::imu_start_timeout_s,
+                      &tron::McuControlConfig::speed_repeat_window_s, &tron::McuControlConfig::blade_stop_time_s,
+                      &tron::McuControlConfig::wheel_stop_time_s}) {
+    for (double value : {nan, kHuge, -0.1, 1e9}) {
+      tron::McuControlConfig config;
+      config.*field = value;
+      EXPECT_THROW(tron::CheckConfig(config), std::invalid_argument) << value;
+    }
+  }
+  tron::McuControlConfig config;
+  config.cmd_vel_timeout_s = 1.5;
+  EXPECT_THROW(tron::CheckConfig(config), std::invalid_argument);
+  // T2, heartbeat alone: up to 10 s.
+  config.cmd_vel_timeout_s = 10.0;
+  EXPECT_NO_THROW(tron::CheckConfig(config, true));
+  config.cmd_vel_timeout_s = 10.5;
+  EXPECT_THROW(tron::CheckConfig(config, true), std::invalid_argument);
 }
 
 // F1: what the guard of the node writes while its I/O thread stalls.

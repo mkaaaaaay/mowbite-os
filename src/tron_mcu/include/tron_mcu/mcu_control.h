@@ -194,6 +194,13 @@ struct McuControlStatus {
   bool ended = false;
 };
 
+// Throws std::invalid_argument for a time that is not finite or out of its range: NaN or a huge value would switch
+// the cmd_vel watchdog, the lease of the blade or the checks of telemetry and IMU off. The ranges, in s:
+// cmd_vel_timeout (0, 1] (with heartbeat_only of T2 in mowbite-measure (0, 10]), telemetry_timeout (0, 3],
+// blade_lease_max (0, 5], imu_timeout [0, 2] (0 without forwarding), imu_start_timeout [0, 10],
+// speed_repeat_window [0, 3], blade_stop_time [0, 30], wheel_stop_time [0, 10].
+void CheckConfig(const McuControlConfig& config, bool heartbeat_only = false);
+
 // Decides what goes to the MCU and when. Time is passed in (monotonic seconds), nothing here touches the port.
 // Every returned packet is sent in a frame of its own.
 class McuControl {

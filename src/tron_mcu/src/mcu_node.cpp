@@ -259,6 +259,8 @@ class McuNode : public rclcpp::Node {
     const bool send_imu = declare_parameter("send_imu", true) && !read_only;
     const double imu_timeout = declare_parameter("imu_timeout", 0.5);
     const double imu_start_timeout = declare_parameter("imu_start_timeout", 2.0);
+    // 0 would switch the check of the forwarded IMU off.
+    if (send_imu && !(imu_timeout > 0.0)) throw std::invalid_argument("imu_timeout must be above 0 with send_imu");
     // Without forwarding the MCU gets no IMU from here, so there is nothing to wait for.
     config.imu_timeout_s = send_imu ? imu_timeout : 0.0;
     config.imu_start_timeout_s = send_imu ? imu_start_timeout : 0.0;
@@ -327,6 +329,10 @@ class McuNode : public rclcpp::Node {
       RCLCPP_INFO(get_logger(), "Expecting MCU firmware cutter '%s', chassis '%s'; blocked until the MCU reports it",
                   config.expected_cutter_version.c_str(), config.expected_chassis_version.c_str());
     }
+    // Measurement only (T2 of mowbite-measure, heartbeat alone): cmd_vel_timeout up to 10 s.
+    const bool heartbeat_only = declare_parameter("heartbeat_only_measurement", false);
+    if (heartbeat_only) RCLCPP_WARN(get_logger(), "Measurement: heartbeat_only, cmd_vel_timeout up to 10 s allowed");
+    tron::CheckConfig(config, heartbeat_only);
     return config;
   }
 

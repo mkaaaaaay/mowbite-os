@@ -119,7 +119,8 @@ HOST_GONE_SPREAD_S = 0.3
 # Heartbeat alone (T2): tron_mcu of that start sends each command once and stops the wheels only after this long
 # without hw/cmd_vel.
 HEARTBEAT_ONLY_TIMEOUT_S = 10.0
-HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_window": 0.0}
+HEARTBEAT_ONLY = {"cmd_vel_timeout": HEARTBEAT_ONLY_TIMEOUT_S, "speed_repeat_window": 0.0,
+                  "heartbeat_only_measurement": True}
 # Hold after the last frame (T9): each case starts tron_mcu again with its measurement settings and silence_max; the
 # wheels turn HOLD_DRIVE_S, then hw/silence starts right after the chosen frame. A stand later than HOLD_HELD_S after
 # it counts as held. G: a long silence, then heartbeats alone for HOLD_QUIET_S before the stops. B: the blade on frame

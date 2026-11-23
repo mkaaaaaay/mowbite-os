@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdlib>
+#include <stdexcept>
 
 namespace tron {
 
@@ -39,6 +40,29 @@ const char* HostTestRefusalCode(HostTestRefusal refusal) {
     case HostTestRefusal::kNoSetup: return "NO_SETUP";
   }
   return "";
+}
+
+namespace {
+
+void CheckRange(const char* name, double value, bool zero_allowed, double max) {
+  const bool low_ok = zero_allowed ? value >= 0.0 : value > 0.0;
+  if (!std::isfinite(value) || !low_ok || value > max) {
+    throw std::invalid_argument(std::string(name) + " must be " + (zero_allowed ? "from 0" : "above 0") + " to " +
+                                std::to_string(max) + " s, not " + std::to_string(value));
+  }
+}
+
+}  // namespace
+
+void CheckConfig(const McuControlConfig& config, bool heartbeat_only) {
+  CheckRange("cmd_vel_timeout", config.cmd_vel_timeout_s, false, heartbeat_only ? 10.0 : 1.0);
+  CheckRange("telemetry_timeout", config.telemetry_timeout_s, false, 3.0);
+  CheckRange("blade_lease_max", config.blade_lease_max_s, false, 5.0);
+  CheckRange("imu_timeout", config.imu_timeout_s, true, 2.0);
+  CheckRange("imu_start_timeout", config.imu_start_timeout_s, true, 10.0);
+  CheckRange("speed_repeat_window", config.speed_repeat_window_s, true, 3.0);
+  CheckRange("blade_stop_time", config.blade_stop_time_s, true, 30.0);
+  CheckRange("wheel_stop_time", config.wheel_stop_time_s, true, 10.0);
 }
 
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
