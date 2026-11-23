@@ -103,11 +103,7 @@ void MowingPart::ApplySkips(CoreAccess core) {
   skipped_.reset();
   drive_on_ = false;
   if (skip_area_) {
-    if (const JobArea* area = job_.CurrentArea()) {
-      json details = {{"area_id", area->id}, {"area_name", area->name}};
-      PutReason(&details, "AREA_SKIPPED", skip_why_);
-      core.AddEvent("AREA_SKIPPED", std::move(details));
-    }
+    if (const JobArea* area = job_.CurrentArea()) core.AreaSkipped(*area, skip_why_);
     job_.SkipArea();
     // A plan or cut on its way is for the skipped area.
     if (leg_ == Leg::kPlanning || leg_ == Leg::kCutting) leg_ = Leg::kNone;
@@ -448,11 +444,7 @@ void MowingPart::OnJobPlanFailed(CoreAccess core, const Reason& why) {
   if (PlannerSkipsArea(why.code)) {
     // Masterplan 3.4: an area the planner cannot plan as it is does not hold up the others.
     planner_silent_ = 0;
-    if (const JobArea* area = job_.CurrentArea()) {
-      json details = {{"area_id", area->id}, {"area_name", area->name}};
-      PutReason(&details, "AREA_SKIPPED", why);
-      core.AddEvent("AREA_SKIPPED", std::move(details));
-    }
+    if (const JobArea* area = job_.CurrentArea()) core.AreaSkipped(*area, why);
     job_.SkipArea();
     approached_ = false;
     core.CheckpointNow();

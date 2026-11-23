@@ -243,6 +243,10 @@ void CoreAccess::AreasPassedOver(const std::vector<JobArea>& areas) {
   core_->AreasPassedOver(areas);
 }
 
+void CoreAccess::AreaSkipped(const JobArea& area, const Reason& why) {
+  core_->AreaSkipped(area, why);
+}
+
 void CoreAccess::EndJob(bool finished, bool home, const Reason& why) {
   core_->EndJob(finished, home, why);
 }

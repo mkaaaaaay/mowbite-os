@@ -89,6 +89,7 @@ class CoreAccess : public CoreFacts {
   void CheckpointNow();
   void BeginDockCheck(DockCheck purpose);
   void AreasPassedOver(const std::vector<JobArea>& areas);
+  void AreaSkipped(const JobArea& area, const Reason& why);
   void EndJob(bool finished, bool home, const Reason& why = Reason());
   ObstaclePart& obstacle_part();
 

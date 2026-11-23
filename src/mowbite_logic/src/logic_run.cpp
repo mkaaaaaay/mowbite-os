@@ -157,11 +157,13 @@ Reason LogicCore::DropTasks(const std::string& run_id, const std::vector<std::st
 }
 
 void LogicCore::AreasPassedOver(const std::vector<JobArea>& areas) {
-  for (const auto& area : areas) {
-    json details = {{"area_id", area.id}, {"area_name", area.name}};
-    PutReason(&details, "AREA_SKIPPED", SchedulePause());
-    AddEvent("AREA_SKIPPED", std::move(details));
-  }
+  for (const auto& area : areas) AreaSkipped(area, SchedulePause());
+}
+
+void LogicCore::AreaSkipped(const JobArea& area, const Reason& why) {
+  json details = {{"area_id", area.id}, {"area_name", area.name}};
+  PutReason(&details, "AREA_SKIPPED", why);
+  AddEvent("AREA_SKIPPED", std::move(details));
 }
 
 }  // namespace mowbite_logic

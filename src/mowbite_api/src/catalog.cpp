@@ -196,7 +196,7 @@ Field Schedule(bool required) {
        Switch("dark", "1: also starts and mows in the dark"), Switch("sunset", "With dark 1: still home at sunset"),
        Switch("fresh", "1: a job of its own, the open one is dropped"),
        Ranged("angle_offset_deg", "deg", -180, 180, "Added to the lane direction of the planner for its job", false)});
-  Field schedule = Object(
+  return Object(
       "schedule", "The schedule; its times local after tz",
       {Switch("enabled", "1: the plans start the mower"), Integer("min_battery", "% a plan waits for, 0 to 100"),
        Switch("skip_rain", "1: no start while the rain sensor is wet"),
@@ -208,7 +208,6 @@ Field Schedule(bool required) {
                        {Text("until", "YYYY-MM-DD local"),
                         Field{"areas", Type::kAny, "", true, "all, or a list of area ids", {}, false, {}, ""}}))},
       required);
-  return schedule;
 }
 
 Field Required(Field field) {

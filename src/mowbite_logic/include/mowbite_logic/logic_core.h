@@ -503,6 +503,8 @@ class LogicCore {
   bool SunsetWanted() const;
   // AREA_SKIPPED SCHEDULE for the areas the job passed over.
   void AreasPassedOver(const std::vector<JobArea>& areas);
+  // AREA_SKIPPED with why for one area.
+  void AreaSkipped(const JobArea& area, const Reason& why);
   // The first deadline of the run that is due: the sunset, then the end of the plan; empty when none is.
   Reason DeadlineDue(double now_s);
   // Continues the open job, or begins the one mowing.start asked for.

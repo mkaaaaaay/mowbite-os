@@ -67,6 +67,13 @@ std::string Describe(const Datum& datum) {
   return text;
 }
 
+// The distance between two datums in m, to the centimetre.
+std::string Apart(const Datum& a, const Datum& b) {
+  char text[32];
+  std::snprintf(text, sizeof(text), "%.2f", DistanceM(a, b));
+  return text;
+}
+
 }  // namespace
 
 const char* DatumStateName(DatumState state) {
@@ -389,16 +396,13 @@ Status MapService::Evaluate() const {
     status.datum = DatumState::kUnbound;
     status.reason = "The map has no recorded datum";
     if (lost_) {
-      char apart[32];
-      std::snprintf(apart, sizeof(apart), "%.2f", DistanceM(*lost_, *current_));
-      status.reason += "; the last one recorded was " + Describe(*lost_) + ", " + apart + " m from the datum in use";
+      status.reason += "; the last one recorded was " + Describe(*lost_) + ", " + Apart(*lost_, *current_) +
+                       " m from the datum in use";
     }
   } else if (DistanceM(*recorded_, *current_) > tolerance_m_) {
-    char apart[32];
-    std::snprintf(apart, sizeof(apart), "%.2f", DistanceM(*recorded_, *current_));
     status.datum = DatumState::kMismatch;
     status.reason = "The map was recorded for the datum " + Describe(*recorded_) + ", the datum in use is " +
-                    Describe(*current_) + " (" + apart + " m apart)";
+                    Describe(*current_) + " (" + Apart(*recorded_, *current_) + " m apart)";
   } else {
     status.datum = DatumState::kMatch;
     status.mowing_allowed = true;
