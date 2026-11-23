@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <stdexcept>
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_logic/logic_params.h"
@@ -24,6 +25,12 @@ TEST(LogicParams, TheSettingsOfTheCatalogWithoutPlanningValues) {
   EXPECT_EQ(values["dock_at_sunset"], 1);
   EXPECT_DOUBLE_EQ(values["max_position_accuracy"].get<double>(), 0.1);
   EXPECT_DOUBLE_EQ(values["gps_timeout"].get<double>(), 10.0);
+}
+
+TEST(LogicParams, DefaultIsTheCatalogs) {
+  EXPECT_EQ(LogicParams::Default("rain_mode"), 1.0);
+  EXPECT_EQ(LogicParams::Default("rain_mode"), LogicParams().Get("rain_mode"));
+  EXPECT_THROW(LogicParams::Default("outline_count"), std::out_of_range);
 }
 
 TEST(LogicParams, IntsAreIntegersInTheJson) {

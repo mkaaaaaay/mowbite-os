@@ -1688,8 +1688,12 @@ void LogicNode::TellRainWithoutSensor() {
   }
   if (rain_told_) return;
   rain_told_ = true;
-  // INFO: the default 1 is no mistake of the user.
-  RCLCPP_INFO(get_logger(), "rain_mode %d has no effect: this platform has no rain sensor (hw/capabilities)", mode);
+  // The default is no mistake of the user, another value was chosen.
+  if (mode == static_cast<int>(LogicParams::Default("rain_mode"))) {
+    RCLCPP_INFO(get_logger(), "rain_mode %d has no effect: this platform has no rain sensor (hw/capabilities)", mode);
+  } else {
+    RCLCPP_WARN(get_logger(), "rain_mode %d has no effect: this platform has no rain sensor (hw/capabilities)", mode);
+  }
 }
 
 bool LogicNode::SaveLogicParams(const LogicParams& params, std::string& error) {

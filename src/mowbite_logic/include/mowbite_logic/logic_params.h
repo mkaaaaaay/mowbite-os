@@ -50,6 +50,8 @@ class LogicParams {
   json Values() const;
   std::string Text() const;
   double Get(const std::string& name) const;
+  // The default of a known setting; std::out_of_range for another name.
+  static double Default(const std::string& name);
 
   // The parameters of params.set: {"params": {"/mower_logic/x": value, ...}}. All or nothing: a name of another node
   // or an unknown one, a value that is no number, or motor_cold_temperature not below motor_hot_temperature changes

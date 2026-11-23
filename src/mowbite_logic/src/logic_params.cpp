@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <stdexcept>
 
 #include "mowbite_api/catalog.h"
 
@@ -83,6 +84,12 @@ std::string LogicParams::Text() const {
 
 double LogicParams::Get(const std::string& name) const {
   return values_.at(name);
+}
+
+double LogicParams::Default(const std::string& name) {
+  const ParamSpec* spec = FindSpec(name);
+  if (!spec) throw std::out_of_range("no setting " + name);
+  return spec->def;
 }
 
 ParamsResult LogicParams::Set(const json& request) {
