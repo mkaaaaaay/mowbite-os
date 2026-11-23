@@ -158,8 +158,8 @@ std::string VersionText(const std::string& version) {
   return Dump(Json{{"version", version.empty() ? "UNKNOWN VERSION" : version}});
 }
 
-Json SystemInfo(const std::string& version, const std::string& update_path, const std::string& platform,
-                int mqtt_version, const Json& stop_release, const Json& blade_height) {
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release,
+                const Json& blade_height, const std::string& update_path) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},

@@ -328,8 +328,7 @@ std::optional<Pose2> Estimator::SetHeading(double heading, double t) {
   const State before = filter_.state();
   const Eigen::Vector2d lever = Lever(TiltAt(t));
   // The antenna stays at the last fix while the mower has not driven since, else where the estimate has it now.
-  const Eigen::Vector2d antenna = StillSinceFix() ? last_fix_->antenna
-                                                  : Eigen::Vector2d(before(0), before(1)) + Turned(lever, before(2));
+  const Eigen::Vector2d antenna = StillSinceFix() ? last_fix_->antenna : AntennaPosition(before, lever);
   const Eigen::Vector2d base = antenna - Turned(lever, heading);
   filter_.SetHeading(heading, config_.set_heading_variance);
   filter_.Shift(State(base(0) - before(0), base(1) - before(1), 0.0));

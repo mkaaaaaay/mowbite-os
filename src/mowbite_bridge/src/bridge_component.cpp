@@ -226,7 +226,7 @@ class BridgeNode : public rclcpp::Node {
         port_(declare_parameter("mqtt_port", 1883)),
         data_dir_(declare_parameter("data_dir", std::string())),
         core_(BridgeConfig{declare_parameter("software_version", std::string()),
-                           declare_parameter("params_json", std::string("{}")), nullptr,
+                           declare_parameter("params_json", std::string("{}")),
                            declare_parameter("update_path", std::string())}),
         events_(JoinPath(data_dir_, "event_history"),
                 static_cast<std::size_t>(std::max<int64_t>(0, declare_parameter("event_history_days", 60))),

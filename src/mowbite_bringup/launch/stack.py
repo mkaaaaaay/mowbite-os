@@ -97,8 +97,7 @@ def prepare_data_dir(data_dir, logger, besides=()):
             return None
         schema, _ = data_store.image_schema()
         # The lock stays open until this process ends, after its nodes have stopped writing.
-        _, note = data_store.prepare(data_dir, schema, os.environ.get("MOWBITE_OS_REVISION") or "unknown",
-                                     besides=besides)
+        _, note = data_store.prepare(data_dir, schema, migrate.image(), besides=besides)
     except data_store.Halt as halt:
         line = halt.line(schema)
     except (OSError, ValueError, KeyError, LookupError) as error:
@@ -220,7 +219,7 @@ def update_path():
 # their order (later ones change single values), geometry its dimensions.
 def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=None):
     journal_dir = {"journal_dir": journal}
-    version = {"software_version": os.environ.get("MOWBITE_OS_REVISION", "")}
+    version = {"software_version": migrate.revision()}
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
         parameters=[geometry, *files, journal_dir])

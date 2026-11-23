@@ -121,8 +121,13 @@ def write_file(folder, name, data):
     data_store.sync_folder(folder)
 
 
+# The revision of the running OS, empty where the start does not name it.
+def revision():
+    return os.environ.get("MOWBITE_OS_REVISION", "")
+
+
 def image():
-    return os.environ.get("MOWBITE_OS_REVISION") or "unknown"
+    return revision() or "unknown"
 
 
 def read_json(path):

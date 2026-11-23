@@ -898,7 +898,7 @@ namespace {
 // A connected core with a clock the test sets and its events kept.
 class Timed : public ::testing::Test {
  protected:
-  Timed() : core_(BridgeConfig{"1.2.3", "{}", [this] { return now_; }}) {
+  Timed() : core_(BridgeConfig{"1.2.3", "{}", "", [this] { return now_; }}) {
     core_.SetEventSink([this](const Json& event) { sunk_.push_back(event); });
     core_.Connected();
     core_.Take();
@@ -992,7 +992,7 @@ TEST_F(Timed, MethodsChangedTellsTheChangesOfOneSecondTogether) {
 
 TEST(BridgeCoreConnection, MethodsChangedWaitsForTheBroker) {
   double now = 0.0;
-  BridgeCore core(BridgeConfig{"1.2.3", "{}", [&now] { return now; }});
+  BridgeCore core(BridgeConfig{"1.2.3", "{}", "", [&now] { return now; }});
   std::vector<Json> sunk;
   core.SetEventSink([&sunk](const Json& event) { sunk.push_back(event); });
   core.OnRpcMethods("mowbite_logic", {"params.set"});

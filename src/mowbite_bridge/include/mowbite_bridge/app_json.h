@@ -112,9 +112,9 @@ std::string VersionText(const std::string& version);
 
 // system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height,
 // update_path where it is empty.
-Json SystemInfo(const std::string& version, const std::string& update_path, const std::string& platform,
-                int mqtt_version,
-                const Json& stop_release = Json(), const Json& blade_height = Json());
+Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
+                const Json& stop_release = Json(), const Json& blade_height = Json(),
+                const std::string& update_path = "");
 
 // stop_release of system.info from the times of hw/capabilities: null without a free time.
 Json StopRelease(double free_s, double hold_s, double max_hold_s);
