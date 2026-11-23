@@ -237,6 +237,7 @@ std::optional<ReleaseRefusal> XcoreControl::ReleaseEmergency(double now, uint32_
   uncommanded_since_s_.reset();
   overspeed_since_s_.reset();
   host_latch_ = 0;
+  released_causes_ = latched_causes_ | (board_reason_ ? *board_reason_ & kLatchedCauses : 0u);
   latched_causes_ = 0;
   if (!blade_turning_) mower_not_stopped_ = false;
   link_lost_ = false;
@@ -362,8 +363,9 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
       if (channel_id == emergency::kOutReason && value.size() == 2) {
         board_reason_ = Reader(value).U16();
         last_emergency_s_ = now;
-        if (clear_remaining_ == 0 && (*board_reason_ & reason::kLatch)) {
-          latched_causes_ |= *board_reason_ & kLatchedCauses;
+        if (*board_reason_ & reason::kLatch) {
+          const uint32_t causes = *board_reason_ & kLatchedCauses;
+          latched_causes_ |= clear_remaining_ > 0 ? causes & ~released_causes_ : causes;
         }
         // The board stops without the host's messages but lets go again once they come; the host keeps it stopped.
         if (*board_reason_ & reason::kTimeoutHighLevel) {

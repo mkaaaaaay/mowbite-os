@@ -2198,3 +2198,23 @@ TEST(XcoreControl, AReportFromBeforeTheClearDoesNotTakeBackTheRelease) {
   f.Board(reason::kLatch, 0.7);
   EXPECT_TRUE(f.control.Status(0.7).emergency_reason & reason::kStop);
 }
+
+// A cause that was not released latches at once, also while the clears of the release go out: no clear wipes it.
+TEST(XcoreControl, ANewCauseDuringTheClearsLatches) {
+  Fixture f;
+  f.Board(reason::kStop | reason::kLatch, 0);
+  ASSERT_FALSE(f.control.ReleaseEmergency(0.1));
+  int clears = 0;
+  for (int i = 10; i <= 50; i++) {
+    const double t = i * 0.01;
+    if (i == 12) f.Board(reason::kLift | reason::kLatch, t);
+    for (const auto& v : Of(f.control.Tick(t), kEmergencyService)) {
+      if (EmergencyOf(v).second & reason::kLatch) clears++;
+    }
+  }
+  EXPECT_LE(clears, 1);
+  f.Board(reason::kLatch, 0.6);
+  const auto status = f.control.Status(0.6);
+  EXPECT_TRUE(status.latched);
+  EXPECT_TRUE(status.emergency_reason & reason::kLift);
+}

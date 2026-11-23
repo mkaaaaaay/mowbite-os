@@ -343,9 +343,10 @@ class XcoreControl {
   // Every reason that latched since the start, and the reasons counted in it that still stand.
   uint32_t latch_count_ = 0;
   uint32_t counted_ = 0;
-  // A release asks the board to clear this many more times; meanwhile reports may predate the clear, so their latched
-  // causes are not taken again.
+  // A release asks the board to clear this many more times; meanwhile a report may predate the clear, so the causes
+  // released are not taken from it again. A cause not released then latches at once.
   int clear_remaining_ = 0;
+  uint32_t released_causes_ = 0;
   std::optional<double> next_emergency_s_;
 
   std::optional<uint64_t> active_inputs_;
