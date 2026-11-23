@@ -78,6 +78,10 @@ xcore_driver:
     tilt_time: 0.5
     tilt_release: 26.0
     imu_fresh: 0.5
+    # Without a plausible IMU sample for imu_timeout s, motion and blade are blocked (IMU_TIMEOUT); driving without
+    # wheel ticks for ticks_timeout s latches WHEEL_RUNAWAY.
+    imu_timeout: 0.5
+    ticks_timeout: 1.0
     # Up to uncommanded_window s after the last drive setpoint other than 0: a wheel faster than uncommanded_speed
     # for uncommanded_time s, uncommanded_after s or more after that setpoint, latches; so does a wheel faster than
     # overspeed_factor x (max_linear_speed + max_angular_speed x wheel_distance / 2) for overspeed_time s.

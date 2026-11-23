@@ -72,6 +72,9 @@ struct Fixture {
   static ControlConfig Config() {
     ControlConfig c;
     c.allow_blade = true;
+    // Both have tests of their own; the others send neither IMU nor ticks.
+    c.imu_timeout_s = 0;
+    c.ticks_timeout_s = 0;
     return c;
   }
   void Board(uint16_t reason, double now) {
@@ -1522,7 +1525,10 @@ TEST(XcoreControl, TheTimeAgainstTheCommandStartsAgainAfterARestartOrAHold) {
   {
     DriveRun r;
     r.Until(0.3, -0.1, -0.1, true);
+    // Lost while driving: latched as a lost link until a release.
     r.f.control.OnServiceRestart(kDiffDriveService, r.t);
+    EXPECT_TRUE(r.f.control.Status(r.t).emergency_reason & reason::kTimeoutHighLevel);
+    ASSERT_FALSE(r.f.control.ReleaseEmergency(r.t));
     r.Until(0.7, -0.1, -0.1, true);
     EXPECT_FALSE(r.f.control.Status(r.t).blocked);
   }
@@ -2018,4 +2024,151 @@ TEST(XcoreControl, ConfigOfTheOwnChecksIsFiniteAndInRange) {
     c.*field = value;
     EXPECT_THROW(CheckControlConfig(c), std::invalid_argument) << value;
   }
+}
+
+TEST(XcoreControl, WithoutAPlausibleImuSampleMotionAndBladeWait) {
+  ControlConfig c = Fixture::Config();
+  c.imu_timeout_s = 0.5;
+  Fixture f(c);
+  // No sample yet: blocked with IMU_TIMEOUT, which latches nothing.
+  EXPECT_TRUE(f.control.Status(0).emergency_reason & kReasonImuTimeout);
+  EXPECT_FALSE(f.control.Status(0).latched);
+  f.control.OnImu(0, 0, 9.81, 0.1);
+  f.Board(0, 0.1);
+  EXPECT_FALSE(f.control.Status(0.1).blocked);
+  ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.1), BladeResult::kOk);
+  // Zero vectors and far too long ones count as none.
+  for (int i = 2; i <= 7; i++) {
+    const double t = i * 0.1;
+    f.control.OnImu(0, 0, 0, t);
+    f.control.OnImu(0, 0, 200, t);
+    f.Board(0, t);
+    f.control.Tick(t);
+  }
+  EXPECT_TRUE(f.control.Status(0.7).emergency_reason & kReasonImuTimeout);
+  EXPECT_FALSE(f.control.Status(0.7).blade_on);
+  EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.7), BladeResult::kBlocked);
+  // A restart of the IMU service forgets the last sample.
+  f.control.OnImu(0, 0, 9.81, 0.8);
+  EXPECT_FALSE(f.control.Status(0.8).blocked);
+  f.control.OnServiceRestart(kImuService, 0.85);
+  EXPECT_TRUE(f.control.Status(0.85).emergency_reason & kReasonImuTimeout);
+}
+
+TEST(XcoreControl, DrivingWithoutTicksLatches) {
+  ControlConfig c = Fixture::Config();
+  c.ticks_timeout_s = 1.0;
+  Fixture f(c);
+  Wheels wheels;
+  // Ticks come: no latch however long it drives.
+  double t = 0;
+  for (; t < 3.0; t += 0.04) {
+    f.Board(0, t);
+    f.control.OnCmdVel(0.1, 0, t);
+    Ticks(f, wheels, 0.1, 0.1, t);
+    f.control.Tick(t);
+  }
+  EXPECT_FALSE(Runaway(f, t));
+  // They stop: latched after 1 s, the wheels get their stops.
+  std::vector<InputValue> all;
+  const double last = t;
+  for (; t < last + 1.6; t += 0.04) {
+    f.Board(0, t);
+    f.control.OnCmdVel(0.1, 0, t);
+    for (auto& v : f.control.Tick(t)) all.push_back(v);
+  }
+  EXPECT_TRUE(Runaway(f, t));
+  EXPECT_TRUE(f.control.Status(t).latched);
+  EXPECT_FALSE(f.control.Status(t).moving);
+  const auto drive = Of(all, kDiffDriveService);
+  ASSERT_GE(drive.size(), 3u);
+  for (size_t i = drive.size() - 3; i < drive.size(); i++) EXPECT_EQ(TwistOf(drive[i]), std::vector<double>(6, 0.0));
+  // Standing without a command needs no ticks.
+  Fixture idle(c);
+  for (double s = 0; s < 3.0; s += 0.1) {
+    idle.Board(0, s);
+    idle.control.Tick(s);
+  }
+  EXPECT_FALSE(Runaway(idle, 3.0));
+}
+
+TEST(XcoreControl, AServiceLostWhileDrivingLatchesOnlyThen) {
+  {
+    Fixture f;
+    f.control.OnCmdVel(0.1, 0, 0);
+    f.control.Tick(0);
+    f.control.OnServiceRestart(kEmergencyService, 0.05);
+    // The board comes back without the timeout bit: the host keeps the mower stopped until a release.
+    f.Board(0, 0.1);
+    const auto s = f.control.Status(0.1);
+    EXPECT_TRUE(s.latched);
+    EXPECT_TRUE(s.emergency_reason & reason::kTimeoutHighLevel);
+    f.control.OnCmdVel(0.1, 0, 0.2);
+    for (const auto& v : Of(f.control.Tick(0.2), kDiffDriveService)) {
+      EXPECT_EQ(TwistOf(v), std::vector<double>(6, 0.0));
+    }
+    ASSERT_FALSE(f.control.ReleaseEmergency(0.3));
+    f.Board(0, 0.3);
+    f.control.OnCmdVel(0.1, 0, 0.3);
+    EXPECT_EQ(Of(f.control.Tick(0.3), kDiffDriveService).size(), 1u);
+  }
+  {
+    Fixture f;
+    ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
+    f.control.OnServiceRestart(kMowerService, 0.05);
+    EXPECT_TRUE(f.control.Status(0.05).latched);
+  }
+  {
+    // Standing still: a restart of the board is no lost link.
+    Fixture f;
+    for (uint16_t id : {kEmergencyService, kDiffDriveService, kMowerService}) f.control.OnServiceRestart(id, 0.05);
+    f.Board(0, 0.1);
+    EXPECT_FALSE(f.control.Status(0.1).latched);
+  }
+}
+
+TEST(XcoreControl, ValuesThatAreNoNumberAreNoValues) {
+  Fixture f;
+  // A twist with a part that is no number is a stop.
+  f.control.OnCmdVel(0.1, 0, 0);
+  ASSERT_EQ(Of(f.control.Tick(0), kDiffDriveService).size(), 1u);
+  f.control.OnCmdVel(std::nan(""), 0.2, 0.05);
+  EXPECT_FALSE(f.control.Status(0.05).moving);
+  f.control.OnCmdVel(0.1, INFINITY, 0.1);
+  EXPECT_FALSE(f.control.Status(0.1).moving);
+  // Board values that are no number keep the last ones.
+  f.control.OnOutput(kPowerService, power::kOutBatteryVoltage, F32(std::nanf("")), 0, 0.2);
+  EXPECT_FALSE(f.control.Status(0.2).battery.known);
+  f.control.OnOutput(kPowerService, power::kOutBatteryVoltage, F32(26.0f), 0, 0.3);
+  f.control.OnOutput(kPowerService, power::kOutBatteryPercentage, F32(0.5f), 0, 0.3);
+  f.control.OnOutput(kPowerService, power::kOutBatteryPercentage, F32(std::nanf("")), 0, 0.3);
+  f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 0.3);
+  f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(std::nanf("")), 0, 0.4);
+  const auto s = f.control.Status(0.4);
+  EXPECT_EQ(s.battery.voltage, 26.0);
+  EXPECT_EQ(s.battery.fraction, 0.5);
+  EXPECT_TRUE(s.dock_contact_raw);
+}
+
+TEST(XcoreControl, AServiceThatRunsAgainGetsItsStops) {
+  Fixture f;
+  // Nothing commanded: three stops of the wheels and three offs of the blade, also at the first start.
+  f.control.OnServiceRunning(kDiffDriveService, 0);
+  f.control.OnServiceRunning(kMowerService, 0);
+  std::vector<InputValue> all;
+  for (int i = 0; i <= 40; i++) {
+    for (auto& v : f.control.Tick(i * 0.01)) all.push_back(v);
+  }
+  const auto drive = Of(all, kDiffDriveService);
+  ASSERT_EQ(drive.size(), 3u);
+  for (const auto& v : drive) EXPECT_EQ(TwistOf(v), std::vector<double>(6, 0.0));
+  const auto mower = Of(all, kMowerService);
+  ASSERT_GE(mower.size(), 3u);
+  for (const auto& v : mower) EXPECT_EQ(SpeedOf(v), 0);
+  // While commanded the setpoint goes on as before.
+  f.control.OnCmdVel(0.1, 0, 0.5);
+  f.control.OnServiceRunning(kDiffDriveService, 0.5);
+  const auto next = Of(f.control.Tick(0.5), kDiffDriveService);
+  ASSERT_EQ(next.size(), 1u);
+  EXPECT_GT(TwistOf(next[0])[0], 0);
 }

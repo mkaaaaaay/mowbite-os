@@ -12,6 +12,9 @@ namespace xcore {
 namespace {
 
 constexpr double kTimeEpsilon = 1e-6;
+// The length of a plausible acceleration sample, m/s².
+constexpr double kImuMinG = 3.0;
+constexpr double kImuMaxG = 40.0;
 constexpr double kDegreesPerRadian = 180.0 / M_PI;
 
 double Clamp(double value, double limit) {
@@ -67,6 +70,8 @@ void CheckControlConfig(const ControlConfig& c) {
       {"tilt_time", c.tilt_time_s, 0, false, 5, false},
       {"tilt_release", c.tilt_release_deg, 0, true, c.tilt_limit_deg, false},
       {"imu_fresh", c.imu_fresh_s, 0, true, 2, false},
+      {"imu_timeout", c.imu_timeout_s, 0, true, 2, false},
+      {"ticks_timeout", c.ticks_timeout_s, 0, true, 3, false},
       {"uncommanded_speed", c.uncommanded_speed, 0, true, 1, false},
       {"uncommanded_after", c.uncommanded_after_s, 0, false, 10, false},
       {"uncommanded_window", c.uncommanded_window_s, c.uncommanded_after_s, false, 60, false},
@@ -139,6 +144,8 @@ XcoreControl::XcoreControl(const ControlConfig& config, const InputMap& inputs)
 
 void XcoreControl::OnCmdVel(double linear, double angular, double now) {
   if (Silent(now)) return;
+  // A twist with a part that is no number is a stop, not a turn or a run straight on.
+  if (!std::isfinite(linear) || !std::isfinite(angular)) linear = angular = 0;
   Command command{Clamp(linear, config_.max_linear_speed), Clamp(angular, config_.max_angular_speed)};
   last_cmd_s_ = now;
   if (command.linear == 0 && command.angular == 0) {
@@ -261,6 +268,9 @@ void XcoreControl::LatchForeignHost(const std::string& why, double now) {
 
 void XcoreControl::OnImu(double ax, double ay, double az, double now) {
   if (!std::isfinite(ax) || !std::isfinite(ay) || !std::isfinite(az)) return;
+  // Gravity alone is 9.81 m/s²: a vector far off it (a zero sample, a broken sensor) counts as no sample.
+  const double g = std::sqrt(ax * ax + ay * ay + az * az);
+  if (g < kImuMinG || g > kImuMaxG) return;
   // The angle between the body's z axis and gravity; past 90 deg the mower lies on its back.
   tilt_deg_ = std::atan2(std::hypot(ax, ay), az) * kDegreesPerRadian;
   last_imu_s_ = now;
@@ -372,6 +382,7 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
             uint32_t rt = r.U32();
             auto twist = odometry_.OnTicks(l, rt, board_time_us);
             if (twist) {
+              last_twist_s_ = now;
               regulator_.OnMeasured(twist->left, twist->right, now);
               CheckWheels(*twist, now);
             }
@@ -435,14 +446,14 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
     case kPowerService:
       switch (channel_id) {
         case power::kOutBatteryVoltage:
-          if (auto v = F32(value)) {
+          if (auto v = F32(value); v && std::isfinite(*v)) {
             battery_.voltage = *v;
             battery_.known = true;
             last_battery_s_ = now;
           }
           break;
         case power::kOutChargeVoltage:
-          if (auto v = F32(value)) {
+          if (auto v = F32(value); v && std::isfinite(*v)) {
             battery_.charge_voltage = *v;
             bool raw = *v >= config_.dock_voltage;
             if (raw != dock_raw_) dock_samples_ = 0;
@@ -454,7 +465,7 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
           if (auto v = F32(value)) battery_.charge_current = *v;
           break;
         case power::kOutBatteryPercentage:
-          if (auto v = F32(value)) battery_.fraction = std::clamp<double>(*v, 0, 1);
+          if (auto v = F32(value); v && std::isfinite(*v)) battery_.fraction = std::clamp<double>(*v, 0, 1);
           break;
         case power::kOutChargingStatus:
           battery_.charging_status = DecodeText(value);
@@ -473,6 +484,18 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
 }
 
 void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
+  // A service that drives or mows, lost while commanded: the board took setpoints of a host it no longer heard, and it
+  // lets go once they come again. The host latches as for a lost link.
+  const bool busy = command_ || moving_ || blade_;
+  const bool drives = service_id == kEmergencyService || service_id == kDiffDriveService || service_id == kMowerService;
+  if (busy && drives && !link_lost_) {
+    char text[120];
+    std::snprintf(text, sizeof(text), "service %u lost or restarted while driving or mowing: link counted as lost",
+                  service_id);
+    errors_.push_back(text);
+    link_lost_ = true;
+    next_emergency_s_.reset();
+  }
   switch (service_id) {
     case kEmergencyService:
       board_reason_.reset();
@@ -503,9 +526,18 @@ void XcoreControl::OnServiceRestart(uint16_t service_id, double now) {
     case kInputService:
       active_inputs_.reset();
       break;
+    case kImuService:
+      last_imu_s_.reset();
+      tilted_since_s_.reset();
+      break;
     default:
       break;
   }
+}
+
+void XcoreControl::OnServiceRunning(uint16_t service_id, double now) {
+  if (service_id == kDiffDriveService && !command_) stop_repeat_ = Repeat{config_.repeat_count, now};
+  if (service_id == kMowerService && !blade_) blade_off_repeat_ = Repeat{config_.repeat_count, now};
 }
 
 bool XcoreControl::Due(std::optional<double>& next, double period, double now) {
@@ -606,6 +638,24 @@ std::vector<InputValue> XcoreControl::Tick(double now) {
     if (moving_) stop_repeat_ = Repeat{config_.repeat_count, now};
     moving_ = false;
   }
+  if (!command_) {
+    driving_since_s_.reset();
+  } else if (!driving_since_s_) {
+    driving_since_s_ = now;
+  }
+  // Without ticks the wheel checks see nothing: driving only on the duty model is not allowed.
+  const auto ticks_late = [&](double since) { return now - since > config_.ticks_timeout_s + kTimeEpsilon; };
+  if (config_.ticks_timeout_s > 0 && driving_since_s_ && ticks_late(*driving_since_s_) && (!last_twist_s_ || ticks_late(*last_twist_s_))) {
+    char text[120];
+    std::snprintf(text, sizeof(text), "no wheel ticks for %.1f s while driving: the wheel checks are blind",
+                  last_twist_s_ ? now - *last_twist_s_ : now - *driving_since_s_);
+    Fault(kReasonWheelRunaway, text, now);
+    command_.reset();
+    regulator_.Reset();
+    moving_ = false;
+    driving_since_s_.reset();
+    blocked = true;
+  }
   if (command_) {
     if (Due(next_drive_s_, config_.drive_period_s, now)) {
       DutyTwist duty = regulator_.Update(command_->linear, command_->angular, now);
@@ -658,6 +708,10 @@ void XcoreControl::DropBlade(BladeOffReason reason) {
 
 bool XcoreControl::TelemetryStale(double now) const {
   return !last_emergency_s_ || now - *last_emergency_s_ > config_.telemetry_timeout_s;
+}
+
+bool XcoreControl::ImuStale(double now) const {
+  return config_.imu_timeout_s > 0 && (!last_imu_s_ || now - *last_imu_s_ > config_.imu_timeout_s + kTimeEpsilon);
 }
 
 void XcoreControl::SetHold(bool held) {
@@ -715,6 +769,7 @@ uint32_t XcoreControl::Reason(double now) const {
   bits |= latched_causes_;
   if (config_.learn_inputs) bits |= kReasonInputsLearning | kReasonLatch;
   if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;
+  if (ImuStale(now)) bits |= kReasonImuTimeout;
   if (!services_ready_) bits |= reason::kServiceNotReady;
   if (!firmware_compatible_) bits |= kReasonFirmwareIncompatible;
   return bits;

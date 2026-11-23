@@ -207,7 +207,8 @@ void XcoreLink::OnDatagram(const uint8_t* data, size_t size, const Endpoint& fro
         dropped_++;
         break;
       }
-      if (s.state == ServiceState::kConfiguring) SetRunning(id, s, events);
+      // Data count as the board's answer to the configuration only once it went out.
+      if (s.state == ServiceState::kConfiguring && s.config_sent_s) SetRunning(id, s, events);
       for (auto& section : sections) {
         const Channel* out = Find(s.description->outputs, section.id);
         if (!out || !FitsType(out->type, section.value.size())) {

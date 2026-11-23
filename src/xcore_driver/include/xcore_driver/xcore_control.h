@@ -66,6 +66,11 @@ struct ControlConfig {
   double tilt_time_s = 0.5;
   double tilt_release_deg = 26.0;
   double imu_fresh_s = 0.5;
+  // Without a plausible IMU sample for this long, motion and blade are blocked (IMU_TIMEOUT). Driving without a wheel
+  // twist from the ticks for ticks_timeout_s latches WHEEL_RUNAWAY: the wheel checks need them. 0 switches either
+  // off, which only tests of other checks do: CheckControlConfig refuses it.
+  double imu_timeout_s = 0.5;
+  double ticks_timeout_s = 1.0;
   // Wheels against the command, checked until uncommanded_window_s after the last drive setpoint other than 0: a wheel
   // above uncommanded_speed for uncommanded_time_s, uncommanded_after_s or more after that setpoint, latches; so does a
   // wheel above overspeed_factor times the fastest commandable wheel speed for overspeed_time_s. Later, pushing the
@@ -106,6 +111,7 @@ constexpr uint32_t kBoardReasons = (1u << 13) - 1;
 constexpr uint32_t kReasonTilt = 1u << 13;
 constexpr uint32_t kReasonFence = 1u << 14;
 constexpr uint32_t kReasonStuck = 1u << 15;
+constexpr uint32_t kReasonImuTimeout = 1u << 16;
 constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
 // The driver's own checks: a wheel against the drive command, another host at the board, a stall of the I/O thread.
 constexpr uint32_t kReasonWheelRunaway = 1u << 18;
@@ -273,6 +279,8 @@ class XcoreControl {
                                      uint64_t board_time_us, double now);
   // The board restarted or a service was claimed again: its state is unknown.
   void OnServiceRestart(uint16_t service_id, double now);
+  // A service runs (again): wheels or blade not commanded get their stops, so it never starts with an old setpoint.
+  void OnServiceRunning(uint16_t service_id, double now);
 
   // setup/motion of the setup program: active while one of its steps runs.
   void OnSetupMotion(bool active, double now);
@@ -286,8 +294,9 @@ class XcoreControl {
   std::string EndRefusal() const;
 
   std::vector<InputValue> Tick(double now);
-  // Wheels and blade to 0 once, for a driver that stops; the board's own timeouts follow.
+  // Wheels and blade to 0, for a driver that stops; the board's own timeouts follow.
   std::vector<InputValue> StopInputs() const;
+  int repeat_count() const { return config_.repeat_count; }
   ControlStatus Status(double now) const;
 
  private:
@@ -310,6 +319,7 @@ class XcoreControl {
   void CheckWheels(const WheelTwist& twist, double now);
   void CheckStall(double now);
   bool TelemetryStale(double now) const;
+  bool ImuStale(double now) const;
   uint32_t Reason(double now) const;
   bool InputActive(const std::vector<int>& indices) const;
   bool DockContact() const;
@@ -390,8 +400,10 @@ class XcoreControl {
   std::optional<double> last_imu_s_;
   std::optional<double> tilted_since_s_;
 
-  // When a drive setpoint other than 0 went out last.
+  // When a drive setpoint other than 0 went out last; since when the wheels are commanded; the last twist of the ticks.
   std::optional<double> last_drive_s_;
+  std::optional<double> driving_since_s_;
+  std::optional<double> last_twist_s_;
   std::optional<double> uncommanded_since_s_;
   std::optional<double> overspeed_since_s_;
 

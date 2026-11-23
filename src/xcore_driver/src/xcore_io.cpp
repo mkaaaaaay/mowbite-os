@@ -272,6 +272,13 @@ void XcoreIo::Close() {
   open_ = false;
   announcements_.Close();
   service_socket_.Close();
+  // Without a socket no tick runs: every service counts as lost at once, nothing as ready, the firmware as unknown.
+  std::lock_guard<std::mutex> lock(mutex_);
+  const double now = MonotonicSeconds();
+  for (const auto& entry : config_.services) control_.OnServiceRestart(entry.first, now);
+  control_.SetServicesReady(false, true);
+  major_.reset();
+  next_rpc_s_.reset();
 }
 
 void XcoreIo::Mark(const char* where) const {
@@ -395,7 +402,8 @@ void XcoreIo::Tick(double now) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (major_ == std::nullopt && next_rpc_s_ && now >= *next_rpc_s_) AskFirmware(now);
-    datagrams = Link().Tick(now, events);
+    // Silent or ended nothing goes out: the link would count configurations and requests as sent.
+    if (!control_.Silent(now) && !muted_) datagrams = Link().Tick(now, events);
     control_.SetServicesReady(Link().AllRunning() && major_ == config_.expected_major,
                               !major_ || *major_ == config_.expected_major);
     for (const auto& value : control_.Tick(now)) {
@@ -464,6 +472,7 @@ void XcoreIo::HandleEvents(const std::vector<LinkEvent>& events) {
       switch (e.kind) {
         case Kind::kRunning:
           lines.push_back({mowbite_outbox::LogLine::Level::kInfo, Format("Service %s (%u) runs", name, e.service_id)});
+          control_.OnServiceRunning(e.service_id, now);
           if (e.service_id == kMetaService) AskFirmware(now);
           break;
         case Kind::kLost:
@@ -514,7 +523,11 @@ bool XcoreIo::OnFirmwareAnswer(const LinkEvent& e, double now) {
     return false;
   }
   if (e.function_id == kGetMajorVersion) {
-    if (e.value.size() != 2) return false;
+    if (e.value.size() != 2) {
+      outbox_.log.Warn(Format("Major version answered with %zu bytes instead of 2: asked again", e.value.size()));
+      if (!next_rpc_s_) next_rpc_s_ = now + kRpcRetryS;
+      return false;
+    }
     major_ = Reader(e.value).U16();
     if (*major_ == config_.expected_major) {
       outbox_.log.Info(MajorVersionLine(*major_, config_.expected_major));
@@ -537,8 +550,10 @@ void XcoreIo::Shutdown() {
   // Stopped during hw/silence the stops go out all the same.
   silent_ = false;
   std::vector<Datagram> datagrams;
+  int repeats = 1;
   {
     std::lock_guard<std::mutex> lock(mutex_);
+    repeats = control_.repeat_count();
     if (link_ && service_socket_.IsOpen()) {
       for (const auto& value : control_.StopInputs()) {
         if (auto datagram = link_->Input(value.service_id, value.channel_id, value.value)) {
@@ -547,7 +562,10 @@ void XcoreIo::Shutdown() {
       }
     }
   }
-  Send(datagrams);
+  // Over UDP each may get lost: the stops go out as often as the driver repeats them.
+  std::vector<Datagram> repeated;
+  for (int i = 0; i < repeats; i++) repeated.insert(repeated.end(), datagrams.begin(), datagrams.end());
+  Send(repeated);
   Close();
 }
 

@@ -403,3 +403,23 @@ TEST(Link, ChargeRegistersNeedTheirFloatType) {
   link.OnAnnouncement(bytes.data(), bytes.size(), 1, events);
   EXPECT_EQ(link.State(kPowerService), ServiceState::kClaiming);
 }
+
+TEST(Link, DataBeforeTheConfigurationDoNotMakeItRun) {
+  Harness h;
+  h.Announce(kDiffDriveService, ExpectedDiffDrive(), 0);
+  h.Tick(0);
+  h.Receive(FromBoard(kDiffDriveService, MessageType::kClaim, kClaimAck), 0.1);
+  Writer ticks;
+  ticks.U32(5);
+  ticks.U32(7);
+  const Bytes data = FromBoard(kDiffDriveService, MessageType::kData, 0, diff_drive::kOutTicks, ticks.Take());
+  // Between the acknowledgement and the next tick: the outputs pass, the service waits for its configuration.
+  h.Receive(data, 0.105);
+  EXPECT_EQ(h.link.State(kDiffDriveService), ServiceState::kConfiguring);
+  EXPECT_EQ(h.outputs.size(), 1u);
+  auto out = h.Tick(0.11);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].header.arg1, kTransactionConfig);
+  h.Receive(data, 0.12);
+  EXPECT_EQ(h.link.State(kDiffDriveService), ServiceState::kRunning);
+}

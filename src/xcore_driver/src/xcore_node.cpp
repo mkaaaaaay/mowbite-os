@@ -406,6 +406,8 @@ class XcoreNode : public rclcpp::Node {
     c.tilt_time_s = declare_parameter("tilt_time", c.tilt_time_s);
     c.tilt_release_deg = std::min(declare_parameter("tilt_release", c.tilt_release_deg), c.tilt_limit_deg);
     c.imu_fresh_s = declare_parameter("imu_fresh", c.imu_fresh_s);
+    c.imu_timeout_s = declare_parameter("imu_timeout", c.imu_timeout_s);
+    c.ticks_timeout_s = declare_parameter("ticks_timeout", c.ticks_timeout_s);
     c.uncommanded_speed = declare_parameter("uncommanded_speed", c.uncommanded_speed);
     c.uncommanded_after_s = declare_parameter("uncommanded_after", c.uncommanded_after_s);
     c.uncommanded_window_s = declare_parameter("uncommanded_window", c.uncommanded_window_s);
