@@ -114,9 +114,10 @@ class Health:
             return False, "the service does not run", now_entered
         if entered is not None and now_entered != entered:
             return False, "the service started again", now_entered
-        return (*self._answers(since), now_entered)
+        return (*self.answers(since), now_entered)
 
-    def _answers(self, since):
+    # Of an OS known to run: True healthy, False failed, None not yet, with the line why.
+    def answers(self, since):
         if self._since(self.paths.halt, since):
             return False, f"halted: {gate.halt_reason(self.paths)}"
         note = files.read_json(self.paths.exit_note)

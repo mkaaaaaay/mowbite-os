@@ -45,6 +45,8 @@ SETTLED = ("active", "inactive", "failed")
 MAX_ATTEMPTS = 2
 # An unfinished switch whose hold the OS refused is undone at the earliest this long after.
 RECOVER_RETRY = 5 * 60.0
+# How often the health of an OS that runs while its switch waits is probed (s).
+BROKEN_PROBE_EVERY = 10.0
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
 ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
 # What each new phase starts without.
@@ -786,7 +788,7 @@ class Updater:
         state, _, started = self.carrier.show()
         if state not in SETTLED:
             return "BUSY", "MowBite OS is starting or stopping"
-        if state != "active" or gate.off(self.paths, started) is not None:
+        if not self._runs_gated(state, started):
             return None
         broken = self._broken(started)
         if broken is not None:
@@ -806,15 +808,19 @@ class Updater:
     # Why the OS that runs while an unfinished switch waits is undone without its gate, None while it is not: it did
     # not answer healthy once in HEALTH_WAIT of looks, or an emergency since the update stands after them (rule M5),
     # and its files say it does not move the mower. Nobody could bring such an OS to its gate.
+    # A probe waits up to two answers, so it runs every BROKEN_PROBE_EVERY and once more before the verdict.
     def _broken(self, started):
         health = self.installer.health
         judged = self._judged
+        now = time.monotonic()
         if judged is None or judged["started"] != started:
-            judged = self._judged = {"started": started, "t": time.monotonic(), "healthy": False, "line": ""}
-        if not judged["healthy"]:
-            ok, judged["line"], _ = health.once(started or 0.0)
+            judged = self._judged = {"started": started, "t": now, "healthy": False, "line": "", "next": now}
+        due = now - judged["t"] >= health.wait
+        if not judged["healthy"] and (now >= judged["next"] or due):
+            ok, judged["line"] = health.answers(started or 0.0)
             judged["healthy"] = ok is True
-        if time.monotonic() - judged["t"] < health.wait:
+            judged["next"] = time.monotonic() + BROKEN_PROBE_EVERY
+        if not due:
             return None
         if judged["healthy"]:
             settled, why = health.probe.settled()
@@ -835,9 +841,11 @@ class Updater:
             self._judged = None
             return None
         state, _, started = self.carrier.show()
-        if state != "active" or gate.off(self.paths, started) is not None:
-            return None
-        return self._broken(started)
+        return self._broken(started) if self._runs_gated(state, started) else None
+
+    # Whether the OS runs with its gate, so that stopping it needs the gate or a verdict of _broken.
+    def _runs_gated(self, state, started):
+        return state == "active" and gate.off(self.paths, started) is None
 
     # At the start of the host: every component back from a switch that was cut off; a revision cut off MAX_ATTEMPTS
     # times is blocked.

@@ -1026,6 +1026,28 @@ class FlowTest(Base):
         self.assertFalse(os.path.lexists(self.paths.os.pending))
         self.assertEqual(os.readlink(self.paths.os.current), A)
 
+    # A probe blocks the loop for up to two answers: a waiting switch probes its OS every BROKEN_PROBE_EVERY with one
+    # systemctl per look, and once more before the verdict, so an OS healthy just in time stays.
+    def test_a_waiting_switch_probes_its_os_seldom(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.updater._recover_after = time.monotonic() + 3600
+        health = self.updater.installer.health
+        health.wait = 0.3
+        probes, shows, show = [], [], self.fake.show
+        self.fake.show = lambda: shows.append(1) or show()
+        health.answers = lambda since: probes.append(since) or (None, "rpc.methods does not answer")
+        for _ in range(3):
+            self.updater.recover_due()
+        self.assertEqual((len(probes), len(shows)), (1, 3))
+        time.sleep(0.35)
+        health.answers = lambda since: probes.append(since) or (True, "ok")
+        self.updater.recover_due()
+        self.assertEqual(len(probes), 2)
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
+        self.assertEqual(os.readlink(self.paths.os.current), B)
+
     # One that waited while the OS stopped is undone at the next look; after a refused hold not before RECOVER_RETRY.
     def test_recover_due_asks_again_only_after_a_refused_hold(self):
         self.install(A)
