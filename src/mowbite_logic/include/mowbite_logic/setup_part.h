@@ -20,7 +20,8 @@ class SetupPart {
   void EndSetup(CoreAccess core, const std::optional<std::string>& why);
   // hw/blade refused the blade of the step: off until the step asks for another blade.
   void BladeRefused(CoreAccess core, const std::string& message);
-  // An emergency (also no telemetry) stopped the blade of the step: off until the step asks for another.
+  // An emergency (also no telemetry) or the station stopped the blade of the step: off until the step asks for
+  // another.
   void BladeStopped() {
     if (setup_blade_ != 0) setup_blade_refused_ = true;
   }

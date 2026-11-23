@@ -161,6 +161,8 @@ void LogicCore::OnHardwareStatus(const HardwareSnapshot& hw) {
   if (state_ == State::kMowing && DockContact()) {
     Pause(kPauseFault, Reason("DOCK_CONTACT", "Contact with the docking station while mowing"));
   }
+  // The blade of a setup step stays off after the station as after an emergency, until the step asks anew.
+  if (state_ == State::kSetup && hw_.dock_contact) setup_.BladeStopped();
   WatchCharge();
   // From the rpm the MCU reports, not from what was asked for.
   const bool running = hw.telemetry_ok && hw.blade.ok && std::abs(hw.blade.rpm) >= config_.blade_running_rpm;

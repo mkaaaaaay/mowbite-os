@@ -175,11 +175,16 @@ TEST(LogicSetup, TheBladeTurnsAsTheStepAsksWithoutASafetyMeasurement) {
     core.OnSetupBlade("blade", 1);
     EXPECT_TRUE(core.BladeWanted()) << cut;
   }
-  // The station switches it off while it lasts.
+  // The station switches it off, and it stays off after the contact until the step asks anew.
   HardwareSnapshot hw = Healthy();
   hw.dock_contact = true;
   core.OnHardwareStatus(hw);
   EXPECT_FALSE(core.BladeWanted());
+  core.OnHardwareStatus(Healthy());
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("blade", 0);
+  core.OnSetupBlade("blade", 1);
+  EXPECT_TRUE(core.BladeWanted());
 }
 
 TEST(LogicSetup, TheBladeGoesOffWithTheEndOfSetup) {
