@@ -96,6 +96,9 @@ constexpr int kEndExitCode = 3;
 constexpr double kEndAnswerS = 0.2;
 // Executor and I/O thread each sign within this or the watch ends the process; the launch starts a latched one.
 constexpr double kWatchLimitS = 2.0;
+// F1: the guard writes the stop and the blade off once the I/O thread has not come round for this long.
+constexpr double kGuardAfterS = 0.25;
+constexpr std::chrono::milliseconds kGuardLook{20};
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -229,11 +232,13 @@ class McuNode : public rclcpp::Node {
 
     watch_ = mowbite_watch::Attach(*this, kWatchLimitS);
     io_thread_ = std::thread([this] { IoLoop(); });
+    if (!read_only_) guard_thread_ = std::thread([this] { GuardLoop(); });
   }
 
   ~McuNode() override {
     running_ = false;
     if (io_thread_.joinable()) io_thread_.join();
+    if (guard_thread_.joinable()) guard_thread_.join();
   }
 
  private:
@@ -350,6 +355,15 @@ class McuNode : public rclcpp::Node {
     while (running_ && rclcpp::ok()) {
       watch.Sign();
       double now = MonotonicSeconds();
+      if (guard_fired_.exchange(false)) {
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          control_.Call<&C::OnConnected>(now);
+        }
+        RCLCPP_ERROR(get_logger(), "I/O thread stalled %.2f s: the guard sent the stop and the blade off; the MCU is "
+                     "treated as after a reopen", now - io_alive_s_.load());
+      }
+      io_alive_s_ = now;
       if (now >= next_hold) {
         next_hold = now + kHoldPollS;
         watch.Mark("hold file");
@@ -365,7 +379,7 @@ class McuNode : public rclcpp::Node {
         ssize_t n = port_.Read(buffer, sizeof(buffer), wait_ms);
         if (n < 0) {
           RCLCPP_ERROR(get_logger(), "Read error on %s, closing", port_name_.c_str());
-          port_.Close();
+          ClosePort();
         } else if (n > 0) {
           HandleBytes(buffer, static_cast<size_t>(n));
         }
@@ -381,6 +395,7 @@ class McuNode : public rclcpp::Node {
         {
           std::lock_guard<std::mutex> lock(mutex_);
           packets = control_.Call<&C::Tick>(now, LocalWallClock());
+          StoreGuardFrames();
         }
         if (!read_only_) Send(packets);
         EndIfDue(now);
@@ -485,7 +500,12 @@ class McuNode : public rclcpp::Node {
       return;
     }
     std::string error;
-    if (!port_.Open(port_name_, 115200, error, read_only_)) {
+    bool opened;
+    {
+      std::lock_guard<std::mutex> lock(port_mutex_);
+      opened = port_.Open(port_name_, 115200, error, read_only_);
+    }
+    if (!opened) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000, "Cannot open %s: %s", port_name_.c_str(), error.c_str());
       return;
     }
@@ -517,10 +537,62 @@ class McuNode : public rclcpp::Node {
   }
 
   bool Write(const std::vector<uint8_t>& bytes) {
-    if (port_.Write(bytes)) return true;
+    bool written;
+    {
+      std::lock_guard<std::mutex> lock(port_mutex_);
+      written = port_.Write(bytes);
+    }
+    if (written) return true;
     RCLCPP_ERROR(get_logger(), "Write error on %s, closing", port_name_.c_str());
-    port_.Close();
+    ClosePort();
     return false;
+  }
+
+  void ClosePort() {
+    std::lock_guard<std::mutex> lock(port_mutex_);
+    port_.Close();
+  }
+
+  // Under mutex_, so that a silence or the end empties them before the guard could write them.
+  void StoreGuardFrames() {
+    std::vector<uint8_t> bytes;
+    for (const auto& packet : control_.View().GuardFrames()) {
+      const std::vector<uint8_t> frame = tron::EncodeFrame({packet});
+      bytes.insert(bytes.end(), frame.begin(), frame.end());
+    }
+    std::lock_guard<std::mutex> lock(guard_mutex_);
+    guard_bytes_.swap(bytes);
+  }
+
+  // F1: without it a stalled I/O thread sends nothing, and the MCU keeps the last setpoint until the watch ends the
+  // process and the next driver opens the port. Writes the guard frames repeat_count times, nothing else; the I/O
+  // thread reports it and resets the control when it comes round again.
+  void GuardLoop() {
+    const tron::McuControlConfig config;
+    int sent = 0;
+    double next_s = 0;
+    while (running_) {
+      std::this_thread::sleep_for(kGuardLook);
+      const double now = MonotonicSeconds();
+      if (now - io_alive_s_.load() < kGuardAfterS) {
+        sent = 0;
+        continue;
+      }
+      if (sent >= config.repeat_count || now < next_s) continue;
+      // A write that hangs keeps the port: then no frame gets through anyway.
+      std::unique_lock<std::mutex> port_lock(port_mutex_, std::try_to_lock);
+      if (!port_lock.owns_lock() || !port_.IsOpen()) continue;
+      std::vector<uint8_t> bytes;
+      {
+        std::lock_guard<std::mutex> lock(guard_mutex_);
+        bytes = guard_bytes_;
+      }
+      ++sent;
+      next_s = now + config.repeat_interval_s;
+      if (bytes.empty()) continue;
+      port_.Write(bytes);
+      guard_fired_ = true;
+    }
   }
 
   void SendShutdownFrames() {
@@ -532,7 +604,7 @@ class McuNode : public rclcpp::Node {
     }
     // After hw/end no byte goes out, as after a crash.
     if (read_only_ || ended) {
-      port_.Close();
+      ClosePort();
       return;
     }
     // The stop and the blade off, several times: after them no host is left.
@@ -546,7 +618,7 @@ class McuNode : public rclcpp::Node {
       if (i > 0) std::this_thread::sleep_for(std::chrono::duration<double>(config.repeat_interval_s));
       Send(packets);
     }
-    port_.Close();
+    ClosePort();
   }
 
   void HandleBytes(const uint8_t* data, size_t length) {
@@ -936,6 +1008,7 @@ class McuNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       refusal = req.blade ? control_.Call<&C::SilenceWithBlade>(static_cast<double>(req.seconds), MonotonicSeconds())
                           : control_.Call<&C::Silence>(static_cast<double>(req.seconds), MonotonicSeconds());
+      StoreGuardFrames();
     }
     if (refusal != tron::HostTestRefusal::kNone) {
       res.code = tron::HostTestRefusalCode(refusal);
@@ -960,6 +1033,7 @@ class McuNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       refusal = control_.Call<&C::End>();
+      StoreGuardFrames();
       // A second call does not put the end off.
       if (refusal == tron::HostTestRefusal::kNone && !end_at_s_) end_at_s_ = MonotonicSeconds() + wait_s;
     }
@@ -1018,6 +1092,14 @@ class McuNode : public rclcpp::Node {
   std::string port_name_;
   std::atomic<bool> running_{true};
   std::thread io_thread_;
+  // F1: the guard thread, the last time the I/O thread came round, the frames it writes and whether it did.
+  std::thread guard_thread_;
+  std::atomic<double> io_alive_s_{0.0};
+  std::mutex guard_mutex_;
+  std::vector<uint8_t> guard_bytes_;
+  std::atomic<bool> guard_fired_{false};
+  // Open, write and close of the port, so that the guard never writes into a frame or a closed port.
+  std::mutex port_mutex_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
 
   bool read_only_;

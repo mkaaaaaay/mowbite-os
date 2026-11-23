@@ -2651,6 +2651,28 @@ TEST_F(ControlTest, TheFarewellLeavesTheStopOutOnTheChargingContactsWithoutComma
   EXPECT_TRUE(IsZeroSpeed(farewell[0]));
 }
 
+// F1: what the guard of the node writes while its I/O thread stalls.
+TEST_F(ControlTest, TheGuardWritesTheFarewell) {
+  Run(0.5);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  Run(1.0);
+  ASSERT_TRUE(control_.Status(now_).moving);
+  const auto guard = control_.GuardFrames();
+  ASSERT_EQ(guard.size(), 2u);
+  EXPECT_TRUE(IsZeroSpeed(guard[0]));
+  EXPECT_TRUE(IsBladeOff(guard[1]));
+}
+
+TEST_F(SilenceTest, TheGuardWritesNothingDuringASilenceOrAfterTheEnd) {
+  const double start = DriveThenSilence(1.0);
+  EXPECT_TRUE(control_.GuardFrames().empty());
+  Run(start + 1.5);
+  ASSERT_FALSE(control_.Status(now_).silent);
+  EXPECT_FALSE(control_.GuardFrames().empty());
+  ASSERT_EQ(control_.End(), HostTestRefusal::kNone);
+  EXPECT_TRUE(control_.GuardFrames().empty());
+}
+
 TEST_F(ControlTest, TheFarewellStopsOnASingleContactSample) {
   Run(0.5);
   control_.OnDockContactSample(true);

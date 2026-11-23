@@ -413,6 +413,11 @@ std::vector<SubPacket> McuControl::Farewell() const {
   return out;
 }
 
+std::vector<SubPacket> McuControl::GuardFrames() const {
+  if (silent_until_s_ || ended_) return {};
+  return Farewell();
+}
+
 SubPacket McuControl::BladeOff() const {
   CutterCommand command;
   command.height_mm = config_.blade_off_height_mm;

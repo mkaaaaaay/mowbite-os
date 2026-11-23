@@ -248,6 +248,9 @@ class McuControl {
   // The frames when the process ends, sent repeat_count times by the node: the stop, unless the mower stands on the
   // charging contacts without a command (zero frames push it off them), and the blade off.
   std::vector<SubPacket> Farewell() const;
+  // The frames the node's guard writes while its I/O thread stalls: the farewell, none during hw/silence or after
+  // hw/end.
+  std::vector<SubPacket> GuardFrames() const;
   McuControlStatus Status(double now) const;
   // STOP, lift and the two bumpers; none active without fresh telemetry.
   std::array<McuInput, 4> Inputs(double now) const;
