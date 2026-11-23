@@ -41,6 +41,8 @@ class FakeSource : public FrameSource {
   bool Start(std::string& error) override {
     calls += "start ";
     starts++;
+    clock_ += start_s;
+    if (!watched.empty()) during += std::filesystem::exists(watched) ? "S" : "s";
     if (fail_start) {
       error = "stream on: Input/output error";
       return false;
@@ -50,6 +52,7 @@ class FakeSource : public FrameSource {
   }
   void Stop() override {
     if (streaming) calls += "stop ";
+    if (streaming && !watched.empty()) during += std::filesystem::exists(watched) ? "T" : "t";
     streaming = false;
   }
   void Close() override {
@@ -94,6 +97,11 @@ class FakeSource : public FrameSource {
   uint32_t sequence = 0;
   // What the mapped buffers hold; empty: frames without a mapping.
   std::vector<uint8_t> pixels;
+  // What STREAMON costs on the clock of the test.
+  double start_s = 0.0;
+  // Whether this file existed in Start (S, else s) and in Stop of a stream (T, else t).
+  std::string watched;
+  std::string during;
 
  private:
   double& clock_;
@@ -353,6 +361,50 @@ TEST(StereoLoop, SelftestWithoutEnoughFramesEndsStreamingForThisBoot) {
     EXPECT_NE(rig.loop->Status().detail.find("no picture earlier in this boot"), std::string::npos);
     EXPECT_EQ(rig.camera.starts, 1);
   }
+}
+
+// The deadline of the self-test counts from the running stream and only after asking for the frames the driver holds.
+TEST(StereoLoop, ASlowStreamOnOrALongStepLeavesTheSelftestItsFrames) {
+  {
+    Rig rig;
+    rig.camera.start_s = 2.5;
+    rig.Ready();
+  }
+  Rig rig;
+  rig.Configured();
+  rig.Make();
+  while (rig.State() != StereoState::kSelftest) rig.Steps(1);
+  rig.Steps(3);
+  rig.clock += 2.5;
+  rig.Steps(40);
+  EXPECT_EQ(rig.State(), StereoState::kReady) << rig.loop->Status().detail;
+}
+
+// STREAMON, STREAMOFF and close run under the marker "calling"; one left by a process that ended in such a call ends
+// the camera for this boot without a try.
+TEST(StereoLoop, ACallIntoTheDriverThatDidNotReturnEndsTheCameraForThisBoot) {
+  {
+    Rig rig;
+    rig.camera.watched = rig.config.marker_dir + "/calling-stereo";
+    rig.Ready();
+    EXPECT_EQ(rig.camera.during, "ST");
+    EXPECT_EQ(rig.Marker("calling-stereo"), "");
+  }
+  Rig rig;
+  rig.Configured();
+  rig.dir.Write("markers/calling-stereo", std::string(kBoot) + " stream on\n");
+  rig.Make();
+  rig.Steps(20);
+  EXPECT_EQ(rig.State(), StereoState::kFailed);
+  EXPECT_EQ(rig.loop->Status().detail, "a call into the driver did not return earlier in this boot: stream on");
+  EXPECT_EQ(rig.camera.calls, "");
+  rig.loop.reset();
+  EXPECT_EQ(rig.Marker("calling-stereo"), std::string(kBoot) + " stream on");
+  // After a reboot the camera is tried again.
+  rig.dir.Write("boot_id", "11111111-2222-4333-8444-555555555555\n");
+  rig.Make();
+  rig.Steps(40);
+  EXPECT_EQ(rig.State(), StereoState::kReady);
 }
 
 TEST(StereoLoop, StreamOnThatFailsCountsAsNoPicture) {

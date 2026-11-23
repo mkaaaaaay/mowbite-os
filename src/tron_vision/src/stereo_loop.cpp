@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <fstream>
 #include <utility>
 
 #include "tron_vision/text_file.h"
@@ -93,6 +94,23 @@ void StereoLoop::End(StereoState state, const std::string& detail) {
 
 std::string StereoLoop::Marker(const char* kind) const {
   return config_.marker_dir + "/" + kind + "-" + config_.camera_id;
+}
+
+bool StereoLoop::Start(std::string& error) {
+  DriverCall("stream on");
+  const bool started = camera_.Start(error);
+  DriverReturned();
+  return started;
+}
+
+// Not synced: it only has to outlive the process, a kernel crash is the matter of the CrashGuard.
+void StereoLoop::DriverCall(const char* call) {
+  std::ofstream out(Marker("calling"), std::ios::trunc);
+  out << FirstLine(config_.boot_id_file) << ' ' << call << '\n';
+}
+
+void StereoLoop::DriverReturned() {
+  std::remove(Marker("calling").c_str());
 }
 
 void StereoLoop::SetMowerStatus(const MowerView& mower) {
@@ -216,6 +234,10 @@ void StereoLoop::CheckMarkers() {
     End(StereoState::kFailed, "no picture earlier in this boot: " + text);
     return;
   }
+  if (of_this_boot(FirstLine(Marker("calling")), text)) {
+    End(StereoState::kFailed, "a call into the driver did not return earlier in this boot: " + text);
+    return;
+  }
   // The passed test left the frame rate it measured.
   const double fps = of_this_boot(FirstLine(Marker("verified")), text) ? std::strtod(text.c_str(), nullptr) : 0.0;
   if (fps >= kMinFps && fps <= kMaxFps) {
@@ -276,11 +298,12 @@ void StereoLoop::StartSelftest(double now) {
     return;
   }
   streaming_ = true;
-  if (!camera_.Start(text)) {
+  if (!Start(text)) {
     FailForThisBoot(StereoState::kNoFrames, "self-test: " + text);
     return;
   }
-  stream_start_ = now;
+  // The deadlines count from the running stream, not from the open and the durable marker before it.
+  stream_start_ = now_();
   test_frames_ = 0;
   Set(StereoState::kSelftest, "");
   phase_ = Phase::kSelftest;
@@ -301,21 +324,23 @@ void StereoLoop::StepSelftest(double now) {
     phase_ = Phase::kSelftestWait;
     return;
   }
+  // A step that took long still finds the frames the driver holds: the deadline counts only after asking for them.
   const double deadline = stream_start_ + config_.selftest_s;
-  if (now >= deadline) {
-    FailForThisBoot(StereoState::kNoFrames, "self-test: " + std::to_string(test_frames_) + " frames in " +
-                                                Fixed(config_.selftest_s) + " s");
-    return;
-  }
   CapturedFrame frame;
   std::string error;
-  const int got =
-      camera_.Next(static_cast<int>(std::ceil(std::min(deadline - now, kStreamStepS) * 1000.0)), frame, error);
+  const int got = camera_.Next(static_cast<int>(std::ceil(std::clamp(deadline - now, 0.0, kStreamStepS) * 1000.0)),
+                               frame, error);
   if (got < 0) {
     FailForThisBoot(StereoState::kNoFrames, "self-test: " + error);
     return;
   }
-  if (got == 0) return;
+  if (got == 0) {
+    if (now_() >= deadline) {
+      FailForThisBoot(StereoState::kNoFrames, "self-test: " + std::to_string(test_frames_) + " frames in " +
+                                                  Fixed(config_.selftest_s) + " s");
+    }
+    return;
+  }
   if (test_frames_++ == 0) test_first_us_ = frame.timestamp_us;
   test_last_us_ = frame.timestamp_us;
   if (test_frames_ < config_.selftest_frames) return;
@@ -430,11 +455,11 @@ void StereoLoop::StartStream(double now) {
     return;
   }
   streaming_ = true;
-  if (!camera_.Start(text)) {
+  if (!Start(text)) {
     FailForThisBoot(StereoState::kNoFrames, text);
     return;
   }
-  stream_start_ = now;
+  stream_start_ = now_();
   last_frame_ = -1.0;
   have_sequence_ = false;
   luma_frames_ = 0;
@@ -446,10 +471,16 @@ void StereoLoop::StopStream() {
   // Without the lock in time the stream stops all the same.
   const FileLock lock(streaming_ ? GainLock() : std::string(), config_.gain_lock_wait_s);
   // The stream ends first; the encoder lets go of the buffers before the camera frees them.
+  // Only a running stream is marked: the marker an earlier process left stays.
+  const bool running = streaming_;
+  if (running) DriverCall("stream off");
   camera_.Stop();
+  if (running) DriverReturned();
   stream_.End();
+  if (running) DriverCall("close");
   camera_.Close();
-  if (streaming_) guard_.Disarm(config_.camera_id);
+  if (running) DriverReturned();
+  if (running) guard_.Disarm(config_.camera_id);
   streaming_ = false;
   status_.fps = 0.0;
   status_.kbps = 0.0;
@@ -497,11 +528,11 @@ void StereoLoop::StartCapture(double now) {
     return;
   }
   streaming_ = true;
-  if (!camera_.Start(text)) {
+  if (!Start(text)) {
     FailForThisBoot(StereoState::kNoFrames, text);
     return;
   }
-  stream_start_ = now;
+  stream_start_ = now_();
   last_frame_ = -1.0;
   have_sequence_ = false;
   luma_frames_ = 0;

@@ -245,6 +245,11 @@ class StereoLoop {
   // Counts a failure that may pass; true once it has happened too often.
   bool CountFailure(int& count, double now);
   std::string Marker(const char* kind) const;
+  // STREAMON, STREAMOFF and close may hang in the driver until the watch ends the process: while one runs, the marker
+  // "calling" of this boot names it, and a process of the same boot that finds it never tries the camera again.
+  bool Start(std::string& error);
+  void DriverCall(const char* call);
+  void DriverReturned();
 
   StereoConfig config_;
   FrameSource& camera_;
