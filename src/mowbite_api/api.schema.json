@@ -940,7 +940,10 @@
           "description": "Why: a fixed name in capitals, rated in x-reasons",
           "enum": [
             "MANUAL",
-            "SCHEDULE"
+            "SCHEDULE",
+            "BODY_OUT",
+            "NO_PLAN",
+            "START_UNREACHABLE"
           ],
           "type": "string"
         },
@@ -17751,11 +17754,47 @@
   },
   "x-reasons": {
     "AREA_SKIPPED": {
+      "BODY_OUT": {
+        "description": "The mower would stick out past the edges of the area on its plan",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Die Fläche größer aufnehmen oder die Einstellungen des Planers prüfen.",
+            "help": "Auf dem Plan dieser Fläche würde der Mäher über ihre Ränder hinausragen. Die Fläche wurde übersprungen.",
+            "name": "Fläche zu eng"
+          },
+          "en": {
+            "fix": "Record the area larger or check the settings of the planner.",
+            "help": "On the plan of this area the mower would stick out past its edges. The area was skipped.",
+            "name": "Area too narrow"
+          }
+        }
+      },
       "MANUAL": {
         "description": "By the user",
         "fields": {},
         "resume": "auto",
         "severity": "info"
+      },
+      "NO_PLAN": {
+        "description": "The planner cannot plan this area as asked",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Die Form der Fläche und die Einstellungen des Planers prüfen.",
+            "help": "Der Planer kann für diese Fläche keinen Plan erstellen. Die Fläche wurde übersprungen.",
+            "name": "Kein Plan"
+          },
+          "en": {
+            "fix": "Check the shape of the area and the settings of the planner.",
+            "help": "The planner cannot make a plan for this area. The area was skipped.",
+            "name": "No plan"
+          }
+        }
       },
       "SCHEDULE": {
         "description": "The schedule: the time of the plan is over, or its areas are paused",
@@ -17774,6 +17813,24 @@
             "fix": "Nothing to do. The next plan goes on with the job.",
             "help": "The schedule ends mowing: the time of the plan is over, or its areas are paused.",
             "name": "Schedule"
+          }
+        }
+      },
+      "START_UNREACHABLE": {
+        "description": "No part of the plan can be reached from where the mower stands",
+        "fields": {},
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Prüfen, ob eine befahrbare Fläche den Mäher mit dieser Fläche verbindet.",
+            "help": "Kein Teil des Plans dieser Fläche ist vom Mäher aus erreichbar. Die Fläche wurde übersprungen.",
+            "name": "Fläche nicht erreichbar"
+          },
+          "en": {
+            "fix": "Check that a drivable area connects the mower with this area.",
+            "help": "No part of the plan of this area can be reached from the mower. The area was skipped.",
+            "name": "Area out of reach"
           }
         }
       }
