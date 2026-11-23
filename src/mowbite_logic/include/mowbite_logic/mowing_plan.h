@@ -78,6 +78,8 @@ struct JobArea {
   std::string name;
   // Active and mowable: the job mows it, else it is passed over.
   bool mowable = true;
+  // Of its outline and the active obstacles of the map: another value means its plan no longer fits.
+  uint64_t shape = 0;
 };
 
 // A piece of the route as the app draws it: a run of poses, indices into the poses of the answer.

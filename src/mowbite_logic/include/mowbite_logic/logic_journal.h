@@ -18,7 +18,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(RecorderConfig, min_point_distan
                                                 max_overhang, max_points, min_dock_distance, dock_backwards)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(MapEdit, kind, type, outline, obstacles, outline_driven_reason,
                                                 obstacles_driven_reason, x, y, heading)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(JobArea, id, name, mowable)
+// shape only from journals since it came; before it 0 on both sides of a comparison.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(JobArea, id, name, mowable, shape)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockConfig, distance, speed, stall_time, course_limit, course_distance, corridor)
 // reverse only where set, so that journals of mowers leaving forwards stay as they were.
 inline void to_json(nlohmann::json& j, const UndockPath& path) {
@@ -144,7 +145,7 @@ static_assert(sizeof(Reason) == 80);
 static_assert(sizeof(Event) == 80);
 static_assert(sizeof(RecorderConfig) == 56);
 static_assert(sizeof(MapEdit) == 168);
-static_assert(sizeof(JobArea) == 72);
+static_assert(sizeof(JobArea) == 80);
 static_assert(sizeof(UndockConfig) == 48);
 static_assert(sizeof(UndockPath) == 72);
 static_assert(sizeof(DockConfig) == 80);

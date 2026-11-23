@@ -3,10 +3,24 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 
 namespace mowbite_logic {
 
 namespace {
+
+// FNV-1a over the coordinates of a ring, going on from hash.
+constexpr uint64_t kShapeSeed = 14695981039346656037ull;
+uint64_t ShapeOf(const Ring& ring, uint64_t hash) {
+  for (const auto& p : ring) {
+    for (const double v : {p.x, p.y}) {
+      unsigned char bytes[sizeof v];
+      std::memcpy(bytes, &v, sizeof v);
+      for (const unsigned char b : bytes) hash = (hash ^ b) * 1099511628211ull;
+    }
+  }
+  return hash;
+}
 
 // 1 cm off the planned line and mm precision are plenty, and keep the answer small
 constexpr double kSimplifyTolerance = 0.01;
@@ -221,8 +235,13 @@ Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring
 std::vector<JobArea> MowingPlanner::MowAreas() const {
   std::vector<JobArea> areas;
   if (!map_readable_) return areas;
+  uint64_t obstacles = kShapeSeed;
   for (const auto& area : map_) {
-    if (area.type == "mow") areas.push_back({area.id, area.name, area.active && area.mowable});
+    if (area.type == "obstacle" && area.active) obstacles = ShapeOf(area.outline, obstacles);
+  }
+  for (const auto& area : map_) {
+    if (area.type != "mow") continue;
+    areas.push_back({area.id, area.name, area.active && area.mowable, ShapeOf(area.outline, obstacles)});
   }
   return areas;
 }

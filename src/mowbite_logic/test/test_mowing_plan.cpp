@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <map>
+#include <string>
 
 #include "mowbite_logic/mowing_plan.h"
 
@@ -162,6 +164,39 @@ TEST(MowingPlanMap, ANewMapReplacesTheOldOne) {
   const PlanQuestion q = planner.Prepare(Params(R"({"area_id": "lawn"})"));
   EXPECT_EQ(q.code, -32000);
   EXPECT_EQ(q.message, "Cannot plan from the map: The map is not readable");
+}
+
+// The shape of an area follows its outline and the active obstacles, not other areas or inactive obstacles.
+TEST(MowingPlanMap, TheShapeOfAnAreaFollowsItsOutlineAndTheObstacles) {
+  const auto shapes = [](const std::string& map) {
+    MowingPlanner planner;
+    planner.SetMapStatus(true, Reason());
+    planner.SetMap(map);
+    std::map<std::string, uint64_t> by_id;
+    for (const auto& area : planner.MowAreas()) by_id[area.id] = area.shape;
+    return by_id;
+  };
+  const std::string map = kMap;
+  const auto base = shapes(map);
+  ASSERT_EQ(base.size(), 4u);
+  EXPECT_NE(base.at("lawn"), base.at("side"));
+  EXPECT_EQ(shapes(map), base);
+  const auto replaced = [&map](const std::string& from, const std::string& to) {
+    std::string changed = map;
+    changed.replace(changed.find(from), from.size(), to);
+    return changed;
+  };
+  // The lawn's own corner: only the lawn.
+  auto other = shapes(replaced(R"({"x": 10, "y": 6})", R"({"x": 11, "y": 6})"));
+  EXPECT_NE(other.at("lawn"), base.at("lawn"));
+  EXPECT_EQ(other.at("side"), base.at("side"));
+  // An active obstacle moved: every area.
+  other = shapes(replaced(R"({"x": 5, "y": 3})", R"({"x": 5, "y": 4})"));
+  EXPECT_NE(other.at("lawn"), base.at("lawn"));
+  EXPECT_NE(other.at("side"), base.at("side"));
+  // The inactive one and the nav path: none.
+  EXPECT_EQ(shapes(replaced(R"({"x": 8, "y": 3})", R"({"x": 8, "y": 4})")), base);
+  EXPECT_EQ(shapes(replaced(R"({"x": 14, "y": 3})", R"({"x": 14, "y": 4})")), base);
 }
 
 TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {

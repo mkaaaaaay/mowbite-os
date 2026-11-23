@@ -251,6 +251,25 @@ TEST(LogicMowing, AMapChangeOfTheAreaMowedPausesAndPlansAnew) {
   EXPECT_EQ(next.area_id, "back");
 }
 
+// The area mowed keeps its id but changed its shape: the plan goes as well.
+TEST(LogicMowing, AnotherShapeOfTheAreaMowedPausesAndPlansAnew) {
+  TestCore core = Following();
+  std::vector<JobArea> areas = Garden();
+  // The same shapes again change nothing.
+  core.OnMowMap(areas, Reason());
+  EXPECT_EQ(core.RobotState().state, "MOWING");
+  for (auto& area : areas) area.shape = 7;
+  core.OnMowMap(areas, Reason());
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_EQ(core.RobotState().pause_reason, "MAP_CHANGED");
+  EXPECT_TRUE(core.TakeDriveCancel());
+  core.OnLegEnded(LegEnd::kCanceled, 2, Reason("CANCELED", ""));
+  EXPECT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  const JobStep next = core.NextJobStep(0);
+  ASSERT_EQ(next.kind, JobStep::Kind::kPlan);
+  EXPECT_EQ(next.area_id, "front");
+}
+
 // A continue before the follower ended the leg the pause stopped: neither blade nor follower until it did.
 TEST(LogicMowing, AQuickContinueWaitsForTheStoppedLeg) {
   LogicConfig config;
