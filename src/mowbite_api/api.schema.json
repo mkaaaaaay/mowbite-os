@@ -7330,7 +7330,7 @@
       "description": "The params of logs.recent: All optional",
       "properties": {
         "level": {
-          "description": "Lowest level: DEBUG, INFO, WARN, ERROR or FATAL; another counts as WARN",
+          "description": "Lowest level: WARN, ERROR or FATAL; another, also DEBUG or INFO, counts as WARN",
           "type": "string"
         },
         "limit": {
@@ -9212,11 +9212,7 @@
       },
       "required": [
         "event",
-        "state",
-        "sub_state",
-        "reason",
-        "severity",
-        "resume"
+        "reason"
       ],
       "type": "object"
     },
@@ -9925,18 +9921,7 @@
               "type": "string"
             }
           },
-          "required": [
-            "enabled",
-            "min_battery",
-            "skip_rain",
-            "skip_forecast",
-            "forecast_hours",
-            "skip_cold",
-            "min_temp",
-            "tz",
-            "plans",
-            "pause"
-          ],
+          "required": [],
           "type": "object"
         },
         "version": {
@@ -11399,8 +11384,6 @@
         },
         "size": {
           "description": "Size of the whole image",
-          "maximum": 65536.0,
-          "minimum": 0.0,
           "type": "integer",
           "x-unit": "B"
         },
@@ -16441,11 +16424,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:53",
+  "$id": "urn:mowbite-os:api:54",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 53,
+  "x-api": 54,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17113,7 +17096,7 @@
     "docking.test": {
       "description": "Docks by the dock camera alone from where the mower stands in front of the station, without map or position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
       "node": "mowbite_logic",
-      "offered": "",
+      "offered": "only where the platform has a dock marker",
       "params": "#/$defs/docking.test.params",
       "result": "#/$defs/docking.test.result"
     },
@@ -22831,7 +22814,7 @@
   "x-settings": {
     "automatic_mode": {
       "default": 0.0,
-      "description": "Automatic mowing, as in OpenMower",
+      "description": "No effect on MowBite OS, kept for clients of OpenMower: only the schedule starts the mower by itself",
       "max": 2.0,
       "min": 0.0,
       "type": "integer",
@@ -22964,8 +22947,8 @@
       "unit": "min"
     },
     "rain_mode": {
-      "default": 0.0,
-      "description": "What rain does, as in OpenMower",
+      "default": 1.0,
+      "description": "What rain does, as in OpenMower; 1 by default: rain sends the mower home",
       "max": 3.0,
       "min": 0.0,
       "type": "integer",
