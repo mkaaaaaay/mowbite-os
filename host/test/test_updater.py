@@ -1159,6 +1159,10 @@ class HealthTest(unittest.TestCase):
         answers = itertools.chain([ok], itertools.repeat(late))
         self.assertEqual(self.health(answers).wait_healthy(time.time()),
                          (False, "no longer healthy: rpc.methods does not answer"))
+        # Every other look missed: never three in a row, but too many in all.
+        check = self.health(itertools.cycle([ok, late]))
+        check.stable = 1.0
+        self.assertEqual(check.wait_healthy(time.time()), (False, "no longer healthy: rpc.methods does not answer"))
 
     # A clock set back while it waits moves the start along with it.
     def test_clock_set_back(self):
@@ -1175,6 +1179,13 @@ class HealthTest(unittest.TestCase):
 
 
 class HelpersTest(unittest.TestCase):
+    # A platforms that is no list of names fits no mower; none or an empty list fits every one.
+    def test_fits_platform(self):
+        for platforms, fits in ((None, True), ([], True), (["tron"], True), (["nx60i"], False), ("tron", False),
+                                ("nx60i", False), (["tron", 1], False), ({"tron": 1}, False)):
+            meta = {} if platforms is None else {"platforms": platforms}
+            self.assertEqual(bundle.fits_platform(meta, "tron"), fits, platforms)
+
     # Tools of the rootfs take the lock by this path (mowbite-measure); a bundle of the host does not renew them.
     def test_the_lock_keeps_its_path(self):
         self.assertEqual(paths.Paths().lock, "/run/mowbite-host.lock")

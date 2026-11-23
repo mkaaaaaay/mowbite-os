@@ -22,8 +22,10 @@ HEALTH_WAIT = 240.0
 # After the first healthy answer the OS has to stay healthy this long (rule M5 of the updater contract).
 HEALTH_STABLE = 60.0
 HEALTH_EVERY = 2.0
-# Looks in a row without a healthy answer after the first one before the OS counts as no longer healthy.
+# Looks without a healthy answer after the first one before the OS counts as no longer healthy: in a row, and in all
+# of the stable time.
 HEALTH_MISSES = 3
+HEALTH_MISSES_IN_ALL = 4
 # The hold of a switch covers the stop, the health checks of the new OS and of the one before it when it goes back;
 # the OS ends a hold at most after 1800 s.
 HOLD_SECONDS = 900
@@ -131,6 +133,7 @@ class Health:
         deadline = start + self.wait
         first_ok = None
         misses = 0
+        misses_in_all = 0
         line = ""
         entered = None
         while True:
@@ -147,7 +150,8 @@ class Health:
             elif first_ok is not None:
                 # One answer that comes late is no verdict; the stable time ends only on a healthy answer.
                 misses += 1
-                if misses >= HEALTH_MISSES:
+                misses_in_all += 1
+                if misses >= HEALTH_MISSES or misses_in_all >= HEALTH_MISSES_IN_ALL:
                     return False, f"no longer healthy: {line}"
             if ok and now - first_ok >= self.stable:
                 settled, why = self.probe.settled()

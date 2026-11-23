@@ -221,14 +221,20 @@ def missing_packages(packages):
 # platforms goes with any, and so does every one while the platform is unknown.
 def fits_platform(meta, platform):
     platforms = meta.get("platforms")
-    return not (platform and isinstance(platforms, list) and platforms and platform not in platforms)
+    # Missing or empty: for every platform. Anything but a list of names fits none.
+    if platforms is None or platforms == []:
+        return True
+    if not isinstance(platforms, list) or not all(isinstance(p, str) for p in platforms):
+        return False
+    return not platform or platform in platforms
 
 
 # Refused PLATFORM_MISMATCH when the bundle does not fit platform, the one of this mower.
 def check_platform(bundle, platform):
     if not fits_platform(bundle.meta, platform):
         platforms = bundle.meta["platforms"]
-        raise Refused(PLATFORM_MISMATCH, f"the bundle is built for {', '.join(platforms)}, this mower is {platform}")
+        names = ", ".join(map(str, platforms)) if isinstance(platforms, list) else repr(platforms)
+        raise Refused(PLATFORM_MISMATCH, f"the bundle is built for {names}, this mower is {platform}")
 
 
 # Refused BASE_TOO_OLD when the rootfs is older than the bundle needs or misses a package it runs on.
