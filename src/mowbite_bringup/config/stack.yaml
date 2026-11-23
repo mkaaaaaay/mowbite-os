@@ -39,6 +39,11 @@
     dock_marker: [0.0, 0.0, 0.0]
     marker_blind_distance: 0.0
     marker_max_age: 0.3
+    # The NPU runtime, model and class list for the obstacles seen by the cameras of a platform that has them; none
+    # here. They come by hand from the vendor's update, never in repo, bundle or image.
+    library_path: ""
+    model_path: ""
+    labels_path: ""
     # The contact stretch of docking (mowbite_logic, below) ends dock_overshoot m past the station or contact_timeout s
     # after the gate; the pose at the station stays good without the marker for that long.
     dock_overshoot: <platform>
