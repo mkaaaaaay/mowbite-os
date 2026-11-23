@@ -142,6 +142,16 @@ class WebTest(unittest.TestCase):
         for method in ("POST", "PUT", "DELETE", "OPTIONS", "PATCH", "FOO"):
             status, headers, _ = self.request(method, "/")
             self.assertEqual((status, headers["Allow"]), (405, "GET, HEAD"), method)
+        # A body after a refused method is no next request: the connection ends.
+        conn = socket.create_connection(("127.0.0.1", self.port))
+        self.addCleanup(conn.close)
+        conn.settimeout(5)
+        conn.sendall(b"POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 18\r\n\r\nGET /map/ HTTP/1.1")
+        answer = b""
+        while chunk := conn.recv(4096):
+            answer += chunk
+        self.assertTrue(answer.startswith(b"HTTP/1.1 405"), answer)
+        self.assertEqual(answer.count(b"HTTP/1.1"), 1, answer)
         status, headers, body = self.request("HEAD", "/")
         self.assertEqual((status, body), (200, b""))
         self.assertEqual(headers["Content-Length"], str(len(b"<p>bundled home</p>")))
@@ -221,6 +231,20 @@ class WebTest(unittest.TestCase):
         quiet.settimeout(5)
         start = time.monotonic()
         self.assertEqual(quiet.recv(100), b"")
+        self.assertLess(time.monotonic() - start, 3)
+
+    def test_an_idle_connection_gives_its_slot_back(self):
+        self.handler.idle_timeout = 0.5
+        self.export("/opt/mowbite", "os1", "bundled")
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        self.addCleanup(conn.close)
+        conn.request("GET", "/")
+        self.assertEqual(conn.getresponse().read(), b"<p>bundled home</p>")
+        start = time.monotonic()
+        deadline = start + 5
+        while self.server.slots._value < mowbite_web.MAX_CONNECTIONS and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(self.server.slots._value, mowbite_web.MAX_CONNECTIONS)
         self.assertLess(time.monotonic() - start, 3)
 
     def test_connections_beyond_the_limit_wait(self):

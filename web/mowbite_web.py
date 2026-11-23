@@ -25,6 +25,8 @@ STATIC = "_next/static/"
 # Answers that pages of other origins may read, besides /cgi-bin/*: which app runs.
 SHARED = ("/app.json", "/version.json")
 TIMEOUT = 30
+# A kept-alive connection without a new request gives its slot back after this long.
+IDLE_TIMEOUT = 5
 # Below TasksMax of the unit; further connections wait in the backlog.
 MAX_CONNECTIONS = 24
 CHUNK = 64 * 1024
@@ -64,6 +66,7 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "mowbite-web"
     sys_version = ""
     timeout = TIMEOUT
+    idle_timeout = IDLE_TIMEOUT
     # Head and a small body leave in one packet; handle_one_request flushes after each request.
     wbufsize = CHUNK
     prefix = ""
@@ -79,6 +82,19 @@ class Handler(BaseHTTPRequestHandler):
             return self.not_allowed
         raise AttributeError(name)
 
+    def handle_one_request(self):
+        # Waiting for the next request is cut sooner than a request under way.
+        self.connection.settimeout(self.idle_timeout)
+        try:
+            waiting = self.rfile.peek(1)
+        except OSError:
+            waiting = b""
+        if not waiting:
+            self.close_connection = True
+            return
+        self.connection.settimeout(self.timeout)
+        super().handle_one_request()
+
     def do_GET(self):
         self.serve()
 
@@ -86,7 +102,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def not_allowed(self):
         self.shared = False
-        self.reply(405, "Only GET and HEAD.\n", {"Allow": "GET, HEAD"})
+        # The body of the request is never read: the connection ends, so it is not taken for the next request.
+        self.close_connection = True
+        self.reply(405, "Only GET and HEAD.\n", {"Allow": "GET, HEAD", "Connection": "close"})
 
     def root(self):
         for path in (ACTIVE, BUNDLED):
