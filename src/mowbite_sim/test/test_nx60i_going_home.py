@@ -198,13 +198,15 @@ class TestNx60iGoingHome(unittest.TestCase):
     def test_5_rain_mode_without_a_rain_sensor_is_told_once(self):
         p = self.probe
         text = "has no effect: this platform has no rain sensor"
-        self.assertEqual(p.logged(text), [])
-        for mode in (1, 2):
+        # The default 1 is told once from the start on; after 0 a new mode is told again, once.
+        self.assertTrue(p.wait(lambda: p.logged(text), 5))
+        self.assertIn("rain_mode 1", p.logged(text)[0])
+        for mode in (0, 1, 2):
             answer = p.rpc("params.set", {"params": {P + "rain_mode": mode}})
             self.assertEqual(answer, {"result": {P + "rain_mode": mode}})
-        self.assertTrue(p.wait(lambda: p.logged(text), 5))
+        self.assertTrue(p.wait(lambda: len(p.logged(text)) == 2, 5), p.logged(text))
         time.sleep(1.0)
-        self.assertEqual(len(p.logged(text)), 1, p.logged(text))
-        self.assertIn("rain_mode 1", p.logged(text)[0])
+        self.assertEqual(len(p.logged(text)), 2, p.logged(text))
+        self.assertIn("rain_mode 1", p.logged(text)[1])
         answer = p.rpc("params.set", {"params": {P + "rain_mode": 0}})
         self.assertEqual(answer, {"result": {P + "rain_mode": 0}})
