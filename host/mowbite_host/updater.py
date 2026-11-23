@@ -102,6 +102,8 @@ class Updater:
         self._lock = threading.RLock()
         self._abort = threading.Event()
         self._worker = None
+        # From the start of a worker until it gave back its hold, before it tells idle.
+        self._working = False
         self._phase = dict(IDLE)
         self._candidates = []
         # Whether a hold of this updater may stand: asked for at the gate or written by the switch.
@@ -281,7 +283,6 @@ class Updater:
         with self._lock:
             self.state["last"] = {"result": result, "reason": reason, "message": message[:500],
                                   "revision": revision, "component": component, "t": int(time.time())}
-            self._phase = dict(IDLE)
             self._save_or_log()
         self._changed()
 
@@ -338,7 +339,7 @@ class Updater:
         return self.state["last"]
 
     def busy(self):
-        return self._worker is not None and self._worker.is_alive()
+        return self._working
 
     # Reads the inbox and the net folder again; the candidates and both folders within their limits. fetch: also
     # asks the net for a newer index in the background, poll takes its result.
@@ -415,8 +416,27 @@ class Updater:
         if os.path.lexists(self.paths.host.pending):
             raise Refused("BUSY", "the new host has not confirmed itself yet")
         self._abort.clear()
-        self._worker = threading.Thread(target=work, name=name, daemon=True)
-        self._worker.start()
+        self._working = True
+        self._worker = threading.Thread(target=self._work, args=(work,), name=name, daemon=True)
+        try:
+            self._worker.start()
+        except BaseException:
+            self._working = False
+            raise
+
+    # Idle only once the worker has given back its hold and ended: from then on another update can begin. A switch of
+    # the host stays checking, the new host gives the result.
+    def _work(self, work):
+        try:
+            work()
+        finally:
+            with self._lock:
+                restarting = self._phase["phase"] == "checking" and self._phase["component"] == "host"
+                if not restarting:
+                    self._phase = dict(IDLE)
+                self._working = False
+            if not restarting:
+                self._changed()
 
     # update.start: runs in its own thread; Refused right away when it cannot begin. reset_jobs: the planner is
     # installed although a mowing job is unfinished. gate_until: the monotonic time the gate is given up at the latest.

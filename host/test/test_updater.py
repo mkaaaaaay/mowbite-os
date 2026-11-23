@@ -574,6 +574,16 @@ class FlowTest(Base):
         self.fake.broken.clear()
         self.assertEqual(self.run_update("os", B)["result"], "installed")
 
+    # idle is told only once a new update can begin: the worker gave back its hold and ended.
+    def test_idle_only_once_another_update_can_begin(self):
+        self.install(A)
+        self.fake.lost_releases = 1
+        seen = []
+        self.updater.on_change = lambda status: seen.append((status["phase"], self.updater.busy()))
+        self.assertEqual(self.install(B)["result"], "installed")
+        self.assertIn(("idle", False), seen)
+        self.assertNotIn(("idle", True), seen)
+
     # The OS does not stop: nothing switched and no unfinished update left behind.
     def test_stop_refused_leaves_no_pending(self):
         self.install(A)
