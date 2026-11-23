@@ -973,6 +973,25 @@ TEST(RearLoop, H264ForTheRtspClient) {
   EXPECT_EQ(rig.camera.calls, "open start stop close ");
 }
 
+// While measuring, a picture for the viewer goes out only while the longest one so far leaves a step before the next
+// usable image is due: a slow encoder ends the pictures, never the measurement.
+TEST(RearLoop, ASlowEncoderEndsThePicturesNotTheMeasurement) {
+  Rig rig;
+  rig.camera.jpeg = &Drawn().marker;
+  rig.WithVideo();
+  rig.encoder.encode_s = 0.45;
+  rig.Make();
+  const std::unique_ptr<test::Client> client = rig.Play();
+  rig.asking = true;
+  ASSERT_TRUE(rig.RunUntil(rig.clock + 2.0));
+  const uint64_t frames = rig.stream->Frames();
+  const size_t measured = rig.Of(DockState::kMeasuring).size();
+  ASSERT_TRUE(rig.RunUntil(rig.clock + 3.0));
+  EXPECT_EQ(rig.stream->Frames(), frames);
+  EXPECT_GT(rig.Of(DockState::kMeasuring).size(), measured + 20);
+  EXPECT_TRUE(rig.Of(DockState::kFault).empty());
+}
+
 // After three failures of the encoder the stream is withdrawn and the pictures stay.
 TEST(RearLoop, AFailingEncoderLeavesThePictures) {
   Rig rig;

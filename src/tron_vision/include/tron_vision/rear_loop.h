@@ -256,6 +256,8 @@ class RearLoop {
   // Of the last usable image on the clock of the loop, and of the last evaluated one by its capture time.
   double last_good_ = -1.0;
   double last_evaluated_ = -1.0;
+  // The longest a picture for the viewer took while measuring since the camera opened (s).
+  double view_cost_s_ = 0.0;
   bool manual_ = false;
   // Why the camera keeps its own exposure.
   std::string auto_reason_;

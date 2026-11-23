@@ -321,6 +321,7 @@ void RearLoop::Begin(double now) {
   }
   started_ = now;
   last_good_ = -1.0;
+  view_cost_s_ = 0.0;
   last_evaluated_ = -1e9;
   state_ = DockState::kStarting;
   DockReport report;
@@ -379,8 +380,16 @@ void RearLoop::StepCamera(double now, bool asked, bool viewer) {
     Fault(DockReason::kNoSignal, "no usable image within " + Fixed(limit) + " s");
     return;
   }
-  // The picture comes after the report of its frame, so it never delays a measurement; a broken image gives none.
-  if (got == 1 && viewer) ShowFrame(frame, now_(), error);
+  // The picture comes after the report of its frame, and only while the longest one so far still leaves a step to
+  // fetch the next usable image in time: a slow encoder or client never turns into a missing image. A broken image
+  // gives none.
+  if (got == 1 && viewer) {
+    const double start = now_();
+    if (start + view_cost_s_ + kFrameStepS <= GoodBy()) {
+      ShowFrame(frame, start, error);
+      view_cost_s_ = std::max(view_cost_s_, now_() - start);
+    }
+  }
 }
 
 // By when the next usable image has to be there.
