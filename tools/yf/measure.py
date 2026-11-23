@@ -94,6 +94,8 @@ STOP_CHECK_S = 60.0
 STOP_EMERGENCY_S = 1.0
 STOP_LET_GO_S = 3.0
 STOP_FREE_S = 2.0
+# A driver frozen longer than the limit of its watch ends itself this soon after SIGCONT.
+WATCH_END_S = 2.0
 # Emergency bits of hw/status by bit number, named as in the catalog of mowbite_api (x-emergency-bits);
 # test/test_names.py holds them against the catalog, the message and the board's own names.
 EMERGENCY_BITS = {0: "LATCH", 1: "TIMEOUT_INPUTS", 2: "STOP", 3: "LIFT", 4: "LIFT_MULTIPLE", 5: "COLLISION",
@@ -1062,6 +1064,15 @@ class Measurement:
         os.kill(pids[0], sig)
         return pids[0]
 
+    def thaw(self, step, pid):
+        """SIGCONT; a driver whose watch ends it after the freeze is waited for like a killed one."""
+        os.kill(pid, signal.SIGCONT)
+        self.rec.write("signal", signal="SIGCONT", pid=pid)
+        if self.wait(WATCH_END_S, until=lambda: pid not in driver_pids()):
+            print(f"     the watch ended {DRIVER} (pid {pid}) after the freeze")
+            self.rec.write("watch_end", pid=pid)
+            self.wait_for_driver(step, pid, self.args.restart_wait)
+
     def wait_for_driver(self, step, old_pid, seconds):
         print(f"     waiting up to {seconds:.0f} s for a new {DRIVER} (restart it if the launch does not)")
         end = time.monotonic() + seconds
@@ -1191,9 +1202,11 @@ class Measurement:
                     pid = self.signal_driver(step, signal.SIGSTOP)
                     try:
                         self.wait(3.0)
-                    finally:
+                    except BaseException:
                         os.kill(pid, signal.SIGCONT)
                         self.rec.write("signal", signal="SIGCONT", pid=pid)
+                        raise
+                    self.thaw(step, pid)
                     self.wait(1.0)
                 elif mode in ("kill", "sigint"):
                     pid = self.signal_driver(step, signal.SIGKILL if mode == "kill" else signal.SIGINT)
@@ -1325,9 +1338,11 @@ class Measurement:
                 pid = self.signal_driver(step, signal.SIGSTOP)
                 try:
                     self.wait(3.0)
-                finally:
+                except BaseException:
                     os.kill(pid, signal.SIGCONT)
                     self.rec.write("signal", signal="SIGCONT", pid=pid)
+                    raise
+                self.thaw(step, pid)
             elif how == "kill":
                 pid = self.signal_driver(step, signal.SIGKILL)
                 self.wait(3.0)
