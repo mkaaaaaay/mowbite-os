@@ -1356,7 +1356,7 @@ class HelpersTest(unittest.TestCase):
     # A platforms that is no list of names fits no mower; none or an empty list fits every one.
     def test_fits_platform(self):
         for platforms, fits in ((None, True), ([], True), (["tron"], True), (["nx60i"], False), ("tron", False),
-                                ("nx60i", False), (["tron", 1], False), ({"tron": 1}, False)):
+                                ("nx60i", False), (["tron", 1], False), (["tron", ""], False), ({"tron": 1}, False)):
             meta = {} if platforms is None else {"platforms": platforms}
             self.assertEqual(bundle.fits_platform(meta, "tron"), fits, platforms)
 

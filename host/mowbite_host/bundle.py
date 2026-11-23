@@ -174,8 +174,7 @@ def read_meta(path):
     if not isinstance(meta.get("component"), str) or not isinstance(meta.get("runtime_packages", []), list):
         raise Refused("BAD_BUNDLE", "component or runtime_packages in bundle.json are missing or wrong")
     platforms = meta.get("platforms")
-    if "platforms" in meta and (not isinstance(platforms, list) or not platforms or
-                                not all(isinstance(name, str) and name for name in platforms)):
+    if "platforms" in meta and (not platforms or not _names(platforms)):
         raise Refused("BAD_BUNDLE", f"platforms in bundle.json is {platforms!r}, not a list of names")
     if _integer(meta, "serial") == 0:
         raise Refused("BAD_BUNDLE", "serial in bundle.json is 0")
@@ -227,9 +226,12 @@ def fits_platform(meta, platform):
     # Missing or empty: for every platform. Anything but a list of names fits none.
     if platforms is None or platforms == []:
         return True
-    if not isinstance(platforms, list) or not all(isinstance(p, str) for p in platforms):
-        return False
-    return not platform or platform in platforms
+    return _names(platforms) and (not platform or platform in platforms)
+
+
+# Whether platforms is a list of names.
+def _names(platforms):
+    return isinstance(platforms, list) and all(isinstance(name, str) and name for name in platforms)
 
 
 # Refused PLATFORM_MISMATCH when the bundle does not fit platform, the one of this mower.
