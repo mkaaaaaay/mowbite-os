@@ -163,6 +163,11 @@ class LogicCore {
   bool MowingDockCheck() const;
   // Monotonic s for the age of the poses of the dock marker, between the ticks.
   void AgeDockPose(double now_s);
+  // The age of the obstacles/status between the ticks: called once it goes stale (ObstacleGoesStale).
+  void AgeObstacles(double now_s);
+  bool ObstacleGoesStale(double now_s) const {
+    return obstacle_part_.GoesStale(now_s);
+  }
   // UNDOCKING: first charging off where the driver can stop it (ChargeOff, whose answer goes to OnChargeOff), then
   // the UndockPath to the follower, whose end goes to OnUndockEnded. After UNDOCKED mowing or the drive starts like
   // away from the station. Charging is allowed again (ChargeOn) when undocking ends otherwise, as the mower may still

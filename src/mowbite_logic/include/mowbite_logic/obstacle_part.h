@@ -113,6 +113,10 @@ class ObstaclePart {
   void OnStatus(const ObstacleSample& sample, double now_s, bool driving);
   // A status older than stale frees nothing.
   void Tick(double now_s);
+  // Whether Tick at now_s would find the status stale that is fresh until then.
+  bool GoesStale(double now_s) const {
+    return fresh_ && last_at_ && now_s - *last_at_ > config_.stale;
+  }
   // The mower is to stand for an obstacle.
   bool Holding() const {
     return hold_;

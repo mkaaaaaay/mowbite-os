@@ -189,6 +189,11 @@ void LogicCore::AgeDockPose(double now_s) {
   docking_part_.AgeDockPose(now_s);
 }
 
+void LogicCore::AgeObstacles(double now_s) {
+  obstacle_part_.Tick(now_s);
+  ApplyObstacleHold();
+}
+
 bool LogicCore::MowingDockCheck() const {
   return undocking_.dock_check() == DockCheck::kMowing;
 }

@@ -194,7 +194,11 @@ TEST(ObstaclePart, AStaleStatusLetsNothingGo) {
   ObstaclePart part = Armed();
   part.OnStatus(Seen({Track(1, "PERSON", kStop, 0.5, true)}), 0, true);
   ASSERT_TRUE(part.Holding());
+  // Stale only after obstacle stale (1 s), and once: the logic asks between its ticks.
+  EXPECT_FALSE(part.GoesStale(0.9));
+  EXPECT_TRUE(part.GoesStale(1.2));
   part.Tick(1.2);
+  EXPECT_FALSE(part.GoesStale(1.3));
   EXPECT_FALSE(part.Waive());
   EXPECT_FALSE(part.WaiveForStart(false));
   EXPECT_TRUE(part.Holding());

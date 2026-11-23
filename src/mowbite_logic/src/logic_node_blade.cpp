@@ -22,6 +22,8 @@ void LogicNode::UpdateBlade() {
     fast_tick_s_ = t;
     // Poses of the dock marker age between the ticks of the state timer too.
     if (core_.View().Docking()) core_.Call<&LogicCore::AgeDockPose>(t);
+    // So does the obstacles/status: a stale one frees nothing from then on.
+    if (core_.View().ObstacleGoesStale(t)) core_.Call<&LogicCore::AgeObstacles>(t);
     stalled = CheckFollowerLocked();
     // The calibration program's sign of life and the battery while it drives.
     ended = core_.Call<&LogicCore::TickCalibration>(MonotonicSeconds());

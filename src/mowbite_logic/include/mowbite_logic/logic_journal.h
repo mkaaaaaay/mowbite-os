@@ -214,7 +214,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
       &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
-      &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose);
+      &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose, &L::AgeObstacles);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
