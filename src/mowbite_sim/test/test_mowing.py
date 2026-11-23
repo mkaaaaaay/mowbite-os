@@ -30,9 +30,9 @@ WORK = tempfile.mkdtemp(prefix="mowbite_mowing_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "mowing.yaml")
 
-# One small lawn, one loop around it. Placed so that the loop starts at the mower (0, 0): plan_transit of planner
-# 8ff8f73 refuses the start of the loop as a goal (the body would stick out there), so no approach is needed.
-LAWN = [(-0.41, -0.11), (2.59, -0.11), (2.59, 1.49), (-0.41, 1.49)]
+# One small lawn, one loop around it: at 3.5 x 2.0 m the body fits all around the loop, on a smaller one the planner
+# leaves the loop out. The loop starts about 2.6 m from the mower, the way there is a transit.
+LAWN = [(-0.41, -0.11), (3.09, -0.11), (3.09, 1.89), (-0.41, 1.89)]
 GARDEN = {
     "areas": [{"id": "lawn", "properties": {"type": "mow", "name": "Lawn", "outline_count": 1},
                "outline": [{"x": x, "y": y} for x, y in LAWN]}],
