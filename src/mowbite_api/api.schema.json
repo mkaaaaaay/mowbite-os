@@ -12416,6 +12416,10 @@
           ],
           "x-unit": "unix s"
         },
+        "scheduled_start": {
+          "description": "Whether next_start refuses a hold now: within 1800 s or past it",
+          "type": "boolean"
+        },
         "state": {
           "description": "current_state of robot_state",
           "type": "string"
@@ -12432,7 +12436,8 @@
         "hold_until",
         "idle",
         "emergency_reason",
-        "next_start"
+        "next_start",
+        "scheduled_start"
       ],
       "type": "object"
     },
@@ -12525,6 +12530,18 @@
           ],
           "type": [
             "object",
+            "null"
+          ]
+        },
+        "update_path": {
+          "description": "How the OS is updated: native as a bundle over mowbite-host, compose as an image by hand; null where it does not know",
+          "enum": [
+            "native",
+            "compose",
+            null
+          ],
+          "type": [
+            "string",
             "null"
           ]
         },
@@ -12822,6 +12839,14 @@
       "additionalProperties": false,
       "description": "The result of update.abort: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -12845,6 +12870,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -13222,6 +13254,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -13254,6 +13293,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -13276,6 +13318,14 @@
       "additionalProperties": false,
       "description": "The result of update.check: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -13299,6 +13349,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -13676,6 +13733,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -13708,6 +13772,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -13746,6 +13813,14 @@
       "additionalProperties": false,
       "description": "The result of update.rollback: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -13769,6 +13844,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -14146,6 +14228,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -14178,6 +14267,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -14212,6 +14304,14 @@
       "additionalProperties": false,
       "description": "The result of update.set_auto: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -14235,6 +14335,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -14612,6 +14719,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -14644,6 +14758,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -14676,6 +14793,14 @@
       "additionalProperties": false,
       "description": "The result of update.set_channel: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -14699,6 +14824,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -15076,6 +15208,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -15108,6 +15247,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -15150,6 +15292,14 @@
       "additionalProperties": false,
       "description": "The result of update.start: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -15173,6 +15323,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -15550,6 +15707,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -15582,6 +15746,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -15604,6 +15771,14 @@
       "additionalProperties": false,
       "description": "The result of update.status: What the updater does, what runs and what is available, the last result",
       "properties": {
+        "at": {
+          "description": "With reason SCHEDULED_START: when the plan starts; else null",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
         "auto": {
           "additionalProperties": false,
           "description": "The automatic update",
@@ -15627,6 +15802,13 @@
             "to"
           ],
           "type": "object"
+        },
+        "bytes": {
+          "description": "In verifying and unpacking: the bytes copied or unpacked so far; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "component": {
           "description": "The component of the update that runs, null in idle",
@@ -16004,6 +16186,13 @@
           ],
           "type": "object"
         },
+        "percent": {
+          "description": "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else null",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "phase": {
           "description": "What it does now",
           "enum": [
@@ -16036,6 +16225,9 @@
         "component",
         "revision",
         "reason",
+        "at",
+        "percent",
+        "bytes",
         "components",
         "auto",
         "last"
@@ -16427,11 +16619,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:54",
+  "$id": "urn:mowbite-os:api:55",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 54,
+  "x-api": 55,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -16450,7 +16642,7 @@
     "docking.start": {
       "action": null,
       "actions": [],
-      "description": "Drives home from IDLE to the docking station where the OS docks by itself; offered only there",
+      "description": "Drives home from IDLE to the docking station",
       "params": "#/$defs/docking.start.params",
       "refused": "DRIVE_REFUSED",
       "result": "#/$defs/docking.start.result"
@@ -16458,7 +16650,7 @@
     "docking.test": {
       "action": null,
       "actions": [],
-      "description": "Docks by the dock camera alone from where the mower stands in front of the station, without map or position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
+      "description": "Docks by the dock camera alone from where the mower stands in front of the station, without map or position (the reason TEST at DOCKING)",
       "params": "#/$defs/docking.test.params",
       "refused": "DRIVE_REFUSED",
       "result": "#/$defs/docking.test.result"
@@ -17090,14 +17282,14 @@
       "result": "#/$defs/docking.abort.result"
     },
     "docking.start": {
-      "description": "Drives home from IDLE to the docking station where the OS docks by itself; offered only there",
+      "description": "Drives home from IDLE to the docking station",
       "node": "mowbite_logic",
       "offered": "only where the OS docks by itself",
       "params": "#/$defs/docking.start.params",
       "result": "#/$defs/docking.start.result"
     },
     "docking.test": {
-      "description": "Docks by the dock camera alone from where the mower stands in front of the station, without map or position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
+      "description": "Docks by the dock camera alone from where the mower stands in front of the station, without map or position (the reason TEST at DOCKING)",
       "node": "mowbite_logic",
       "offered": "only where the platform has a dock marker",
       "params": "#/$defs/docking.test.params",
@@ -22368,6 +22560,26 @@
             "fix": "Install it by hand if you want it.",
             "help": "This version was rolled back by hand and is not installed again automatically.",
             "name": "Rolled back by hand"
+          }
+        }
+      },
+      "SCHEDULED_START": {
+        "description": "A plan of the schedule starts within 1800 s; MowBite OS grants no hold for an update until then",
+        "fields": {
+          "at": "unix s"
+        },
+        "resume": "auto",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun, das Update versucht es weiter, sobald der Mäher wieder frei ist.",
+            "help": "Ein Plan des Zeitplans startet in weniger als 30 Minuten. Bis dahin wartet das Update.",
+            "name": "Geplanter Start"
+          },
+          "en": {
+            "fix": "Nothing to do, the update tries again once the mower is free.",
+            "help": "A plan of the schedule starts in less than 30 minutes. Until then the update waits.",
+            "name": "Scheduled start"
           }
         }
       },
