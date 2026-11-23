@@ -128,7 +128,7 @@ TEST(LogicParams, LoadKeepsKnownNamesWithinRange) {
   LogicParams params(json{{"max_position_accuracy", 0.05}});
   ASSERT_TRUE(params.Load(R"({"gps_wait_time": 70, "tool_width": 0.3, "rain_mode": "2"})"));
   EXPECT_DOUBLE_EQ(params.Get("gps_wait_time"), 60.0);
-  EXPECT_DOUBLE_EQ(params.Get("rain_mode"), 0);
+  EXPECT_DOUBLE_EQ(params.Get("rain_mode"), LogicParams().Get("rain_mode"));
   // Not in the file: the base stays.
   EXPECT_DOUBLE_EQ(params.Get("max_position_accuracy"), 0.05);
   EXPECT_FALSE(params.Values().contains("tool_width"));
