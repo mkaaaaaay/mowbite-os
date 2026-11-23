@@ -302,7 +302,11 @@ class SetupNode : public rclcpp::Node {
   void LoadLock() {
     std::string text, error;
     const auto read = mowbite_hold::ReadSmallFile(LockPath(), 1024 * 1024, &text, &error);
-    if (read == mowbite_hold::FileRead::kMissing) return;
+    // Without a file the lock is open, unless setup.json tells of a failed safety step it never got to.
+    if (read == mowbite_hold::FileRead::kMissing) {
+      program_->LoadLock(std::nullopt, WallSeconds());
+      return;
+    }
     if (read != mowbite_hold::FileRead::kText) text.clear();
     program_->LoadLock(text, WallSeconds());
     if (!mowbite_hold::ParseSafetyLock(text)) {
