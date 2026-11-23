@@ -119,7 +119,7 @@ TEST(Schema, CommandsAndBits) {
   EXPECT_TRUE(schema["x-reasons"]["REQUEST_REFUSED"].contains("CORRELATION_DATA"));
   EXPECT_FALSE(schema["$defs"].contains("event.REQUEST_REFUSED"));
   const Json& refusal = schema["$defs"]["refusal"];
-  EXPECT_EQ(refusal["required"], Json({"event", "state", "sub_state", "reason", "severity", "resume"}));
+  EXPECT_EQ(refusal["required"], Json({"event", "reason"}));
   EXPECT_FALSE(refusal.contains("additionalProperties"));
   // A blocked item carries the fields of its reason (SAFETY_STEPS: steps, skipped).
   const Json& blocked = schema["$defs"]["setup"]["properties"]["steps"]["items"]["properties"]["blocked"]["items"];
