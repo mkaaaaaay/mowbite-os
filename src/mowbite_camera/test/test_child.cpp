@@ -124,13 +124,16 @@ TEST_F(ChildTest, InterruptWaitsForNothing) {
   ASSERT_TRUE(child_.Start(spec, &error_)) << error_;
   ASSERT_TRUE(WaitForFile(dir_ / "ready"));
   const auto before = std::chrono::steady_clock::now();
+  EXPECT_FALSE(child_.Interrupted());
   child_.Interrupt(0.3);
+  EXPECT_TRUE(child_.Interrupted());
   EXPECT_LT(std::chrono::steady_clock::now() - before, std::chrono::milliseconds(100));
   EXPECT_TRUE(child_.Running());
   std::this_thread::sleep_for(std::chrono::milliseconds(400));
   std::string how;
   EXPECT_FALSE(child_.Running(&how));
   EXPECT_EQ(how, "signal 9");
+  EXPECT_FALSE(child_.Interrupted());
 }
 
 TEST_F(ChildTest, EndsWithTheThreadThatStartedIt) {

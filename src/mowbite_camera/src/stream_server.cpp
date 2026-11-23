@@ -52,7 +52,8 @@ void MediaServer::Stop() {
 }
 
 void MediaServer::Reap() {
-  child_.Running();
+  // Only a stopped one: an end of its own is for Running to find and tell.
+  if (child_.Interrupted()) child_.Running();
 }
 
 bool ParseSessions(const std::string& body, std::vector<std::string>* ids) {

@@ -68,6 +68,7 @@ constexpr auto kProvidersPeriod = 1s;
 constexpr auto kTickPeriod = 250ms;
 constexpr char kMethodsTopic[] = "bridge/rpc/methods";
 constexpr char kSensorInfoTopic[] = "bridge/sensor_info";
+constexpr char kActionsTopic[] = "bridge/actions";
 constexpr int kReachableTimeoutMs = 1000;
 constexpr char kClientId[] = "mowbite_bridge";
 constexpr char kRestartNote[] = "container_exit.json";
@@ -269,7 +270,7 @@ class BridgeNode : public rclcpp::Node {
       const bool text = known != text_sensors_.end() && known->second;
       core_.OnSensorValue(m.sensor_id, text ? Json(m.text) : Json(m.value), WallNow());
     });
-    SubscribeFrom<msg::ActionList>("bridge/actions", Latched(50),
+    SubscribeFrom<msg::ActionList>(kActionsTopic, Latched(50),
                                    [this](const msg::ActionList& m, const std::string& provider) {
                                      std::vector<ActionItem> items;
                                      for (const auto& a : m.actions) {
@@ -322,7 +323,8 @@ class BridgeNode : public rclcpp::Node {
       // A graph that cannot be read skips the check: it throws, and no provider counts as missing.
       Locked("providers", [&] {
         std::set<std::string> alive;
-        for (const char* topic : {kMethodsTopic, kSensorInfoTopic}) {
+        // The providers are publishers by their GID: each topic they publish on counts.
+        for (const char* topic : {kMethodsTopic, kSensorInfoTopic, kActionsTopic}) {
           for (const auto& publisher : get_publishers_info_by_topic(topic)) {
             alive.insert(ProviderName(publisher.endpoint_gid()));
           }

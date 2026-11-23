@@ -40,6 +40,8 @@ class Child {
   void Stop(double grace_s = 2.0);
   // SIGINT without waiting: Running() sends SIGKILL once it has not ended grace_s later.
   void Interrupt(double grace_s = 2.0);
+  // Asked to end by Interrupt and not yet found ended.
+  bool Interrupted() const { return pid_ > 0 && kill_at_ >= 0; }
 
  private:
   pid_t pid_ = -1;
