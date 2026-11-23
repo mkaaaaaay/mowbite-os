@@ -485,6 +485,28 @@ void Compare(const Json& older, const Json& newer, const std::string& path, bool
   }
 }
 
+// Corrections of older schemas that promised what the OS never held: no break against the versions before since.
+// Any other entry only through the Master (23.11.).
+struct Correction {
+  const char* problem;
+  int since;
+  const char* why;
+};
+constexpr Correction kCorrections[] = {
+    {"refusal.state: no longer always there", 54, "SOUND_, CAMERA_ and UPDATE_REFUSED never sent it"},
+    {"refusal.sub_state: no longer always there", 54, "SOUND_, CAMERA_ and UPDATE_REFUSED never sent it"},
+    {"refusal.severity: no longer always there", 54, "SOUND_, CAMERA_ and UPDATE_REFUSED never sent it"},
+    {"refusal.resume: no longer always there", 54, "SOUND_, CAMERA_ and UPDATE_REFUSED never sent it"},
+    {"setup.image.result.size: minimum wider", 54, "the whole image was held to the size of a piece"},
+    {"setup.image.result.size: maximum wider", 54, "the whole image was held to the size of a piece"},
+    {"event.DOCKING_FAILED.limit: unit changed", 5, "api 4 fixed A, the limit has the unit of its value"},
+};
+
+bool Corrected(const std::string& problem, int older_api) {
+  return std::any_of(std::begin(kCorrections), std::end(kCorrections),
+                     [&](const Correction& c) { return problem == c.problem && older_api < c.since; });
+}
+
 bool EndsWith(const std::string& text, const std::string& end) {
   return text.size() >= end.size() && text.compare(text.size() - end.size(), end.size(), end) == 0;
 }
@@ -554,6 +576,9 @@ std::vector<std::string> CheckAdditive(const Json& older, const Json& newer) {
       if (!kept) out.push_back("x-commands." + name + ": action " + action.value("action", "?") + " gone");
     }
   }
+  const int older_api = older.value("x-api", 0);
+  const auto corrected = [older_api](const std::string& problem) { return Corrected(problem, older_api); };
+  out.erase(std::remove_if(out.begin(), out.end(), corrected), out.end());
   return out;
 }
 

@@ -127,6 +127,23 @@ TEST(Schema, CommandsAndBits) {
   EXPECT_TRUE(schema["x-reasons"]["SETUP_BLOCKED"]["SAFETY_STEPS"].dump().find("skipped") != std::string::npos);
 }
 
+// The named corrections count only against versions before the one that made them.
+TEST(Additive, ACorrectionCountsOnlyAgainstOlderVersions) {
+  Json older = Schema();
+  Json newer = Schema();
+  Json& required = newer["$defs"]["refusal"]["required"];
+  required = Json::array({"event", "reason", "message"});
+  older["$defs"]["refusal"]["required"] = Json::array({"event", "reason", "message", "state"});
+  older["x-api"] = 53;
+  EXPECT_FALSE(Has(CheckAdditive(older, newer), "refusal.state: no longer always there"));
+  older["x-api"] = 54;
+  EXPECT_TRUE(Has(CheckAdditive(older, newer), "refusal.state: no longer always there"));
+  // Other fields of the refusal stay strict.
+  older["x-api"] = 53;
+  older["$defs"]["refusal"]["required"].push_back("event_id");
+  EXPECT_TRUE(Has(CheckAdditive(older, newer), "refusal.event_id: no longer always there"));
+}
+
 TEST(Additive, WhatIsTakenAwayIsFound) {
   const Json& older = Schema();
   const auto changed = [&older](const std::function<void(Json&)>& change) {
