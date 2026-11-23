@@ -951,7 +951,8 @@ void LogicNode::OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::P
     job_plan_ = JobPlan();
     const CoverageAnswer answer = ToAnswer(response);
     if (!answer.success) {
-      core_.Call<&LogicCore::OnJobPlanFailed>(Reason("PLANNING_FAILED", answer.message));
+      const std::string code = PlannerSkipsArea(answer.code) ? answer.code : "PLANNING_FAILED";
+      core_.Call<&LogicCore::OnJobPlanFailed>(Reason(code, answer.message));
     } else {
       std::vector<JobPath> paths = JobPaths(answer);
       RCLCPP_INFO(get_logger(), "Mowing: %zu paths from %zu poses", paths.size(), answer.poses.size());
@@ -2004,6 +2005,7 @@ CoverageAnswer LogicNode::ToAnswer(const mowbite_planner_interfaces::srv::PlanCo
   CoverageAnswer answer;
   answer.success = r.success;
   answer.message = r.message;
+  answer.code = r.code;
   answer.angle = r.angle;
   answer.fingerprint = r.fingerprint;
   answer.poses.reserve(r.path.poses.size());

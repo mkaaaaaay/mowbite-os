@@ -406,6 +406,9 @@ constexpr double kSkippedPathPiece = 2.0;
 
 // Whether the planner gave no answer: PLANNER_TIMEOUT or PLANNER_MISSING.
 bool PlannerSilent(const Reason& why);
+// A code of PlanCoverage for an area the planner cannot plan as it is: the job skips it (BODY_OUT, NO_PLAN,
+// START_UNREACHABLE); any other failure pauses.
+bool PlannerSkipsArea(const std::string& code);
 
 // A start of a plan of the schedule (mowbite_msgs/StartRun).
 struct ScheduleRun {

@@ -445,6 +445,19 @@ void MowingPart::OnJobPlanned(CoreAccess core, std::vector<JobPath> paths, const
 void MowingPart::OnJobPlanFailed(CoreAccess core, const Reason& why) {
   if (core.state() != State::kMowing || leg_ != Leg::kPlanning) return;
   leg_ = Leg::kNone;
+  if (PlannerSkipsArea(why.code)) {
+    // Masterplan 3.4: an area the planner cannot plan as it is does not hold up the others.
+    planner_silent_ = 0;
+    if (const JobArea* area = job_.CurrentArea()) {
+      json details = {{"area_id", area->id}, {"area_name", area->name}};
+      PutReason(&details, "AREA_SKIPPED", why);
+      core.AddEvent("AREA_SKIPPED", std::move(details));
+    }
+    job_.SkipArea();
+    approached_ = false;
+    core.CheckpointNow();
+    return;
+  }
   const Reason pause("PLANNING_FAILED", "Planning failed: " + why.message);
   if (PlannerSilent(why)) {
     // A plan that timed out is not asked for again: the planner may still be at it.

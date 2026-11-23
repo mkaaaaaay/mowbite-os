@@ -673,6 +673,42 @@ TEST(ScheduleDrop, TheCurrentAreaIsSkippedAndTheNextOneMowed) {
   EXPECT_TRUE(core.Mowing());
 }
 
+// Masterplan 3.4: an area the planner cannot plan as it is is skipped with the code as its reason, the job goes on.
+TEST(PlannerRefusal, AnAreaThePlannerCannotPlanIsSkipped) {
+  for (const char* code : {"BODY_OUT", "NO_PLAN", "START_UNREACHABLE"}) {
+    TestCore core = MowingRun();
+    ASSERT_EQ(core.NextJobStep(20).area_id, "a") << code;
+    core.TakeEvents();
+    core.OnJobPlanFailed(Reason(code, "not as it is"));
+    EXPECT_TRUE(core.Mowing()) << code;
+    const auto events = core.TakeEvents();
+    const Event* skipped = Find(events, "AREA_SKIPPED");
+    ASSERT_TRUE(skipped) << code;
+    EXPECT_EQ(skipped->details["area_id"], "a");
+    EXPECT_EQ(skipped->details["reason"], code);
+    EXPECT_EQ(skipped->details["severity"], "warning");
+    EXPECT_EQ(skipped->details["message"], "not as it is");
+    EXPECT_FALSE(Find(events, "STATE")) << code;
+    const JobStep next = core.NextJobStep(20);
+    EXPECT_EQ(next.kind, JobStep::Kind::kPlan) << code;
+    EXPECT_EQ(next.area_id, "b") << code;
+    // The last one as well: the job is complete.
+    core.OnJobPlanFailed(Reason(code, "not as it is"));
+    core.NextJobStep(20);
+    EXPECT_TRUE(Find(core.TakeEvents(), "JOB_COMPLETE")) << code;
+  }
+}
+
+// Any other failure of the planner still pauses.
+TEST(PlannerRefusal, AnyOtherFailurePauses) {
+  TestCore core = MowingRun();
+  ASSERT_EQ(core.NextJobStep(20).area_id, "a");
+  core.TakeEvents();
+  core.OnJobPlanFailed(Reason("PLANNING_FAILED", "internal"));
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  EXPECT_FALSE(Find(core.TakeEvents(), "AREA_SKIPPED"));
+}
+
 TEST(ScheduleDrop, AnAreaLaterInTheListIsPassedOverThere) {
   TestCore core = MowingRun();
   ASSERT_EQ(core.NextJobStep(20).area_id, "a");

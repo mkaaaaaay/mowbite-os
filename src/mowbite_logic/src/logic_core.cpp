@@ -31,6 +31,10 @@ bool PlannerSilent(const Reason& why) {
   return why.code == "PLANNER_TIMEOUT" || why.code == "PLANNER_MISSING";
 }
 
+bool PlannerSkipsArea(const std::string& code) {
+  return code == "BODY_OUT" || code == "NO_PLAN" || code == "START_UNREACHABLE";
+}
+
 void SetEventObserver(EventObserver observer) {
   event_observer = observer;
 }

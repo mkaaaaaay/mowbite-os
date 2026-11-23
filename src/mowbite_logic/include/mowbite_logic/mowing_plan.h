@@ -47,6 +47,8 @@ struct CoverageAnswer {
   bool success = false;
   // Why it failed, or a summary
   std::string message;
+  // Empty with success, else the code of PlanCoverage
+  std::string code;
   std::vector<Point2> poses;
   // rad, one per pose; may be empty
   std::vector<double> headings;
