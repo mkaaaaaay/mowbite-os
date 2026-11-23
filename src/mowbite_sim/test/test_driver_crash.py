@@ -26,8 +26,8 @@ from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (EXIT_CODES, LATCHED, ROSOUT, SimProbe, container_pid, journal_dir, read_json,  # noqa: E402
-                        running, sim_description, sim_files, wait_until)
+from sim_common import (EXIT_CODES, LATCHED, ROSOUT, SimProbe, alive, container_pid, journal_dir,  # noqa: E402
+                        read_json, running, sim_description, sim_files, wait_until)
 
 # stack.py of mowbite_bringup; sim_common put its folder on the path.
 import stack  # noqa: E402
@@ -165,11 +165,17 @@ class TestDriverCrash(unittest.TestCase):
         TestDriverCrash.since = len(p.events)
         kill = time.monotonic() - offset
         os.kill(driver, signal.SIGKILL)
-        TestDriverCrash.kill = kill
         # No host any more: the MCU drops the setpoint and the blade by itself.
         stood = p.wait(lambda: (p.truth() or {}).get("linear") == 0.0 and p.truth()["clock"] - offset, 5)
         self.assertTrue(stood, p.truth())
         self.assertLess(stood - kill, STOP_WITHIN, f"wheels stopped {stood - kill:.2f} s after the kill")
+        # Frames the old driver wrote before its end can reach fake_tron after the kill; once the wheels stand,
+        # fake_tron has read them all, so frames after its newest entry are the successor's.
+        self.assertTrue(wait_until(lambda: not alive(driver), 2), "the old driver still runs")
+        time.sleep(0.2)
+        quiet = p.recent(4096)[-1]["t"]
+        self.assertEqual(running(proc_info, DRIVER), [], "the successor started before the old frames were read")
+        TestDriverCrash.quiet = quiet
         new = successor(proc_info, driver, stack.RESTART_DELAY + 10)
         self.assertTrue(new, "no new driver")
         TestDriverCrash.driver = new
@@ -186,7 +192,7 @@ class TestDriverCrash(unittest.TestCase):
         # The app sees an emergency with a reason it knows.
         self.assertTrue(p.wait(lambda: p.robot.emergency and p.robot.emergency_reason & (TIMEOUT_INPUTS | HIGH_LEVEL),
                                10), p.robot)
-        moving, cutting = p.commands(kill)
+        moving, cutting = p.commands(quiet)
         self.assertEqual((moving, cutting), ([], []), "the new driver moved the mower or turned the blade")
         print(f"driver killed: wheels stopped {stood - kill:.2f} s after it, successor latched "
               f"{p.truth()['clock'] - offset - kill:.2f} s after it, reason {hw.emergency_reason:#x}, "
@@ -194,9 +200,9 @@ class TestDriverCrash(unittest.TestCase):
 
     def test_4_nothing_moves_until_a_release_and_none_by_it(self):
         p = self.probe
-        kill = TestDriverCrash.kill
+        quiet = TestDriverCrash.quiet
         time.sleep(3.0)
-        self.assertEqual(p.commands(kill), ([], []))
+        self.assertEqual(p.commands(quiet), ([], []))
         self.assertTrue(p.hw.emergency_latched and p.hw.emergency_reason & HIGH_LEVEL, p.hw)
         still, poses = p.standing()
         self.assertTrue(still and poses[1]["linear"] == 0.0, poses)
@@ -206,7 +212,7 @@ class TestDriverCrash(unittest.TestCase):
                         (p.robot, p.hw, [(e["type"], e.get("reason")) for e in p.events[since:]]))
         # The release alone starts neither the wheels nor the blade: the job waits paused until the user continues.
         time.sleep(5.0)
-        self.assertEqual(p.commands(kill), ([], []))
+        self.assertEqual(p.commands(quiet), ([], []))
         self.assertEqual(p.robot.current_state, "PAUSED", p.robot)
         self.assertEqual(p.hw.blade_motor.rpm, 0, p.hw)
 
@@ -240,16 +246,20 @@ class TestDriverCrash(unittest.TestCase):
                          written)
         started = [a for a in proc_info.processes() if DRIVER in a.process_details["name"]]
         self.assertEqual(len(started), 1 + RESTARTS)
-        self.assertEqual(p.commands(TestDriverCrash.kill), ([], []))
+        self.assertEqual(p.commands(TestDriverCrash.quiet), ([], []))
 
     def test_7_a_reset_is_refused_without_the_driver(self):
         p = self.probe
-        # Once the graph has dropped the killed driver, mowbite_safety refuses without asking it.
+        # Once the graph has dropped the killed driver, mowbite_safety refuses without asking it. Its own view of
+        # the graph can lag the probe's: then it asks, gets no answer and refuses too, and the next reset is the check.
         self.assertTrue(p.wait(lambda: not p.emergency.service_is_ready(), 30))
-        since = len(p.events)
-        p.act("mower_logic/reset_emergency")
-        refused = p.event(since, "EMERGENCY_RESET_REFUSED", 10)
-        self.assertTrue(refused, [(e["type"], e.get("reason")) for e in p.events[since:]])
+        for _ in range(2):
+            since = len(p.events)
+            p.act("mower_logic/reset_emergency")
+            refused = p.event(since, "EMERGENCY_RESET_REFUSED", 10)
+            self.assertTrue(refused, [(e["type"], e.get("reason")) for e in p.events[since:]])
+            if refused["reason"] != "NO_ANSWER":
+                break
         self.assertEqual(refused["reason"], "DRIVER_MISSING", refused)
         self.assertTrue(p.robot.emergency and p.robot.emergency_reason & TIMEOUT_INPUTS, p.robot)
 

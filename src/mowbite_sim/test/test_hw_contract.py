@@ -107,7 +107,8 @@ class TestHardwareContract(unittest.TestCase):
         time.sleep(0.5)
         moving = [e for e in received(t0, SPEED) if e["speed"] != [0.0, 0.0]]
         self.assertGreaterEqual(len(moving), 15)
-        gaps = [b["t"] - a["t"] for a, b in zip(moving, moving[1:])]
+        # fake_tron notes its times in ms: the difference of two of them is a whole number of ms.
+        gaps = [round(b["t"] - a["t"], 3) for a, b in zip(moving, moving[1:])]
         self.assertGreaterEqual(min(gaps), 0.095, str(gaps))
         self.assertAlmostEqual(moving[-1]["speed"][0], 0.138, delta=0.0025)
 

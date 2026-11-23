@@ -368,11 +368,12 @@ class TestDock(Base):
         # The last try left it on the contacts.
         self.on_the_station()
         self.assertNotIn("DOCKED", [e["type"] for e in p.events[since:]])
-        # The way out of the first try began only after Charge 0 (G19).
+        # The way out of the first try began only after Charge 0 (G19): by the order in the log, both can come
+        # within the same ms.
         rx = received(sim_since)
-        charge_on = next(e["t"] for e in rx if e.get("charge") == 1)
-        out = next(e for e in rx if e["t"] > charge_on and moving(e) and e["speed"][0] > 0)
-        self.assertTrue([e for e in rx if e.get("charge") == 0 and charge_on < e["t"] < out["t"]], rx[:40])
+        charge_on = next(i for i, e in enumerate(rx) if e.get("charge") == 1)
+        out = next(i for i, e in enumerate(rx) if i > charge_on and moving(e) and e["speed"][0] > 0)
+        self.assertTrue([e for e in rx[charge_on:out] if e.get("charge") == 0], rx[max(charge_on, out - 40):out + 1])
         # The charge comes after all: DOCKED, and it stays IDLE.
         since = len(p.events)
         p.flags()
