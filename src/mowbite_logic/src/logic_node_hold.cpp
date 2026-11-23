@@ -78,13 +78,15 @@ void LogicNode::OnSystemHold(const mowbite_msgs::msg::RpcRequest& request) {
 // Called with the mutex held.
 json LogicNode::HoldAnswerLocked() const {
   const RobotStateData state = core_.View().RobotState();
+  const bool scheduled = ScheduleBlocksHoldLocked(WallSeconds());
   return json{{"state", state.state},
               {"is_charging", state.is_charging},
               {"hold_until", HoldUntilLocked()},
               {"sub_state", state.sub_state},
-              {"idle", core_.View().HoldAllowed() && !ScheduleBlocksHoldLocked(WallSeconds())},
+              {"idle", core_.View().HoldAllowed() && !scheduled},
               {"emergency_reason", state.emergency_reason},
-              {"next_start", next_start_ > 0 ? json(next_start_) : json()}};
+              {"next_start", next_start_ > 0 ? json(next_start_) : json()},
+              {"scheduled_start", scheduled}};
 }
 
 // unix s while the logic holds, else 0. Called with the mutex held.

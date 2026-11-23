@@ -232,11 +232,12 @@ class TestSchedule(unittest.TestCase):
         finally:
             client.loop_stop()
             client.disconnect()
-        # Within 30 min of a start no hold: idle false and when the start is.
+        # Within 30 min of a start no hold: idle false, when the start is and that it is the reason.
         answer = self.broker.rpc("system.hold", {"seconds": 600})
         self.assertIn("result", answer, answer)
-        self.assertEqual((answer["result"]["idle"], answer["result"]["hold_until"], answer["result"]["next_start"]),
-                         (False, 0, at), answer)
+        result = answer["result"]
+        self.assertEqual((result["idle"], result["hold_until"], result["next_start"], result["scheduled_start"]),
+                         (False, 0, at, True), answer)
         self.__class__.at = at
 
     def test_03_a_command_cancels_the_announcement(self):

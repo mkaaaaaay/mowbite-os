@@ -617,11 +617,11 @@ const std::vector<Command>& Commands() {
       Logic("docking.abort", "Stops docking", {}, Answer(), "COMMAND_REFUSED",
             {{"mower_logic:docking/abort_docking"}}),
       Logic("docking.start",
-            "Drives home from IDLE to the docking station where the OS docks by itself; offered only there", {},
+            "Drives home from IDLE to the docking station", {},
             Answer({}, {"DOCKING"}), "DRIVE_REFUSED", {}, "only where the OS docks by itself"),
       Logic("docking.test",
             "Docks by the dock camera alone from where the mower stands in front of the station, without map or "
-            "position (the reason TEST at DOCKING); offered only where the platform has a dock marker",
+            "position (the reason TEST at DOCKING)",
             {Integer("runs",
                      "1 to 10 (default 1): above 1 a series, after each DOCKED the mower drives out forwards to the "
                      "start of the line by the marker and docks again; DOCKING_TEST_RUN ends every run, the first "
@@ -799,7 +799,8 @@ const std::vector<Method>& Methods() {
                Integer("hold_until", "End of the hold in unix s, 0 without one"),
                Bool("idle", "Whether a hold can be granted now: also false within 1800 s before next_start"),
                Integer("emergency_reason", "The bits of the emergency, 0 without one"),
-               Time("next_start", "The next start of the schedule, null without one")}),
+               Time("next_start", "The next start of the schedule, null without one"),
+               Bool("scheduled_start", "Whether next_start refuses a hold now: within 1800 s or past it")}),
        ""},
       {"calibration.check", "mowbite_logic", "Whether a calibration drive could start here, without a drive",
        NoParams(),

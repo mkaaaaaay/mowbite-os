@@ -32,8 +32,6 @@ RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__f
 GATE_WAIT = 30 * 60.0
 GATE_EVERY = 5.0
 HOLD_WAIT = 10.0
-# The OS grants no hold this long before a planned start (system.hold); the slack covers the clocks.
-SCHEDULE_HOLD_S = 1800 + 60
 # A hold the OS still shows in hold.json is given back this often, each time waiting this long for the file to go.
 RELEASE_TRIES = 3
 RELEASE_WAIT = 3.0
@@ -63,10 +61,9 @@ NO_SPACE_MORE = 256 * 1024 * 1024
 
 
 # Why the OS gave no hold, from its answer to system.hold (None without one): a planned start soon, with its time.
-def _why_no_hold(answer, now):
-    start = answer.get("next_start") if isinstance(answer, dict) else None
-    if (type(start) is int and answer.get("hold_until") == 0 and answer.get("idle") is False
-            and 0 <= start - now <= SCHEDULE_HOLD_S):
+def _why_no_hold(answer):
+    if isinstance(answer, dict) and answer.get("scheduled_start") is True and compat.whole(answer.get("next_start")):
+        start = answer["next_start"]
         return "SCHEDULED_START", f"a plan of the schedule starts at {start} (unix s)", start
     return "NO_HOLD", "MowBite OS did not grant the hold of the update"
 
@@ -273,10 +270,14 @@ class Updater:
                     "origin": {"channel": origin["channel"], "url": net.INDEX_URL if self.net else None,
                                "downloading": bool(self.net and self.net.busy()), **(origin["last"] or {})}}
 
-    def _set_phase(self, phase, reason=None, at=None, **extra):
+    def _set_phase(self, phase, reason=None, **extra):
         with self._lock:
-            self._phase = {**self._phase, **FRESH, "phase": phase, "reason": reason, "at": at, **extra}
+            self._phase_to(phase, reason=reason, **extra)
         self._changed()
+
+    # A new phase without what the last one told; called with the lock held.
+    def _phase_to(self, phase, **fields):
+        self._phase = {**self._phase, **FRESH, "phase": phase, **fields}
 
     # Blocks revision: with result when an attempt ended so, without one for an obstacle like BASE_TOO_OLD.
     def _block(self, component, revision, reason, result=None):
@@ -527,9 +528,9 @@ class Updater:
     # the hold given back.
     def _ask_hold(self, jobs, recovering=False):
         asked = time.time()
-        why = _why_no_hold(self.os_rpc.request_hold(HOLD_SECONDS), asked)
-        self._holding = True
         until = time.monotonic() + HOLD_WAIT
+        why = _why_no_hold(self.os_rpc.request_hold(HOLD_SECONDS))
+        self._holding = True
         while time.monotonic() < until:
             if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
                 # Granted only in IDLE; the files must still say so after it.
@@ -537,7 +538,7 @@ class Updater:
                 if why is None:
                     return None
                 break
-            if why[0] == "SCHEDULED_START" or self._abort.wait(0.5):
+            if self._abort.wait(0.5):
                 break
         # No switch now: the mower is not held for nothing.
         self._release_hold()
@@ -576,8 +577,7 @@ class Updater:
             if revision:
                 entry["attempts"][revision] = entry["attempts"].get(revision, 0) + 1
                 self._save()
-            self._phase = {**self._phase, **FRESH, "phase": "switching", "component": component,
-                           "revision": revision}
+            self._phase_to("switching", component=component, revision=revision)
         self._changed()
         # The switch writes the hold itself once the OS is stopped; a switch of the app holds nothing.
         if self._stops_os(component):
@@ -594,8 +594,7 @@ class Updater:
         with self._lock:
             self._check_abort()
             self.installers["host"].switch(revision, broker=self.connected(), by_hand_from=by_hand_from)
-            self._phase = {**self._phase, **FRESH, "phase": "checking", "component": "host",
-                           "revision": revision}
+            self._phase_to("checking", component="host", revision=revision)
         self._changed()
         self.restart_self()
         raise Restarting()
@@ -814,12 +813,14 @@ class Updater:
         judged = self._judged
         now = time.monotonic()
         if judged is None or judged["started"] != started:
-            judged = self._judged = {"started": started, "t": now, "healthy": False, "line": "", "next": now}
+            judged = self._judged = {"started": started, "t": now, "healthy": False, "line": "", "next": now,
+                                     "last_probe": False}
         due = now - judged["t"] >= health.wait
-        if not judged["healthy"] and (now >= judged["next"] or due):
+        if not judged["healthy"] and (now >= judged["next"] or (due and not judged["last_probe"])):
             ok, judged["line"] = health.answers(started or 0.0)
             judged["healthy"] = ok is True
             judged["next"] = time.monotonic() + BROKEN_PROBE_EVERY
+            judged["last_probe"] = due
         if not due:
             return None
         if judged["healthy"]:

@@ -90,7 +90,8 @@ class FakeOs:
         if self.answer:
             return {"state": "IDLE", "sub_state": "", "is_charging": True, "emergency_reason": 0,
                     "hold_until": now + seconds if self.grant else 0, "idle": self.grant,
-                    "next_start": self.next_start}
+                    "next_start": self.next_start,
+                    "scheduled_start": self.next_start is not None and self.next_start - now <= 1800}
         return None
 
     def release_hold(self):
@@ -511,11 +512,14 @@ class GateTest(Base):
         self.assertIn(("waiting_gate", "SCHEDULED_START", self.fake.next_start), phases)
         self.assertEqual(self.fake.holds[-1], 0)
         self.assertIsNone(self.updater.status()["at"])
-        # A refusal for another reason, a start beyond the window, or no answer stay NO_HOLD.
-        for next_start, answer in ((int(time.time()) + 4000, True), (None, True), (int(time.time()) + 600, False)):
+        # The OS names the reason, also for a start that is due; a start beyond the window, none, or no answer stay
+        # NO_HOLD.
+        for next_start, answer, reason in ((int(time.time()) - 60, True, "SCHEDULED_START"),
+                                           (int(time.time()) + 4000, True, "NO_HOLD"), (None, True, "NO_HOLD"),
+                                           (int(time.time()) + 600, False, "NO_HOLD")):
             with self.subTest(next_start=next_start, answer=answer):
                 self.fake.next_start, self.fake.answer = next_start, answer
-                self.assertEqual(self.run_update("os")["reason"], "NO_HOLD")
+                self.assertEqual(self.run_update("os")["reason"], reason)
 
     # The release of the hold after a switch got lost: asked again until hold.json is gone.
     def test_lost_release_of_the_hold_is_asked_again(self):
@@ -1047,6 +1051,24 @@ class FlowTest(Base):
         self.assertEqual(len(probes), 2)
         self.assertTrue(os.path.lexists(self.paths.os.pending))
         self.assertEqual(os.readlink(self.paths.os.current), B)
+
+    # Past the verdict an OS that mows is not probed on every look: the last probe comes once.
+    def test_past_the_verdict_the_probe_comes_once(self):
+        self.install(A)
+        self.install(B)
+        self.write(self.paths.os.pending, json.dumps({"from": A, "to": B}))
+        self.updater._recover_after = time.monotonic() + 3600
+        self.fake.session(state="MOWING")
+        health = self.updater.installer.health
+        health.wait = 0.2
+        probes = []
+        health.answers = lambda since: probes.append(since) or (None, "rpc.methods does not answer")
+        self.updater.recover_due()
+        time.sleep(0.25)
+        for _ in range(3):
+            self.updater.recover_due()
+        self.assertEqual(len(probes), 2)
+        self.assertTrue(os.path.lexists(self.paths.os.pending))
 
     # One that waited while the OS stopped is undone at the next look; after a refused hold not before RECOVER_RETRY.
     def test_recover_due_asks_again_only_after_a_refused_hold(self):
