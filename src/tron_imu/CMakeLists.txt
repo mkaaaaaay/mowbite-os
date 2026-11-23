@@ -40,6 +40,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(tron_imu_test test/test_wit_parser.cpp test/test_wit_imu.cpp)
   target_link_libraries(tron_imu_test tron_imu_core)
+  find_package(launch_testing_ament_cmake REQUIRED)
+  add_launch_test(test/test_imu_reopen.py TARGET test_imu_reopen TIMEOUT 60)
 endif()
 
 ament_export_targets(export_tron_imu HAS_LIBRARY_TARGET)
