@@ -41,7 +41,7 @@ with open(os.path.join(get_package_share_directory("mowbite_api"), "api.schema.j
 def generate_test_description():
     os.makedirs(os.path.dirname(SAVED))
     with open(SAVED, "w") as f:
-        json.dump({"gps_timeout": 7.0, "rain_mode": 1}, f)
+        json.dump({"gps_timeout": 7.0, "rain_mode": 2}, f)
     nodes = [
         Node(package="mowbite_map", executable="mowbite_map_node", output="screen", parameters=[{"data_dir": WORK}]),
         Node(package="mowbite_logic", executable="mowbite_logic_node", output="screen",
@@ -116,7 +116,7 @@ class TestParams(unittest.TestCase):
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get(P + "gps_timeout") == 7.0), str(self.probe.params))
         logic = sorted(k[len(P):] for k in self.probe.params if k.startswith(P))
         self.assertEqual(logic, sorted(SETTINGS))
-        self.assertEqual(self.probe.params[P + "rain_mode"], 1)
+        self.assertEqual(self.probe.params[P + "rain_mode"], 2)
         self.assertEqual(self.probe.params["/ll/board"], "MowBite")
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.100 m, timeout 7.0 s"))
         self.assertTrue(self.probe.logged("Accuracy limit 0.100 m"))
@@ -128,7 +128,7 @@ class TestParams(unittest.TestCase):
         self.assertTrue(self.probe.wait(lambda: self.probe.params.get(P + "max_position_accuracy") == 0.3))
         self.assertEqual(saved()["max_position_accuracy"], 0.3)
         self.assertEqual(saved()["gps_timeout"], 4.0)
-        self.assertEqual(saved()["rain_mode"], 1)
+        self.assertEqual(saved()["rain_mode"], 2)
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.300 m, timeout 4.0 s"))
         self.assertTrue(self.probe.logged("Accuracy limit 0.300 m"))
 

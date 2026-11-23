@@ -1378,10 +1378,11 @@ const std::vector<SettingEntry>& LogicSettings() {
   // Bounds of MowBite OS beyond MowerLogic.cfg: max_position_accuracy at most 0.3 m, gps_timeout at least 1 s,
   // docking_approach_distance and undock_distance 0.5 to 2 m, docking_retry_count at most 5.
   static const std::vector<SettingEntry> settings = {
-      {"rain_mode", true, 0, 3, 0, "", "What rain does, as in OpenMower"},
+      {"rain_mode", true, 0, 3, 1, "", "What rain does, as in OpenMower; 1 by default: rain sends the mower home"},
       {"rain_delay_minutes", true, 30, 1440, 30, "min", "How long to wait after rain"},
       {"rain_check_seconds", true, 20, 300, 20, "s", "How long rain has to last to count"},
-      {"automatic_mode", true, 0, 2, 0, "", "Automatic mowing, as in OpenMower"},
+      {"automatic_mode", true, 0, 2, 0, "",
+       "No effect on MowBite OS, kept for clients of OpenMower: only the schedule starts the mower by itself"},
       {"gps_timeout", false, 1.0, 60.0, 10.0, "s", "Without a position this long the mower stops"},
       {"max_position_accuracy", false, 0.01, 0.3, 0.1, "m", "Worst expected error of the position to mow"},
       {"gps_wait_time", false, 0.0, 60.0, 10.0, "s", "How long the position has to be good again to go on"},

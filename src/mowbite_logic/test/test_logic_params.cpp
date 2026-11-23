@@ -19,7 +19,7 @@ TEST(LogicParams, TheSettingsOfTheCatalogWithoutPlanningValues) {
                            "mow_angle_offset_is_absolute", "mow_angle_increment"}) {
     EXPECT_FALSE(values.contains(name)) << name;
   }
-  EXPECT_EQ(values["rain_mode"], 0);
+  EXPECT_EQ(values["rain_mode"], 1);
   EXPECT_EQ(values["docking_retry_count"], 4);
   EXPECT_EQ(values["dock_at_sunset"], 1);
   EXPECT_DOUBLE_EQ(values["max_position_accuracy"].get<double>(), 0.1);
