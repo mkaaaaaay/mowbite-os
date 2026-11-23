@@ -753,6 +753,23 @@ TEST(L12SetHeading, PutsBaseLinkBehindTheAntennaOfTheLastFix) {
   EXPECT_NEAR(w.est.HeadingAccuracy(), 0.02, 1e-9);
 }
 
+// Driven since the last fix: the antenna stays where the estimate has it, the way since is kept.
+TEST(L12SetHeading, AfterAWaySinceTheFixTheAntennaStaysWhereItIs) {
+  World w({}, Eigen::Vector2d(0.3, 0.1));
+  w.x = 10.0;
+  w.y = 5.0;
+  w.Ready();
+  w.gnss = false;
+  w.Run(1.0, 0.2, 0.0);
+  const Pose2 before = w.est.pose();
+  ASSERT_GT(before.x, 10.1);
+  const auto pose = w.est.SetHeading(M_PI / 2, w.t);
+  ASSERT_TRUE(pose);
+  // Facing north the antenna, east 0.3 and north 0.1 of base_link before, is 0.3 m north and 0.1 m west of it.
+  EXPECT_NEAR(pose->x, before.x + 0.4, 1e-9);
+  EXPECT_NEAR(pose->y, before.y - 0.2, 1e-9);
+}
+
 TEST(L12SetHeading, NotWithoutARecentFixOrWithNan) {
   World w;
   w.Ready();

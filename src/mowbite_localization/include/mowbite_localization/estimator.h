@@ -179,6 +179,8 @@ class Estimator {
   Eigen::Vector2d Lever(const Tilt& tilt) const;
   // With a recent fix base_link moves behind its antenna for the lever and the heading now.
   void PlaceBehindLastFix(double t);
+  // Not driven since the last fix: placing behind it loses no way.
+  bool StillSinceFix() const;
   void Remember(double t);
   void ShiftHistory(const State& before);
   // Puts base_link behind the antenna of a fix, the way since its moment turned by turn, what its course changed the
