@@ -137,6 +137,9 @@ const ExpectedService& ExpectedMeta();
 // nullptr for a service the driver does not claim.
 const ExpectedService* ExpectedFor(uint16_t service_id);
 
+// A register the driver writes only when its configuration gives a value, with the type it needs; nullptr for others.
+const Channel* OptionalRegister(uint16_t service_id, uint16_t register_id);
+
 // Registers the driver never writes, whatever the configuration holds.
 bool ForbiddenRegister(uint16_t service_id, uint16_t register_id);
 

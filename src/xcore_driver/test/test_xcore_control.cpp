@@ -1882,6 +1882,7 @@ TEST(XcoreControl, SilenceIsRefusedOutOfRangeOnTheDockWithTheBladeAndTwice) {
   Fixture none;
   EXPECT_EQ(none.control.Silence(1.0, 0), "OUT_OF_RANGE");
   Fixture f(SilenceConfig());
+  f.control.OnSetupMotion(true, 0);
   EXPECT_EQ(f.control.Silence(0.1, 0), "OUT_OF_RANGE");
   EXPECT_EQ(f.control.Silence(3.5, 0), "OUT_OF_RANGE");
   EXPECT_EQ(f.control.Silence(std::nan(""), 0), "OUT_OF_RANGE");
@@ -1894,15 +1895,34 @@ TEST(XcoreControl, SilenceIsRefusedOutOfRangeOnTheDockWithTheBladeAndTwice) {
   EXPECT_EQ(f.control.EndRefusal(), "");
   EXPECT_EQ(f.control.Silence(1.0, 0), "");
   EXPECT_EQ(f.control.Silence(1.0, 0.5), "BUSY");
+  f.control.OnSetupMotion(true, 2);
   f.control.OnOutput(kPowerService, power::kOutChargeVoltage, F32(29.0f), 0, 2);
   EXPECT_EQ(f.control.EndRefusal(), "CHARGING");
   EXPECT_EQ(f.control.Silence(1.0, 2), "CHARGING");
+}
+
+TEST(XcoreControl, SilenceNeedsARunningSetupStep) {
+  Fixture f(SilenceConfig());
+  f.control.OnCmdVel(0.1, 0, 0);
+  ASSERT_EQ(Of(f.control.Tick(0), kDiffDriveService).size(), 1u);
+  // Driving without the setup program: refused, the command goes on.
+  EXPECT_EQ(f.control.Silence(1.0, 0.05), "NO_SETUP");
+  EXPECT_EQ(f.control.Silence(1.0, 0.05, true), "NO_SETUP");
+  EXPECT_FALSE(f.control.Silent(0.1));
+  f.control.OnSetupMotion(true, 0.1);
+  f.control.OnSetupMotion(false, 0.2);
+  EXPECT_EQ(f.control.Silence(1.0, 0.25), "NO_SETUP");
+  // An active step older than kSetupMotionFreshS no longer counts.
+  f.control.OnSetupMotion(true, 0.3);
+  EXPECT_EQ(f.control.Silence(1.0, 0.3 + kSetupMotionFreshS + 0.01), "NO_SETUP");
+  EXPECT_EQ(f.control.Silence(1.0, 0.3 + kSetupMotionFreshS - 0.01), "");
 }
 
 TEST(XcoreControl, SilenceWithTheBladeLeavesItToTheBoardThenSwitchesItOff) {
   Fixture f(SilenceConfig());
   ASSERT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0), BladeResult::kOk);
   ASSERT_FALSE(Of(f.control.Tick(0), kMowerService).empty());
+  f.control.OnSetupMotion(true, 0);
   ASSERT_EQ(f.control.Silence(1.0, 0.05, true), "");
   // Nothing goes out, not even an off of the blade or its renewal.
   EXPECT_EQ(f.control.SetBlade({true, 0, 0, 1}, 0.3), BladeResult::kSilent);
@@ -1928,6 +1948,7 @@ TEST(XcoreControl, SilenceSendsNothingThenLatchesAndStops) {
   Fixture f(SilenceConfig());
   f.control.OnCmdVel(0.1, 0, 0);
   ASSERT_EQ(Of(f.control.Tick(0), kDiffDriveService).size(), 1u);
+  f.control.OnSetupMotion(true, 0);
   ASSERT_EQ(f.control.Silence(1.0, 0.05), "");
   EXPECT_TRUE(f.control.Silent(0.5));
   // Nothing goes out, a command is dropped, blade and release are refused.
@@ -1974,4 +1995,27 @@ TEST(XcoreControl, SilenceSendsNothingThenLatchesAndStops) {
   EXPECT_TRUE(Of(f.control.Tick(2.01), kDiffDriveService).empty());
   f.control.OnCmdVel(0.1, 0, 2.02);
   EXPECT_EQ(Of(f.control.Tick(2.02), kDiffDriveService).size(), 1u);
+}
+
+TEST(XcoreControl, ConfigOfTheOwnChecksIsFiniteAndInRange) {
+  EXPECT_NO_THROW(CheckControlConfig(ControlConfig{}));
+  const double nan = std::nan("");
+  const std::vector<std::pair<double ControlConfig::*, double>> bad = {
+      {&ControlConfig::cmd_vel_timeout_s, nan},   {&ControlConfig::cmd_vel_timeout_s, 1.0},
+      {&ControlConfig::cmd_vel_timeout_s, 0},     {&ControlConfig::blade_lease_max_s, nan},
+      {&ControlConfig::blade_lease_max_s, 60},    {&ControlConfig::blade_stop_time_s, nan},
+      {&ControlConfig::blade_still_rpm, 0},       {&ControlConfig::dock_voltage, nan},
+      {&ControlConfig::tilt_limit_deg, nan},      {&ControlConfig::tilt_limit_deg, 90},
+      {&ControlConfig::tilt_time_s, 60},          {&ControlConfig::tilt_release_deg, nan},
+      {&ControlConfig::tilt_release_deg, 45},     {&ControlConfig::imu_fresh_s, 30},
+      {&ControlConfig::uncommanded_speed, nan},   {&ControlConfig::uncommanded_after_s, -1},
+      {&ControlConfig::uncommanded_window_s, 0.5}, {&ControlConfig::uncommanded_time_s, nan},
+      {&ControlConfig::overspeed_factor, 0.9},    {&ControlConfig::overspeed_time_s, 1e9},
+      {&ControlConfig::io_stall_s, 1.0},
+  };
+  for (const auto& [field, value] : bad) {
+    ControlConfig c;
+    c.*field = value;
+    EXPECT_THROW(CheckControlConfig(c), std::invalid_argument) << value;
+  }
 }

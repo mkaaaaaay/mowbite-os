@@ -18,6 +18,7 @@
 #include <mowbite_msgs/msg/rtcm.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <mowbite_msgs/msg/sensor_value.hpp>
+#include <mowbite_msgs/msg/setup_motion.hpp>
 #include <mowbite_msgs/srv/end_driver.hpp>
 #include <mowbite_msgs/srv/set_blade.hpp>
 #include <mowbite_msgs/srv/set_charge.hpp>
@@ -232,6 +233,11 @@ class XcoreNode : public rclcpp::Node {
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
                             const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
+    // hw/silence is taken only while a step of the setup program runs.
+    setup_motion_sub_ = create_subscription<mowbite_msgs::msg::SetupMotion>(
+        "setup/motion", 10, [this](const mowbite_msgs::msg::SetupMotion::ConstSharedPtr& msg) {
+          Io().OnSetupMotion(msg->active);
+        });
     silence_srv_ = create_service<mowbite_msgs::srv::SilenceDriver>(
         "hw/silence", [this](const mowbite_msgs::srv::SilenceDriver::Request::SharedPtr& req,
                              const mowbite_msgs::srv::SilenceDriver::Response::SharedPtr& res) {
@@ -414,11 +420,7 @@ class XcoreNode : public rclcpp::Node {
     }
     silence_max_s_ = c.silence_max_s;
     allow_blade_ = c.allow_blade;
-    // The board stops after 1.0 s without the host; a stall must count as lost before that.
-    if (!(c.tilt_limit_deg > 0) || !(c.tilt_time_s >= 0) || !(c.uncommanded_speed > 0) || !(c.overspeed_factor >= 1) ||
-        !(c.io_stall_s > 0) || c.io_stall_s >= 1.0) {
-      throw std::invalid_argument("tilt, wheel or stall parameters out of range");
-    }
+    xcore::CheckControlConfig(c);
     c.odometry.ticks_per_meter = declare_parameter("ticks_per_meter", c.odometry.ticks_per_meter);
     c.odometry.wheel_distance = declare_parameter("wheel_distance", c.odometry.wheel_distance);
     c.odometry.left_sign = declare_parameter("left_ticks_sign", c.odometry.left_sign) < 0 ? -1 : 1;
@@ -497,6 +499,13 @@ class XcoreNode : public rclcpp::Node {
     // Optional; left out at 0 so that the board keeps its own value.
     const double charge_voltage = declare_parameter("charge_voltage", 0.0);
     const double termination_current = declare_parameter("charge_termination_current", 0.0);
+    if (!(charge_voltage == 0 || (charge_voltage > full && charge_voltage < high))) {
+      throw std::invalid_argument("charge_voltage must be 0 or above battery_full_voltage and below "
+                                  "battery_critical_high_voltage");
+    }
+    if (!(termination_current >= 0 && termination_current <= 10)) {
+      throw std::invalid_argument("charge_termination_current must be a number from 0 to 10 A");
+    }
     if (charge_voltage > 0) power.push_back({power::kRegChargeVoltage, F32(charge_voltage)});
     if (termination_current > 0) power.push_back({power::kRegTerminationCurrent, F32(termination_current)});
     services[kPowerService] = power;
@@ -1015,6 +1024,7 @@ class XcoreNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
+  rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_motion_sub_;
   rclcpp::Service<mowbite_msgs::srv::SilenceDriver>::SharedPtr silence_srv_;
   rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
   rclcpp::TimerBase::SharedPtr end_timer_;

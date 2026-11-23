@@ -86,6 +86,10 @@ struct ControlConfig {
   RegulatorConfig regulator;
 };
 
+// Throws std::invalid_argument naming the first value of the driver's own checks that is no finite number in its
+// range: a NaN or a huge timeout, lease, tilt or wheel limit would switch its check off.
+void CheckControlConfig(const ControlConfig& config);
+
 // Lowers max_linear_speed and max_angular_speed to what the speed model reaches within max_duty: a wheel at most
 // ReachableWheelSpeed, driving straight or turning on the spot. The capabilities and the wheel checks use the result.
 void ApplyReachableSpeeds(ControlConfig& config);
@@ -146,6 +150,8 @@ enum class BladeResult {
 
 // The shortest hw/silence (s).
 constexpr double kSilenceMinS = 0.2;
+// hw/silence needs an active setup/motion this recent (SilenceDriver.srv).
+constexpr double kSetupMotionFreshS = 1.0;
 
 const char* BladeResultText(BladeResult result);
 
@@ -268,10 +274,12 @@ class XcoreControl {
   // The board restarted or a service was claimed again: its state is unknown.
   void OnServiceRestart(uint16_t service_id, double now);
 
+  // setup/motion of the setup program: active while one of its steps runs.
+  void OnSetupMotion(bool active, double now);
   // hw/silence: from now on nothing goes to the board for seconds, drive commands are dropped, blade requests and
   // releases refused; then HIGH_LEVEL latches, the blade gets its offs and the wheels three stops. With blade it begins
   // also while the blade is on or turning: the board has to stop it. Empty when it began, else why not: BUSY,
-  // OUT_OF_RANGE, CHARGING or BLADE.
+  // OUT_OF_RANGE, NO_SETUP (no active setup/motion within kSetupMotionFreshS), CHARGING or BLADE.
   std::string Silence(double seconds, double now, bool blade = false);
   bool Silent(double now) const;
   // Why hw/end is refused now, empty if it may end: CHARGING or BLADE.
@@ -389,6 +397,8 @@ class XcoreControl {
 
   std::optional<double> last_alive_s_;
   std::optional<double> silent_until_s_;
+  // The last active setup/motion.
+  std::optional<double> setup_motion_s_;
 };
 
 }  // namespace xcore

@@ -382,3 +382,24 @@ TEST(Link, NeverWritesTheChargeCurrentOverride) {
   EXPECT_TRUE(ForbiddenRegister(kPowerService, 10));
   EXPECT_FALSE(ForbiddenRegister(kDiffDriveService, 10));
 }
+
+TEST(Link, ChargeRegistersNeedTheirFloatType) {
+  LinkConfig c = Config();
+  Writer volts;
+  volts.F32(29.4f);
+  c.services[kPowerService] = {{power::kRegChargeVoltage, volts.Take()}};
+  XcoreLink link(c);
+  std::vector<LinkEvent> events;
+  // Four bytes fit a uint32_t as well: only the float the driver writes is taken.
+  ServiceDescription d = ExpectedPower();
+  d.registers.push_back(Channel{power::kRegChargeVoltage, "charge voltage", *ParseValueType("uint32_t")});
+  auto bytes = AnnouncementPacket(kPowerService, d);
+  link.OnAnnouncement(bytes.data(), bytes.size(), 0, events);
+  EXPECT_EQ(link.State(kPowerService), ServiceState::kIncompatible);
+  ASSERT_FALSE(events.empty());
+  EXPECT_NE(events.back().text.find("register 6"), std::string::npos);
+  d.registers.back().type = *ParseValueType("float");
+  bytes = AnnouncementPacket(kPowerService, d);
+  link.OnAnnouncement(bytes.data(), bytes.size(), 1, events);
+  EXPECT_EQ(link.State(kPowerService), ServiceState::kClaiming);
+}

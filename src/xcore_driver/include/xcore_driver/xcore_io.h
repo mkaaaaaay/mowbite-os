@@ -139,6 +139,7 @@ class XcoreIo {
   uint64_t rtcm_dropped_bytes();
   void SetHold(bool held);
   void LatchForeignHost(const std::string& why);
+  void OnSetupMotion(bool active);
   // hw/silence as XcoreControl::Silence: no datagram goes out meanwhile, not even the heartbeat.
   std::string Silence(double seconds, bool blade);
   // hw/end: empty when it may end, then from now on no datagram goes out, also not the stops at the end of the

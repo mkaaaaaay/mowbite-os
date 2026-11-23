@@ -156,6 +156,11 @@ std::optional<ReleaseRefusal> XcoreIo::ReleaseEmergency(uint32_t latch_count) {
   return control_.ReleaseEmergency(MonotonicSeconds(), latch_count);
 }
 
+void XcoreIo::OnSetupMotion(bool active) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  control_.OnSetupMotion(active, MonotonicSeconds());
+}
+
 std::string XcoreIo::Silence(double seconds, bool blade) {
   std::lock_guard<std::mutex> lock(mutex_);
   const double now = MonotonicSeconds();

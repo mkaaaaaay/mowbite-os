@@ -45,6 +45,47 @@ double CappedLimit(const char* name, double value, double cap) {
   return std::min(value, cap);
 }
 
+void CheckControlConfig(const ControlConfig& c) {
+  // Bounds: low < value or low <= value (open_low), value <= high or value < high (open_high).
+  struct Range {
+    const char* name;
+    double value;
+    double low;
+    bool open_low;
+    double high;
+    bool open_high;
+  };
+  // The board stops the wheels after 1 s and the blade after 10 s without the host.
+  const Range ranges[] = {
+      {"cmd_vel_timeout", c.cmd_vel_timeout_s, 0, true, 1, true},
+      {"io_stall", c.io_stall_s, 0, true, 1, true},
+      {"blade_lease_max", c.blade_lease_max_s, 0, true, 10, false},
+      {"blade_stop_time", c.blade_stop_time_s, 0, true, 30, false},
+      {"blade_still_rpm", c.blade_still_rpm, 0, true, 1000, false},
+      {"dock_voltage", c.dock_voltage, 0, true, 100, false},
+      {"tilt_limit", c.tilt_limit_deg, 0, true, 80, false},
+      {"tilt_time", c.tilt_time_s, 0, false, 5, false},
+      {"tilt_release", c.tilt_release_deg, 0, true, c.tilt_limit_deg, false},
+      {"imu_fresh", c.imu_fresh_s, 0, true, 2, false},
+      {"uncommanded_speed", c.uncommanded_speed, 0, true, 1, false},
+      {"uncommanded_after", c.uncommanded_after_s, 0, false, 10, false},
+      {"uncommanded_window", c.uncommanded_window_s, c.uncommanded_after_s, false, 60, false},
+      {"uncommanded_time", c.uncommanded_time_s, 0, false, 5, false},
+      {"overspeed_factor", c.overspeed_factor, 1, false, 3, false},
+      {"overspeed_time", c.overspeed_time_s, 0, false, 5, false},
+  };
+  for (const Range& r : ranges) {
+    const bool low_ok = r.open_low ? r.value > r.low : r.value >= r.low;
+    const bool high_ok = r.open_high ? r.value < r.high : r.value <= r.high;
+    if (!std::isfinite(r.value) || !low_ok || !high_ok) {
+      char text[160];
+      std::snprintf(text, sizeof(text), "%s must be a number %s %g and %s %g", r.name, r.open_low ? "above" : "from",
+                    r.low, r.open_high ? "below" : "up to", r.high);
+      throw std::invalid_argument(text);
+    }
+  }
+}
+
 void ApplyReachableSpeeds(ControlConfig& config) {
   const double wheel = ReachableWheelSpeed(config.regulator);
   config.max_linear_speed = std::min(config.max_linear_speed, wheel);
@@ -484,11 +525,21 @@ InputValue XcoreControl::MowerSpeed(float speed) const {
   return InputValue{kMowerService, mower::kInSpeed, w.Take()};
 }
 
+void XcoreControl::OnSetupMotion(bool active, double now) {
+  if (active) {
+    setup_motion_s_ = now;
+  } else {
+    setup_motion_s_.reset();
+  }
+}
+
 std::string XcoreControl::Silence(double seconds, double now, bool blade) {
   if (Silent(now)) return "BUSY";
   if (!(seconds >= kSilenceMinS - kTimeEpsilon && seconds <= config_.silence_max_s + kTimeEpsilon)) {
     return "OUT_OF_RANGE";
   }
+  // Only a running setup step may silence the driver: in normal operation the cmd_vel timeout has to stay in force.
+  if (!setup_motion_s_ || now - *setup_motion_s_ > kSetupMotionFreshS + kTimeEpsilon) return "NO_SETUP";
   std::string refused = EndRefusal();
   if (blade && refused == "BLADE") refused.clear();
   if (!refused.empty()) return refused;

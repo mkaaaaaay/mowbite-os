@@ -124,6 +124,15 @@ const ExpectedService* ExpectedFor(uint16_t service_id) {
   }
 }
 
+const Channel* OptionalRegister(uint16_t service_id, uint16_t register_id) {
+  static const Channel charge_voltage = C(power::kRegChargeVoltage, "charge voltage", "float");
+  static const Channel termination_current = C(power::kRegTerminationCurrent, "termination current", "float");
+  if (service_id != kPowerService) return nullptr;
+  if (register_id == power::kRegChargeVoltage) return &charge_voltage;
+  if (register_id == power::kRegTerminationCurrent) return &termination_current;
+  return nullptr;
+}
+
 bool ForbiddenRegister(uint16_t service_id, uint16_t register_id) {
   return service_id == kPowerService && register_id == power::kRegOverrideChargeCurrentLimit;
 }

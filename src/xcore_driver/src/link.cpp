@@ -64,6 +64,9 @@ std::vector<std::string> XcoreLink::CheckConfig(uint16_t id, const ServiceDescri
     const Channel* reg = Find(description.registers, section.id);
     if (!reg) {
       problems.push_back("register " + std::to_string(section.id) + " is not announced");
+    } else if (const Channel* optional = OptionalRegister(id, section.id); optional && reg->type != optional->type) {
+      problems.push_back("register " + std::to_string(section.id) + " (" + reg->name + ") is " + TypeText(reg->type) +
+                         ", expected " + TypeText(optional->type));
     } else if (!FitsType(reg->type, section.value.size())) {
       problems.push_back("register " + std::to_string(section.id) + " (" + reg->name + ") does not take " +
                          std::to_string(section.value.size()) + " bytes");
