@@ -3,7 +3,8 @@
 Parameters: the file of the driver (default nx60i.yaml of this package), then the parameter file of the mower if given
 (datum, measured values), then the battery voltages of the logic from battery_params (platform.yaml of the platform,
 which the measurement image keeps in /etc/mowbite) and the overrides given here. respawn:=true starts a
-killed or ended driver again after respawn_delay s (M4, M7, M8 with the driver killed). speed_limit and max_duty hold
+killed or ended driver again after respawn_delay s (M4, M7, M8 with the driver killed), latched from its first frame
+(start_latched), so that it never takes the board without a release. speed_limit and max_duty hold
 for this start only: without them the files hold (driving at most 0.3 m/s). speed_limit above 0.3, with max_duty above
 0.3 if wanted, is the raised start for the fast runs of M8 (own word of the user): only the driver of the measurement
 image starts with it. max_duty:=0 locks the wheels (M7 with the disc).
@@ -17,7 +18,8 @@ import os
 import sys
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, OpaqueCoroutine, OpaqueFunction, RegisterEventHandler, TimerAction
+from launch.event_handlers import OnProcessExit
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -105,9 +107,20 @@ def driver(context):
         # Else the steps at 0.3 m/s would run at a higher duty than their word.
         if overrides["max_duty"] > 0.3 and overrides.get("max_linear_speed", 0.0) <= 0.3:
             raise RuntimeError("max_duty above 0.3 belongs to the raised start: give speed_limit above 0.3 as well")
-    return [Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", output="screen",
-                 namespace="/", parameters=files + [overrides], respawn=value["respawn"].lower() == "true",
-                 respawn_delay=float(value["respawn_delay"]))]
+    respawn = value["respawn"].lower() == "true"
+    delay = number(value, "respawn_delay", 0.0, 60.0)
+
+    # Every start after the first one comes up latched; the end of the launch starts none.
+    def start(again):
+        node = Node(package="xcore_driver", executable="xcore_driver_node", name="xcore_driver", output="screen",
+                    namespace="/", parameters=files + [{**overrides, "start_latched": again}])
+        if not respawn:
+            return [node]
+        return [RegisterEventHandler(OnProcessExit(
+                    target_action=node,
+                    on_exit=lambda event, context: None if context.is_shutdown
+                    else [TimerAction(period=delay, actions=start(True))])), node]
+    return start(False)
 
 
 def generate_launch_description():
