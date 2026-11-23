@@ -162,12 +162,12 @@ class FollowerNode : public rclcpp::Node {
     pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          map_pose_.Set(*msg, MonotonicSeconds());
+          map_pose_.Set(*msg, MonotonicSeconds(), now().seconds());
         });
     dock_pose_sub_ = create_subscription<mowbite_msgs::msg::RobotPose>(
         "localization/dock_pose", 10, [this](const mowbite_msgs::msg::RobotPose::ConstSharedPtr& msg) {
           std::lock_guard<std::mutex> lock(mutex_);
-          dock_pose_.Set(*msg, MonotonicSeconds());
+          dock_pose_.Set(*msg, MonotonicSeconds(), now().seconds());
         });
     hw_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
@@ -346,9 +346,8 @@ class FollowerNode : public rclcpp::Node {
     in.driver_moves = driver_moves_;
     in.hw_age = hw_time_ ? now - *hw_time_ : 1e9;
     in.emergency = emergency_;
-    // Since it came, or since its stamp when it came late.
-    const double stamp_age = pose.stamp > 0 ? this->now().seconds() - pose.stamp : 0.0;
-    in.pose_age = pose.time ? std::max(now - *pose.time, stamp_age) : 1e9;
+    // Since it came, plus how late it came: a jump of the clock afterwards changes neither.
+    in.pose_age = pose.time ? now - *pose.time + pose.late : 1e9;
     in.pose = pose.pose;
     in.position_accuracy = pose.accuracy;
     in.heading_valid = pose.heading_valid;
@@ -477,12 +476,13 @@ class FollowerNode : public rclcpp::Node {
     bool heading_valid = false;
     float fix_age = 999;
     std::optional<double> time;
-    // The stamp of the localization, s of the ROS clock.
-    double stamp = 0;
+    // How much older than its arrival its stamp of the ROS clock was, s; 0 without a stamp.
+    double late = 0;
 
-    void Set(const mowbite_msgs::msg::RobotPose& msg, double now) {
+    void Set(const mowbite_msgs::msg::RobotPose& msg, double now, double ros_now) {
       pose = Pose2{msg.x, msg.y, msg.heading};
-      stamp = rclcpp::Time(msg.header.stamp).seconds();
+      const double stamp = rclcpp::Time(msg.header.stamp).seconds();
+      late = stamp > 0 ? std::max(0.0, ros_now - stamp) : 0.0;
       accuracy = msg.position_accuracy;
       heading_valid = msg.heading_valid;
       fix_age = msg.fix_age;
