@@ -113,6 +113,8 @@ struct BridgeConfig {
   std::string params_json = "{}";
   // Monotonic seconds for the open calls; the steady clock without one.
   std::function<double()> clock = nullptr;
+  // native, compose or empty (unknown) for system.info.update_path.
+  std::string update_path;
 };
 
 // The bridge between the nodes and MQTT without ROS or MQTT client; retained texts are resent after every connect.

@@ -268,8 +268,10 @@ RUN --mount=type=bind,source=src/xcore_driver/config/nx60i.yaml,target=/tmp/nx60
     fi
 LABEL org.opencontainers.image.title="mowbite-os" org.opencontainers.image.revision="$SOURCE_COMMIT" \
       mowbite.min_app="$MIN_APP" mowbite.xcore.firmware.major="$XCORE_FIRMWARE_MAJOR"
-# Who wrote data_schema.json in data_dir.
+# Who wrote data_schema.json in data_dir; the version of system.info.
 ENV MOWBITE_OS_REVISION=$SOURCE_COMMIT
+# system.info.update_path: the image is updated as a whole by hand.
+ENV MOWBITE_UPDATE_PATH=compose
 # ros2 launch catches only SIGINT; as PID 1 it ignores SIGTERM and docker stop would kill it without blade off.
 STOPSIGNAL SIGINT
 # Healthy while the broker of the OS (MOWBITE_MQTT_HOST, MOWBITE_MQTT_PORT) passes on robot_state/json of the logic;

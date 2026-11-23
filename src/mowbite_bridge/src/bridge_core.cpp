@@ -70,7 +70,8 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["rpc.ping"] = [](const Json&) { return Json("pong"); };
   local_["rpc.methods"] = [this](const Json&) { return Json(methods_.All()); };
   local_["system.info"] = [this](const Json&) {
-    return SystemInfo(config_.software_version, platform_, mqtt_version_, stop_release_, blade_height_);
+    return SystemInfo(config_.software_version, config_.update_path, platform_, mqtt_version_, stop_release_,
+                      blade_height_);
   };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {

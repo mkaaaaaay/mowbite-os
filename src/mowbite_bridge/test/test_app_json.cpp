@@ -181,17 +181,18 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(CapabilitiesText(), "{\n  \"rpc\": 1,\n  \"map:json\": 1,\n  \"events\": 1\n}");
   EXPECT_EQ(VersionText(""), R"({"version":"UNKNOWN VERSION"})");
   EXPECT_EQ(VersionText("1.2.3"), R"({"version":"1.2.3"})");
-  EXPECT_EQ(SystemInfo("", "airseekers_tron", 5).dump(),
+  EXPECT_EQ(SystemInfo("", "", "airseekers_tron", 5).dump(),
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
                 std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                 R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
-                R"(,"mqtt":5,"stop_release":null,"blade_height":null})");
-  EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
-  EXPECT_EQ(SystemInfo("1.2.3", "", 3)["mqtt"], 3);
-  EXPECT_EQ(SystemInfo("1.2.3", "airseekers_tron", 5, StopRelease(2, 3, 10))["stop_release"].dump(),
+                R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null})");
+  EXPECT_EQ(SystemInfo("1.2.3", "native", "", 3)["platform"], "");
+  EXPECT_EQ(SystemInfo("1.2.3", "native", "", 3)["mqtt"], 3);
+  EXPECT_EQ(SystemInfo("1.2.3", "native", "", 3)["update_path"], "native");
+  EXPECT_EQ(SystemInfo("1.2.3", "", "airseekers_tron", 5, StopRelease(2, 3, 10))["stop_release"].dump(),
             R"({"free_s":2.0,"hold_s":3.0,"max_hold_s":10.0})");
   EXPECT_TRUE(StopRelease(0, 0, 0).is_null());
-  EXPECT_EQ(SystemInfo("1.2.3", "airseekers_tron", 5, Json(), BladeHeight(true, 30, 90, 60))["blade_height"].dump(),
+  EXPECT_EQ(SystemInfo("1.2.3", "", "airseekers_tron", 5, Json(), BladeHeight(true, 30, 90, 60))["blade_height"].dump(),
             R"({"min_mm":30,"max_mm":90,"default_mm":60})");
   EXPECT_TRUE(BladeHeight(false, 0, 0, 0).is_null());
 }

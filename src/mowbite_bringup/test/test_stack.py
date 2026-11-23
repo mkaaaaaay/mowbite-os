@@ -368,3 +368,19 @@ def test_a_step_list_against_the_rules_halts_the_start(tmp_path, monkeypatch, ca
     setup = layers.setup("some", folder_of=str(tmp_path))
     assert stack.check_setup(setup, LOGGER) is not None
     assert "board.svg: it is missing" in (tmp_path / "halt").read_text()
+
+
+# system.info.update_path: a bundle tree says native, the image compose, a workspace nothing.
+def test_update_path_from_the_bundle_or_the_image(tmp_path, monkeypatch):
+    import ament_index_python.packages as packages
+    tree = tmp_path / "rev"
+    (tree / "install" / "mowbite_bringup").mkdir(parents=True)
+    monkeypatch.setattr(packages, "get_package_prefix", lambda name: str(tree / "install" / name))
+    monkeypatch.delenv("MOWBITE_UPDATE_PATH", raising=False)
+    assert stack.update_path() == ""
+    monkeypatch.setenv("MOWBITE_UPDATE_PATH", "compose")
+    assert stack.update_path() == "compose"
+    (tree / "bundle.json").write_text("{}")
+    assert stack.update_path() == "native"
+    monkeypatch.setenv("MOWBITE_UPDATE_PATH", "other")
+    assert stack.update_path() == "native"

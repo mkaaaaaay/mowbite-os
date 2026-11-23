@@ -110,8 +110,10 @@ std::string CapabilitiesText();
 // version/json; an empty version is "UNKNOWN VERSION".
 std::string VersionText(const std::string& version);
 
-// system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height.
-Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
+// system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height,
+// update_path where it is empty.
+Json SystemInfo(const std::string& version, const std::string& update_path, const std::string& platform,
+                int mqtt_version,
                 const Json& stop_release = Json(), const Json& blade_height = Json());
 
 // stop_release of system.info from the times of hw/capabilities: null without a free time.

@@ -206,10 +206,21 @@ def arguments(platform, module):
     ]
 
 
+# system.info.update_path: native for a bundle of mowbite-host (its tree holds bundle.json), compose for the image,
+# empty where neither says it.
+def update_path():
+    from ament_index_python.packages import get_package_prefix
+    tree = os.path.dirname(os.path.dirname(get_package_prefix("mowbite_bringup")))
+    if os.path.isfile(os.path.join(tree, "bundle.json")):
+        return "native"
+    return "compose" if os.environ.get("MOWBITE_UPDATE_PATH") == "compose" else ""
+
+
 # The nodes above the hardware contract, the same on every platform; files are the parameter files of the platform in
 # their order (later ones change single values), geometry its dimensions.
 def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=None):
     journal_dir = {"journal_dir": journal}
+    version = {"software_version": os.environ.get("MOWBITE_OS_REVISION", "")}
     localization = ComposableNode(
         package="mowbite_localization", plugin="mowbite_localization::LocalizationNode", name="mowbite_localization",
         parameters=[geometry, *files, journal_dir])
@@ -218,7 +229,8 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
         parameters=[geometry, *files, {"data_dir": data_dir}, journal_dir])
     bridge = ComposableNode(
         package="mowbite_bridge", plugin="mowbite_bridge::BridgeNode", name="mowbite_bridge",
-        parameters=[*files, {"mqtt_host": mqtt_host, "mqtt_port": int(mqtt_port), "data_dir": data_dir}])
+        parameters=[*files, {"mqtt_host": mqtt_host, "mqtt_port": int(mqtt_port), "data_dir": data_dir,
+                             "update_path": update_path()}, version])
     map_node = ComposableNode(
         package="mowbite_map", plugin="mowbite_map::MapNode", name="mowbite_map",
         parameters=[*files, {"data_dir": data_dir}])
@@ -236,7 +248,7 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
     # The calibration drive: its program, recording and result; it moves only through the logic and S2.
     calibration = ComposableNode(
         package="mowbite_calibration", plugin="mowbite_calibration::CalibrationNode", name="mowbite_calibration",
-        parameters=[*files, {"data_dir": data_dir}])
+        parameters=[*files, {"data_dir": data_dir}, version])
     # Whether the wall clock can be trusted for date and sun (time/clock); data_dir holds its last synchronization.
     clock = ComposableNode(
         package="mowbite_time", plugin="mowbite_time::ClockNode", name="mowbite_clock",

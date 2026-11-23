@@ -376,6 +376,10 @@ Field UpdateStatus() {
        Nullable(Text("component", "The component of the update that runs, null in idle")),
        Nullable(Text("revision", "The revision it installs or goes back to, null in idle")),
        Nullable(Text("reason", "Why the gate waits in waiting_gate: a reason of UPDATE in x-reasons")),
+       Time("at", "With reason SCHEDULED_START: when the plan starts; else null"),
+       Nullable(Integer("percent", "In verifying (the copy of the bundle) and unpacking: how far, 0 to 100; else "
+                        "null")),
+       Nullable(Integer("bytes", "In verifying and unpacking: the bytes copied or unpacked so far; else null")),
        Rows("components", "Each component the updater keeps",
             {Component("id"), Text("name", "Its name to show"),
              Revision("running", "What runs, null without an installation"), Available(),
@@ -559,7 +563,11 @@ const std::vector<Command>& Commands() {
                         "sets none, then the setting has no effect",
                         {Integer("min_mm", "Lowest height"), Integer("max_mm", "Highest height"),
                          Integer("default_mm", "Height of the platform for 0")},
-                        false))},
+                        false)),
+        Nullable(Text("update_path",
+                      "How the OS is updated: native as a bundle over mowbite-host, compose as an image by hand; "
+                      "null where it does not know",
+                      false, {"native", "compose"}))},
        "",
        {}},
       {"system.api",
