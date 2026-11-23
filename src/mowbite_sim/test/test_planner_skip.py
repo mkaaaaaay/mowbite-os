@@ -12,7 +12,7 @@ import tempfile
 import unittest
 
 import rclpy
-from mowbite_msgs.msg import MapStatus, RobotPose, RobotState
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from std_msgs.msg import String
 
@@ -22,7 +22,7 @@ from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E4
 WORK = tempfile.mkdtemp(prefix="mowbite_planner_skip_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 
-# The lawn of test_mowing, its loop starting at the mower (0, 0); the strip 10 cm wide beside it.
+# A small lawn at the mower (0, 0); the strip 10 cm wide beside it.
 LAWN = [(-0.41, -0.11), (2.59, -0.11), (2.59, 1.49), (-0.41, 1.49)]
 STRIP = [(-0.41, 2.5), (2.59, 2.5), (2.59, 2.6), (-0.41, 2.6)]
 GARDEN = {
@@ -48,6 +48,7 @@ class Probe(SimProbe):
         self.node.create_subscription(MapStatus, "map/status", self._set("status"), LATCHED)
         self.node.create_subscription(RobotPose, "localization/pose", self._set("pose"), 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
+        self.node.create_subscription(MqttPublish, "bridge/publish", self._publish, 100)
         self.replace_map = self.node.create_client(ReplaceMap, "map/replace")
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.action_pub = self.node.create_publisher(String, "bridge/action", 10)
