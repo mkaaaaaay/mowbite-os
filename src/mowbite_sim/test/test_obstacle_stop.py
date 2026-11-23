@@ -155,7 +155,16 @@ class TestObstacleStop(ObstacleSim, unittest.TestCase):
         STAGE.place(ball(x, y), person(cx, cy))
         self.assertTrue(p.wait(lambda: any(t.kind == "PERSON" and t.zone == 2 and t.in_view and 0 < t.ahead < NEAR_AHEAD
                                            for t in p.obstacles.tracks), 5), p.obstacles.tracks)
-        took, _ = self.goes_on_after(NEAR_WAIT)
+        # The track of a person follows its last find: with the spread of the sensor it ends up to a few cm nearer,
+        # where its place cannot be seen free. Sharp last finds put it where the person stood; the pose adds a spread
+        # of about 0.03 m of its own.
+        try:
+            p.flags(obstacles_sigma=[0.005, 0.0])
+            self.assertTrue(p.wait(lambda: any(t.kind == "PERSON" and t.in_view and t.sigma < 0.04
+                                               for t in p.obstacles.tracks), 5), p.obstacles.tracks)
+            took, _ = self.goes_on_after(NEAR_WAIT)
+        finally:
+            p.flags()
         print(f"near: on after {took:.1f} s")
 
     def test_06_without_sight_nothing_stops_it(self):

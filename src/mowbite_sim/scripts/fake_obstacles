@@ -21,7 +21,7 @@ A thing is reported when its disc lies wholly inside the view. Error model: per 
 + position_sigma[1] * d (m, d from the view point) along the line of sight and a quarter of it across, from seed.
 
 Flags file (read at every image): obstacles_off (no messages at all, as a sensor without frames), obstacles_dark
-(no sight, DARK).
+(no sight, DARK), obstacles_sigma [a, b] (position_sigma from this image on).
 
 While obstacles/photos_wanted is true, an image with finds also goes to hw/obstacle_images, at most once a second.
 """
@@ -309,8 +309,8 @@ def main():
                 msg.sight = True
                 self.images += 1
                 msg.obstacles = [Obstacle(position_from=Obstacle.FROM_BOTH, **fields) for fields in
-                                 observe(self.scene["obstacles"], t, pose, self.view, self.images, self.sigma,
-                                         self.rng)]
+                                 observe(self.scene["obstacles"], t, pose, self.view, self.images,
+                                         flags.get("obstacles_sigma", self.sigma), self.rng)]
             self.pub.publish(msg)
             if msg.obstacles and self.photos_wanted and now - self.last_photo >= PHOTO_PERIOD_S:
                 self.last_photo = now
