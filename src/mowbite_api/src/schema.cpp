@@ -543,7 +543,8 @@ std::vector<std::string> CheckAdditive(const Json& older, const Json& newer) {
   }
   // HA and the app steer by the action ids of a command: none may go.
   const Json& commands = newer.value("x-commands", Json::object());
-  for (const auto& [name, entry] : older.value("x-commands", Json::object()).items()) {
+  const Json older_commands = older.value("x-commands", Json::object());
+  for (const auto& [name, entry] : older_commands.items()) {
     if (!commands.contains(name)) continue;
     const Json& now = commands[name].value("actions", Json::array());
     for (const auto& action : entry.value("actions", Json::array())) {
