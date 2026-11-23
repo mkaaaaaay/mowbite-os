@@ -32,6 +32,8 @@ RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__f
 GATE_WAIT = 30 * 60.0
 GATE_EVERY = 5.0
 HOLD_WAIT = 10.0
+# The OS grants no hold this long before a planned start (system.hold); the slack covers the clocks.
+SCHEDULE_HOLD_S = 1800 + 60
 # A hold the OS still shows in hold.json is given back this often, each time waiting this long for the file to go.
 RELEASE_TRIES = 3
 RELEASE_WAIT = 3.0
@@ -45,13 +47,26 @@ MAX_ATTEMPTS = 2
 RECOVER_RETRY = 5 * 60.0
 AUTO_DEFAULT = {"enabled": False, "from": "02:00", "to": "05:00"}
 ORIGIN_DEFAULT = {"channel": "stable", "index_serial": 0, "last": None}
-IDLE = {"phase": "idle", "component": None, "revision": None, "reason": None}
+# What each new phase starts without.
+FRESH = {"reason": None, "at": None, "percent": None, "bytes": None}
+IDLE = {"phase": "idle", "component": None, "revision": None, **FRESH}
+# percent and bytes of verifying and unpacking are told at most this often.
+PROGRESS_EVERY = 1.0
 HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 MAX_APP_VERSION = 64
 # The line of the health check for an OS that halted since data_dir has no room for its backup.
 NO_SPACE = "halted: DATA_NO_SPACE"
 # After such a halt the automatic leaves the OS and its planner alone until data_dir has this much more room.
 NO_SPACE_MORE = 256 * 1024 * 1024
+
+
+# Why the OS gave no hold, from its answer to system.hold (None without one): a planned start soon, with its time.
+def _why_no_hold(answer, now):
+    start = answer.get("next_start") if isinstance(answer, dict) else None
+    if (type(start) is int and answer.get("hold_until") == 0 and answer.get("idle") is False
+            and 0 <= start - now <= SCHEDULE_HOLD_S):
+        return "SCHEDULED_START", f"a plan of the schedule starts at {start} (unix s)", start
+    return "NO_HOLD", "MowBite OS did not grant the hold of the update"
 
 
 # Minute of the day of HH:MM.
@@ -80,9 +95,9 @@ class Restarting(Exception):
 
 
 class Updater:
-    """os_rpc: request_hold(seconds) and release_hold() over the broker; their answers are not trusted, the gate reads
-    the files. on_change(status) after every change of the status. net: net.Net, None without bundles from the
-    net."""
+    """os_rpc: request_hold(seconds) and release_hold() over the broker; the gate reads the files, the answer of
+    request_hold (None without one) only tells why no hold came. on_change(status) after every change of the
+    status. net: net.Net, None without bundles from the net."""
 
     def __init__(self, paths, carrier, health, inbox, os_rpc, on_change=None, net=None):
         self.paths, self.carrier, self.inbox, self.os_rpc, self.net = paths, carrier, inbox, os_rpc, net
@@ -256,9 +271,9 @@ class Updater:
                     "origin": {"channel": origin["channel"], "url": net.INDEX_URL if self.net else None,
                                "downloading": bool(self.net and self.net.busy()), **(origin["last"] or {})}}
 
-    def _set_phase(self, phase, reason=None, **extra):
+    def _set_phase(self, phase, reason=None, at=None, **extra):
         with self._lock:
-            self._phase = {**self._phase, "phase": phase, "reason": reason, **extra}
+            self._phase = {**self._phase, **FRESH, "phase": phase, "reason": reason, "at": at, **extra}
         self._changed()
 
     # Blocks revision: with result when an attempt ended so, without one for an obstacle like BASE_TOO_OLD.
@@ -501,7 +516,7 @@ class Updater:
                     if until is not None and time.monotonic() >= until:
                         raise Refused("BUSY", "the window of the automatic update ended before the switch")
                     return
-            self._set_phase("waiting_gate", why[0])
+            self._set_phase("waiting_gate", why[0], at=why[2] if len(why) > 2 else None)
             if time.monotonic() >= deadline:
                 raise Refused(why[0], f"the gate stayed closed: {why[1]}")
             self._abort.wait(GATE_EVERY)
@@ -510,9 +525,8 @@ class Updater:
     # the hold given back.
     def _ask_hold(self, jobs, recovering=False):
         asked = time.time()
-        self.os_rpc.request_hold(HOLD_SECONDS)
+        why = _why_no_hold(self.os_rpc.request_hold(HOLD_SECONDS), asked)
         self._holding = True
-        why = ("NO_HOLD", "MowBite OS did not grant the hold of the update")
         until = time.monotonic() + HOLD_WAIT
         while time.monotonic() < until:
             if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
@@ -521,7 +535,7 @@ class Updater:
                 if why is None:
                     return None
                 break
-            if self._abort.wait(0.5):
+            if why[0] == "SCHEDULED_START" or self._abort.wait(0.5):
                 break
         # No switch now: the mower is not held for nothing.
         self._release_hold()
@@ -560,7 +574,7 @@ class Updater:
             if revision:
                 entry["attempts"][revision] = entry["attempts"].get(revision, 0) + 1
                 self._save()
-            self._phase = {**self._phase, "phase": "switching", "reason": None, "component": component,
+            self._phase = {**self._phase, **FRESH, "phase": "switching", "component": component,
                            "revision": revision}
         self._changed()
         # The switch writes the hold itself once the OS is stopped; a switch of the app holds nothing.
@@ -578,7 +592,7 @@ class Updater:
         with self._lock:
             self._check_abort()
             self.installers["host"].switch(revision, broker=self.connected(), by_hand_from=by_hand_from)
-            self._phase = {**self._phase, "phase": "checking", "reason": None, "component": "host",
+            self._phase = {**self._phase, **FRESH, "phase": "checking", "component": "host",
                            "revision": revision}
         self._changed()
         self.restart_self()
@@ -659,9 +673,26 @@ class Updater:
         shutil.rmtree(installer.place.of(revision))
         print(f"{installer.place.component}: removed {revision}, it did not match its bundle", flush=True)
 
+    # progress(done, total) for the phase that runs: percent and bytes, told at most every PROGRESS_EVERY s and at the
+    # end.
+    def _progress(self):
+        told = -PROGRESS_EVERY
+
+        def tell(done, total):
+            nonlocal told
+            now = time.monotonic()
+            if done < total and now - told < PROGRESS_EVERY:
+                return
+            told = now
+            with self._lock:
+                self._phase = {**self._phase, "percent": min(100, done * 100 // total) if total > 0 else None,
+                               "bytes": done}
+            self._changed()
+        return tell
+
     # Unpacks next to the installations and renames when the tree is good; nothing half stays behind.
     def _unpack(self, component, staged, place):
-        partial = bundle.unpack(staged, place.opt)
+        partial = bundle.unpack(staged, place.opt, self._progress())
         try:
             problem = self._tree_problem(component, os.path.join(partial, staged.revision))
             if problem:
@@ -678,7 +709,7 @@ class Updater:
         place = installer.place
         try:
             self._set_phase("verifying", component=component, revision=revision)
-            staged = (self.net if candidate.get("from") == "net" else self.inbox).stage(candidate)
+            staged = (self.net if candidate.get("from") == "net" else self.inbox).stage(candidate, self._progress())
             if staged.serial <= self.serial_of(component):
                 raise Refused("OLD_SERIAL", f"serial {staged.serial} is not newer than the installed "
                                             f"{self.serial_of(component)}")

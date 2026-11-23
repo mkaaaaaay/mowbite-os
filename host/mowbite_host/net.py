@@ -238,9 +238,9 @@ class Net:
             return self.inbox.prune(candidates, serial_of)
 
     # Under the lock: the folder does not change while the bundle is copied out.
-    def stage(self, candidate):
+    def stage(self, candidate, progress=None):
         with self.lock:
-            return self.inbox.stage(candidate)
+            return self.inbox.stage(candidate, progress)
 
     def install_stage(self):
         return self.inbox.install_stage()

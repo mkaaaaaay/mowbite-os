@@ -129,10 +129,10 @@ class Inbox:
         return os.path.join(self.paths.stage, "install")
 
     # Stages the bundle of candidate and checks that it is what the candidate says.
-    def stage(self, candidate):
+    def stage(self, candidate, progress=None):
         signature = candidate.get("sig", candidate["path"] + ".sig")
         staged = bundle.stage(candidate["path"], signature, candidate["component"], self.install_stage(),
-                              self.paths.signers)
+                              self.paths.signers, progress)
         if "sha256" in candidate:
             if (os.path.getsize(staged.path) != candidate["size"] or
                     sha256(staged.path) != candidate["sha256"]):

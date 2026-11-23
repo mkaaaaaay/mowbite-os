@@ -28,12 +28,15 @@ A, B, C, D = "aaaaaaa", "bbbbbbb", "ccccccc", "ddddddd"
 
 class FakeOs:
     """The carrier and the broker side of the OS: a start writes os-session.json of this boot, IDLE on the contacts;
-    a hold asked for is granted into hold.json unless grant is False."""
+    a hold asked for is granted into hold.json unless grant is False; answer: whether the OS answers system.hold,
+    next_start its planned start."""
 
     def __init__(self, where):
         self.paths = where
         self.running = False
         self.grant = True
+        self.answer = False
+        self.next_start = None
         self.broken = set()
         self.holds = []
         # How many releases of the hold get lost on their way.
@@ -80,10 +83,15 @@ class FakeOs:
 
     def request_hold(self, seconds):
         self.holds.append(seconds)
+        now = int(time.time())
         if self.grant:
-            now = int(time.time())
             with open(self.paths.hold, "w") as f:
                 json.dump({"until": now + seconds, "set_at": now}, f)
+        if self.answer:
+            return {"state": "IDLE", "sub_state": "", "is_charging": True, "emergency_reason": 0,
+                    "hold_until": now + seconds if self.grant else 0, "idle": self.grant,
+                    "next_start": self.next_start}
+        return None
 
     def release_hold(self):
         self.holds.append(0)
@@ -487,6 +495,28 @@ class GateTest(Base):
         self.assertEqual(self.run_update("os")["reason"], "NO_HOLD")
         self.assertEqual(self.fake.holds[-1], 0)
 
+    # The OS holds no mower within 1800 s of a planned start: the gate waits with that reason and the time.
+    def test_a_planned_start_soon_is_the_reason_of_the_gate(self):
+        self.bundle(A)
+        self.updater.check()
+        self.run_update("os")
+        self.bundle(B)
+        self.updater.check()
+        self.fake.grant, self.fake.answer = False, True
+        self.fake.next_start = int(time.time()) + 600
+        phases = []
+        self.updater.on_change = lambda status: phases.append((status["phase"], status["reason"], status["at"]))
+        last = self.run_update("os")
+        self.assertEqual((last["result"], last["reason"]), ("refused", "SCHEDULED_START"))
+        self.assertIn(("waiting_gate", "SCHEDULED_START", self.fake.next_start), phases)
+        self.assertEqual(self.fake.holds[-1], 0)
+        self.assertIsNone(self.updater.status()["at"])
+        # A refusal for another reason, a start beyond the window, or no answer stay NO_HOLD.
+        for next_start, answer in ((int(time.time()) + 4000, True), (None, True), (int(time.time()) + 600, False)):
+            with self.subTest(next_start=next_start, answer=answer):
+                self.fake.next_start, self.fake.answer = next_start, answer
+                self.assertEqual(self.run_update("os")["reason"], "NO_HOLD")
+
     # The release of the hold after a switch got lost: asked again until hold.json is gone.
     def test_lost_release_of_the_hold_is_asked_again(self):
         self.bundle(A)
@@ -583,6 +613,21 @@ class FlowTest(Base):
         self.assertEqual(self.install(B)["result"], "installed")
         self.assertIn(("idle", False), seen)
         self.assertNotIn(("idle", True), seen)
+
+    # Copy and unpacking tell how far they are; the next phase starts without it.
+    def test_progress_of_verifying_and_unpacking(self):
+        self.install(A)
+        seen = []
+        self.updater.on_change = lambda status: seen.append((status["phase"], status["percent"], status["bytes"]))
+        self.assertEqual(self.install(B)["result"], "installed")
+        for phase in ("verifying", "unpacking"):
+            with self.subTest(phase):
+                told = [(percent, done) for name, percent, done in seen if name == phase and percent is not None]
+                self.assertTrue(told)
+                self.assertEqual(told[-1][0], 100)
+                self.assertGreater(told[-1][1], 0)
+        self.assertTrue(all(percent is None for name, percent, _ in seen if name not in ("verifying", "unpacking")))
+        self.assertIsNone(self.updater.status()["percent"])
 
     # The OS does not stop: nothing switched and no unfinished update left behind.
     def test_stop_refused_leaves_no_pending(self):

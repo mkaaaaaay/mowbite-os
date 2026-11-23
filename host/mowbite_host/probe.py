@@ -60,9 +60,9 @@ class OsRpc:
             waiting[1]["result"] = answer.get("result")
             waiting[0].set()
 
-    # The gate reads hold.json, not this answer.
+    # The answer of the OS, None without one in time; the gate reads hold.json, the answer only tells why not.
     def request_hold(self, seconds):
-        self._send("system.hold", {"seconds": int(seconds)})
+        return self.call("system.hold", {"seconds": int(seconds)})
 
     def release_hold(self):
         self._send("system.hold", {"seconds": 0})

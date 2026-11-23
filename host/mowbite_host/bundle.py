@@ -51,8 +51,9 @@ def as_user(args):
     return ["setpriv", f"--reuid={USER}", f"--regid={USER}", "--init-groups", "--no-new-privs", "--", *args]
 
 
-# Copies src (a regular file, not a link, at most limit bytes) to dst in a folder only root writes.
-def copy_in(src, dst, limit):
+# Copies src (a regular file, not a link, at most limit bytes) to dst in a folder only root writes; progress(done,
+# total) after each MB.
+def copy_in(src, dst, limit, progress=None):
     try:
         fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as error:
@@ -71,6 +72,8 @@ def copy_in(src, dst, limit):
                 if copied > limit:
                     raise Refused("BAD_BUNDLE", f"{src} grew past {limit // 1048576} MB while it was copied")
                 target.write(chunk)
+                if progress:
+                    progress(copied, info.st_size)
             target.flush()
             os.fsync(target.fileno())
 
@@ -101,12 +104,12 @@ class Bundle:
         return self.meta["serial"]
 
 
-def _copies(src, signature, stage_dir, limit):
+def _copies(src, signature, stage_dir, limit, progress=None):
     shutil.rmtree(stage_dir, ignore_errors=True)
     os.makedirs(stage_dir, mode=0o700)
     path = os.path.join(stage_dir, "bundle.tar.gz")
     copy_in(signature, path + ".sig", MAX_SIGNATURE)
-    copy_in(src, path, limit)
+    copy_in(src, path, limit, progress)
     return path
 
 
@@ -118,10 +121,10 @@ def _checked(path, component):
 
 
 # Copies src and its signature into stage, checks the signature for component and reads bundle.json.
-def stage(src, signature, component, stage_dir, signers):
+def stage(src, signature, component, stage_dir, signers, progress=None):
     if component not in MAX_BUNDLE:
         raise Refused("BAD_BUNDLE", f"no component {component}")
-    path = _copies(src, signature, stage_dir, MAX_BUNDLE[component])
+    path = _copies(src, signature, stage_dir, MAX_BUNDLE[component], progress)
     verify(path, path + ".sig", component, signers)
     return _checked(path, component)
 
@@ -296,15 +299,25 @@ def check_space(bundle, folder):
                                   f"{free // 1048576} MB are free")
 
 
+# The members of tar; progress(bytes, bundle.size) after each one is unpacked.
+def _counted(tar, total, progress):
+    done = 0
+    for member in tar:
+        yield member
+        done += member.size
+        progress(done, total)
+
+
 # Unpacks into <opt>/.<revision>.partial, then renames it to <opt>/<revision>; owned by root, writable only by it.
-def unpack(bundle, opt):
+def unpack(bundle, opt, progress=None):
     revision = bundle.revision
     partial = os.path.join(opt, f".{revision}.partial")
     shutil.rmtree(partial, ignore_errors=True)
     os.makedirs(partial)
     try:
         with tarfile.open(bundle.path) as tar:
-            tar.extractall(partial, filter="data")
+            tar.extractall(partial, members=_counted(tar, bundle.size, progress) if progress else None,
+                           filter="data")
     except (tarfile.TarError, OSError) as error:
         shutil.rmtree(partial, ignore_errors=True)
         raise Refused("BAD_BUNDLE", f"the bundle cannot be unpacked: {error}")
