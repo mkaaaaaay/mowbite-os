@@ -614,6 +614,24 @@ class FlowTest(Base):
         self.assertIn(("idle", False), seen)
         self.assertNotIn(("idle", True), seen)
 
+    # The disk fills while the switch ends: it is installed, the state is written with the next save.
+    def test_a_full_disk_after_the_switch_keeps_it_installed(self):
+        self.install(A)
+        switched = self.updater._switched
+
+        def full(entry, revision, ok):
+            def no_room():
+                raise OSError(28, "No space left on device")
+            self.updater._save = no_room
+            try:
+                switched(entry, revision, ok)
+            finally:
+                del self.updater._save
+        self.updater._switched = full
+        last = self.install(B)
+        self.assertEqual(last["result"], "installed")
+        self.assertEqual(os.readlink(self.paths.os.current), B)
+
     # Copy and unpacking tell how far they are; the next phase starts without it.
     def test_progress_of_verifying_and_unpacking(self):
         self.install(A)

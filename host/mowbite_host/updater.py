@@ -340,7 +340,7 @@ class Updater:
         if app_version != self.state["app_version"]:
             with self._lock:
                 self.state["app_version"] = app_version
-                self._save()
+                self._save_or_log()
 
     # A candidate from elsewhere than the inbox (mowbite-update install <file>).
     def offer(self, candidate):
@@ -389,7 +389,7 @@ class Updater:
             if isinstance(result.get("index_serial"), int):
                 origin["index_serial"] = max(origin["index_serial"], result["index_serial"])
             origin["last"] = result
-            self._save()
+            self._save_or_log()
         if result["result"] != "ok":
             print(f"net: {result['result']}: {result.get('message')}", flush=True)
         self.check()
@@ -636,7 +636,8 @@ class Updater:
             if ok:
                 entry["installed_at"] = int(time.time())
                 entry["crashes_since_install"] = 0
-            self._save()
+            # A full disk does not turn a switch that ended into a failed one.
+            self._save_or_log()
 
     # Refused when the staged bundle does not go with the installed OS (not kept: another OS may take it) or with
     # this mower and its rootfs (blocked).
@@ -917,7 +918,7 @@ class Updater:
                 continue
             with self._lock:
                 entry["auto_tried"] = {"revision": available["revision"], "t": int(now)}
-                self._save()
+                self._save_or_log()
             try:
                 # The switch begins within the window or not at all.
                 self.start(component, available["revision"], by_hand=False,
