@@ -439,6 +439,10 @@ class Program {
   void TickPressed(double now, double wall);
   std::optional<Refusal> AnswerPressed(const Step& step, const json& params, double now, double wall);
   // Whether a step of this check can ask pressed.
+  // An image as setup.get and setup.platforms show it: {name, sha256, bytes, type}, an accent without type; null
+  // for a name that is empty or not in images.
+  static json ImageOf(const std::map<std::string, std::pair<std::string, int>>& images, const std::string& name,
+                      bool accent);
   static bool CanAsk(const Step& step);
   void Fail(const std::string& reason, const std::string& message, json fields, double now, double wall);
   bool StageDone(const std::string& stage) const;

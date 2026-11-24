@@ -292,18 +292,18 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
 
 
 # What setup.platforms tells of each platform of the image: ABOUT of its platform.py ({language: {name, text,
-# board}}), one without it by its name alone, and image_file, its drawing setup/images/mower.svg where it has one.
+# board}}), one without it by its name alone, and image_dir, the folder of its drawing mower.svg where it has one.
 def about_platforms():
     found = []
     for name in layers.platforms():
         try:
             texts = getattr(platform_module(name), "ABOUT", {})
-            drawing = os.path.join(layers.folder(name), "setup", "images", "mower.svg")
+            folder = layers.images(layers.folder(name))
         except (LookupError, ValueError, OSError):
             continue
         entry = {"name": name, "texts": texts}
-        if os.path.isfile(drawing):
-            entry["image_file"] = drawing
+        if os.path.isfile(os.path.join(folder, "mower.svg")):
+            entry["image_dir"] = folder
         found.append(entry)
     return found
 

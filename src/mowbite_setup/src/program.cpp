@@ -1850,17 +1850,19 @@ std::string Program::BlockedNow(double now) const {
   return text;
 }
 
+json Program::ImageOf(const std::map<std::string, std::pair<std::string, int>>& images, const std::string& name,
+                      bool accent) {
+  const auto found = images.find(name);
+  if (name.empty() || found == images.end()) return nullptr;
+  json out = {{"name", name}, {"sha256", found->second.first}, {"bytes", found->second.second}};
+  if (!accent) out["type"] = "image/svg+xml";
+  return out;
+}
+
 json Program::State(double now, const std::map<std::string, std::pair<std::string, int>>& images) const {
   const auto named = [](const std::vector<Named>& list) {
     json out = json::array();
     for (const Named& item : list) out.push_back({{"id", item.id}, {"texts", item.texts}});
-    return out;
-  };
-  const auto image = [&images](const std::string& name, bool accent) -> json {
-    const auto found = images.find(name);
-    if (name.empty() || found == images.end()) return nullptr;
-    json out = {{"name", name}, {"sha256", found->second.first}, {"bytes", found->second.second}};
-    if (!accent) out["type"] = "image/svg+xml";
     return out;
   };
   json steps = json::array();
@@ -2007,8 +2009,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
     }
     // The question pressed gives up after its own time.
     if (is_run && run_->pressed_at >= 0) ends_at = std::floor(run_->pressed_wall + mowbite_api::kSetupPressedTime);
-    json picture = image(step.image, false);
-    if (!picture.is_null()) picture["accent"] = image(step.accent, true);
+    json picture = ImageOf(images, step.image, false);
+    if (!picture.is_null()) picture["accent"] = ImageOf(images, step.accent, true);
     steps.push_back({{"id", step.id},
                      {"stage", step.stage},
                      {"check", step.check},

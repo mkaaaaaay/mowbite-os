@@ -48,6 +48,11 @@ def geometry(platform):
     return os.path.join(folder(platform), "geometry.yaml")
 
 
+def images(home):
+    """The folder of the images of the setup program in the share folder home of a platform."""
+    return os.path.join(home, "setup", "images")
+
+
 def setup(platform, folder_of=None):
     """The parameters of mowbite_setup for this platform: the name its driver reports (geometry.platform of its
     geometry.yaml), the step list of setup/setup.yaml as JSON and the folder of its images; an empty list for a
@@ -66,7 +71,7 @@ def setup(platform, folder_of=None):
     name = parameters([dimensions], "mowbite_logic").get("geometry.platform")
     if not name:
         raise ValueError(f"{dimensions}: geometry.platform is missing")
-    return {"platform": name, "steps": json.dumps(steps), "image_dir": os.path.join(root, "images")}
+    return {"platform": name, "steps": json.dumps(steps), "image_dir": images(home)}
 
 
 def setup_file(data_dir, platform):

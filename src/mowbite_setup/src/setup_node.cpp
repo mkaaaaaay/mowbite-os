@@ -334,18 +334,15 @@ class SetupNode : public rclcpp::Node {
     return true;
   }
 
-  // The drawing of each mower (image_file, a path) as image mower-<name>.svg; one that breaks the rules is left out.
+  // The drawing of each mower (mower.svg in its image_dir) as image mower-<name>.svg; one that breaks the rules is
+  // left out.
   void LoadPlatformImages(json* platforms) {
     for (json& platform : *platforms) {
       if (!platform.is_object()) continue;
-      const std::string file = platform.value("image_file", "");
-      platform.erase("image_file");
-      if (file.empty()) continue;
+      const std::string folder = platform.value("image_dir", "");
+      platform.erase("image_dir");
       const std::string name = "mower-" + platform.value("name", "") + ".svg";
-      const size_t slash = file.rfind('/');
-      if (slash != std::string::npos && AddImage(file.substr(0, slash), file.substr(slash + 1), name)) {
-        platform["image"] = name;
-      }
+      if (!folder.empty() && AddImage(folder, "mower.svg", name)) platform["image"] = name;
     }
   }
 
