@@ -254,7 +254,8 @@ class TestRehearsalTron(unittest.TestCase):
             self.assertEqual(run["summary"]["checksum_errors"], 0)
         self.assertTrue(all(r["height_mm"] == m.TRON_BLADE_HEIGHT_MM and r["lease_s"] == 1.0 for r in requests))
         starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
-        self.assertEqual(starts, [False, True, True, True, False])
+        # Started again with the blade allowed for T6 and after each of the four runs without host.
+        self.assertEqual(starts, [False, True, True, True, True, True, False])
         self.assertFalse(any(r["kind"] == "cmd" and (r["v"] or r["w"]) for r in rec))
 
     def test_5_blade_kept_turning_ends_t6(self):
