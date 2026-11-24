@@ -409,6 +409,67 @@ class FirstInstallTest(ComponentBase):
         self.assertIsNone(self.first())
         self.assertFalse(self.updater.state["first"])
 
+    # The owner has the mower open and off its station: after the OS the gate needs its hold, not the contacts.
+    def test_after_the_os_the_gate_needs_no_contacts(self):
+        self.os_bundle(A, **OS_META)
+        self.planner_bundle(P1)
+        self.assertEqual(self.first()["component"], "os")
+        self.fake.session(charging=False)
+        last = self.first()
+        self.assertEqual((last["result"], last["component"]), ("installed", "planner"), last)
+
+    # A gate that stays closed: a growing pause, then the first installation gives up and leaves the mower free.
+    def test_a_closed_gate_pauses_and_then_gives_up(self):
+        self.os_bundle(A, **OS_META)
+        self.planner_bundle(P1)
+        self.first()
+        self.fake.grant = False
+        started, start = [], self.updater.start
+        self.updater.start = lambda *args, **kwargs: (started.append(args[0]), start(*args, **kwargs))[1]
+        pauses = []
+        for _ in range(3 * updater.FIRST_TRIES):
+            self.updater._first_at = 0.0
+            before = time.monotonic()
+            self.updater.first_install()
+            self.updater.join()
+            if self.updater._first_at - before > 1.5 * updater.FIRST_EVERY:
+                pauses.append(round((self.updater._first_at - before) / updater.FIRST_EVERY))
+        self.assertEqual(started, ["planner"] * updater.FIRST_TRIES)
+        self.assertEqual(pauses, [2 ** n for n in range(1, updater.FIRST_TRIES)])
+        self.assertEqual(self.updater.state["last"]["reason"], "NO_HOLD")
+        self.assertFalse(self.updater.state["first"])
+        self.assertFalse(self.updater.busy())
+
+    # Only what the installer brought: a newer bundle from the net waits for the night.
+    def test_only_from_the_inbox(self):
+        self.os_bundle(A, **OS_META)
+        self.updater.check()
+        inbox = next(c for c in self.updater._candidates if c["revision"] == A)
+
+        class Net:
+            def candidates(self, channel):
+                return [{**inbox, "revision": B, "serial": inbox["serial"] + 1, "from": "net"}]
+
+            def prune(self, found, serial_of):
+                return found
+
+            def busy(self):
+                return False
+        self.updater.net = Net()
+        last = self.first()
+        self.assertEqual((last["result"], last["revision"]), ("installed", A), last)
+
+    # A restart hold or a crash mark left on /userdata from the system before: without an OS nobody could release
+    # them, so they do not close the gate; the hold stays for the OS that starts.
+    def test_a_restart_hold_or_crash_from_before_does_not_stop_it(self):
+        self.write(self.paths.restart_hold, "{}")
+        self.write(self.paths.crash, "")
+        self.assertEqual(gate.before_hold(self.paths, False)[0], "EMERGENCY")
+        self.os_bundle(A, **OS_META)
+        last = self.first()
+        self.assertEqual((last["result"], last["component"]), ("installed", "os"), last)
+        self.assertTrue(os.path.exists(self.paths.restart_hold))
+
     def test_it_looks_at_most_every_few_seconds(self):
         self.updater.first_install()
         self.os_bundle(A, **OS_META)

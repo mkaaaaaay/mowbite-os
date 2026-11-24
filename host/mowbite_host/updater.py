@@ -29,6 +29,12 @@ AUTO_ORDER = ("host", "app", "planner", "os")
 # What a mower without an OS takes from the inbox at once, and how often it looks.
 FIRST_ORDER = ("os", "planner", "app")
 FIRST_EVERY = 30.0
+# The first installation waits this long at a closed gate, then pauses twice as long each time and gives up after
+# FIRST_TRIES refusals: the mower stays reachable for host.usb_mode and its trial period decides.
+FIRST_GATE = 120.0
+# How long host.usb_mode waits for an update that gives way.
+GIVE_WAY_WAIT = 10.0
+FIRST_TRIES = 3
 # The folder of the library this process runs: an installation of the host or its seed.
 RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__file__)))
 # How long an update waits for the gate before it gives up, and how often it looks.
@@ -133,6 +139,10 @@ class Updater:
         self._judged = None
         self._bad_app_logged = False
         self._first_at = 0.0
+        # The first installation: what it started last, refusals in a row, whether it gave up in this start of the host.
+        self._first_started = None
+        self._first_refusals = 0
+        self._first_given_up = False
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
@@ -220,10 +230,10 @@ class Updater:
         meta = meta or {}
         return self._info(meta["revision"], meta) if isinstance(meta.get("revision"), str) else None
 
-    def _available(self, component, platform):
+    def _available(self, component, platform, inbox_only=False):
         have = self.serial_of(component)
         newer = [c for c in self._candidates if c["component"] == component and c["serial"] > have and
-                 bundle.fits_platform(c, platform)]
+                 bundle.fits_platform(c, platform) and not (inbox_only and c.get("from") == "net")]
         if not newer:
             return None
         best = max(newer, key=lambda c: c["serial"])
@@ -460,19 +470,22 @@ class Updater:
                 restarting = self._phase["phase"] == "checking" and self._phase["component"] == "host"
                 if not restarting:
                     self._phase = dict(IDLE)
+                # An abort counts for this run only.
+                self._abort.clear()
                 self._working = False
             if not restarting:
                 self._changed()
 
     # update.start: runs in its own thread; Refused right away when it cannot begin. reset_jobs: the planner is
     # installed although a mowing job is unfinished. gate_until: the monotonic time the gate is given up at the latest.
-    def start(self, component, revision=None, by_hand=True, reset_jobs=False, gate_until=None):
+    # first: the first installation, whose gate needs no charging contacts (the owner has the mower open).
+    def start(self, component, revision=None, by_hand=True, reset_jobs=False, gate_until=None, first=False):
         with self._lock:
             candidate = self._pick(component, revision)
             blocked = self._entry(component)["blocked"].get(candidate["revision"])
             if blocked and not by_hand:
                 raise Refused("BLOCKED", f"{candidate['revision']} ended {blocked.get('result')} before")
-            self._run("update", lambda: self._install(candidate, reset_jobs, gate_until))
+            self._run("update", lambda: self._install(candidate, reset_jobs, gate_until, contacts=not first))
 
     # Under the lock the switch begins under: an abort that is accepted is never followed by the switch.
     def abort(self):
@@ -482,6 +495,21 @@ class Updater:
             if self._phase["phase"] in ("switching", "checking"):
                 raise Refused("BUSY", "the switch has begun; its health check decides")
             self._abort.set()
+
+    # host.usb_mode: an update that has not begun its switch ends now (the owner wants the USB mode); one that switches
+    # stays and the answer is HOLD.
+    def give_way(self, timeout=GIVE_WAY_WAIT):
+        if not self.busy():
+            return
+        try:
+            self.abort()
+        except Refused as why:
+            if why.reason != "NOT_UPDATING":
+                raise Refused("HOLD", f"an update runs: {why}") from None
+        if self._worker is not None:
+            self._worker.join(timeout)
+        if self.busy():
+            raise Refused("HOLD", "an update runs")
 
     # Back to the previous installation; the planner and the app without one go back to the one of the OS.
     def rollback(self, component, reset_jobs=False):
@@ -497,14 +525,15 @@ class Updater:
 
     # gate.before_hold; with jobs an unfinished mowing job closes the gate as well.
     def _closed(self, jobs, active, still=False, recovering=False, contacts=True):
-        why = gate.before_hold(self.paths, active, still, recovering, contacts)
+        no_os = not active and self.installer.current() is None
+        why = gate.before_hold(self.paths, active, still, recovering, contacts, no_os)
         if why is None and jobs and gate.job_open(self.paths):
             why = "JOB_OPEN", "a mowing job is unfinished: finish or reset it, or update with reset_jobs"
         return why
 
     # Waits until the gate opens: an OS that moves the mower granted its hold, any other needs none. The planner
     # waits for the end of the mowing job as well unless reset_jobs. The app needs no gate, only no unfinished switch.
-    def _wait_gate(self, component, reset_jobs=False, until=None):
+    def _wait_gate(self, component, reset_jobs=False, until=None, contacts=True):
         if not self._stops_os(component):
             if gate.unfinished(self.paths):
                 raise Refused("UNFINISHED", "an update did not finish: recover first")
@@ -520,12 +549,12 @@ class Updater:
                 active = state == "active"
                 # Given up by systemd after its crashes it is down as well: nobody could release a restart hold.
                 still = state == "failed" or (active and gate.off(self.paths, started) is not None)
-                why = self._closed(jobs, active, still)
+                why = self._closed(jobs, active, still, contacts=contacts)
                 if why is None and active and not still:
-                    why = self._ask_hold(jobs)
+                    why = self._ask_hold(jobs, contacts=contacts)
                 if why is None:
                     if until is not None and time.monotonic() >= until:
-                        raise Refused("BUSY", "the window of the automatic update ended before the switch")
+                        raise Refused("BUSY", "the time for this switch ended before the gate opened")
                     return
             self._set_phase("waiting_gate", why[0], at=why[2] if len(why) > 2 else None)
             if time.monotonic() >= deadline:
@@ -733,7 +762,7 @@ class Updater:
             shutil.rmtree(partial, ignore_errors=True)
         files.sync_dir(place.opt)
 
-    def _install(self, candidate, reset_jobs=False, gate_until=None):
+    def _install(self, candidate, reset_jobs=False, gate_until=None, contacts=True):
         component, revision = candidate["component"], candidate["revision"]
         installer = self.installers[component]
         place = installer.place
@@ -754,7 +783,7 @@ class Updater:
                 bundle.check_space(staged, place.opt)
                 self._unpack(component, staged, place)
             self._set_phase("waiting_gate")
-            self._wait_gate(component, reset_jobs, gate_until)
+            self._wait_gate(component, reset_jobs, gate_until, contacts)
             ok, line = self._switch(component, revision)
             installer.prune()
             # An OS that halted for want of room in data_dir says nothing about the revision.
@@ -934,23 +963,43 @@ class Updater:
     # each bundle stay. A revision that failed is blocked as always; a failed first start is up to the probation of
     # the system. state first stays set until no first component is left.
     def first_install(self):
-        if self.busy() or (not self.state.get("first") and self.installer.current()):
+        if (self.busy() or self._first_given_up or
+                (not self.state.get("first") and self.installer.current())):
             return
         now = time.monotonic()
+        started, self._first_started = self._first_started, None
+        if started is not None:
+            last = self.state.get("last") or {}
+            if (last.get("component"), last.get("revision"), last.get("result")) != (*started, "refused"):
+                self._first_refusals = 0
+            else:
+                self._first_refusals += 1
+                if self._first_refusals >= FIRST_TRIES:
+                    print(f"first install: gave up after {self._first_refusals} refusals: {last.get('message')}",
+                          flush=True)
+                    self._first_given_up = True
+                    with self._lock:
+                        self.state["first"] = False
+                        self._save_or_log()
+                    return
+                self._first_at = now + FIRST_EVERY * 2 ** self._first_refusals
         if now < self._first_at:
             return
         self._first_at = now + FIRST_EVERY
         self.check()
         platform = self.platform()
+        # Only what the installer brought: the inbox, never the net.
         for component in FIRST_ORDER:
-            available = self._available(component, platform)
+            available = self._available(component, platform, inbox_only=True)
             if not available or available["blocked"]:
                 continue
             with self._lock:
                 self.state["first"] = True
                 self._save_or_log()
             try:
-                self.start(component, available["revision"], by_hand=False)
+                self.start(component, available["revision"], by_hand=False, first=True,
+                           gate_until=time.monotonic() + FIRST_GATE)
+                self._first_started = (component, available["revision"])
             except Refused as why:
                 print(f"first install: {why}", flush=True)
             return

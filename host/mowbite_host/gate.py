@@ -81,14 +81,15 @@ def job_open(paths):
 
 # The reason the switch may not happen now, None when it may; active: whether the service of the OS runs, still:
 # whether it is halted or down (off); recovering: for undoing an unfinished switch, which is no reason then;
-# contacts: whether a running OS has to stand on its charging contacts.
-def before_hold(paths, active, still=False, recovering=False, contacts=True):
+# contacts: whether a running OS has to stand on its charging contacts; no_os: no OS is installed yet, so none could
+# release the restart hold or judge a crash.
+def before_hold(paths, active, still=False, recovering=False, contacts=True, no_os=False):
     if not recovering and unfinished(paths):
         return "UNFINISHED", "an update did not finish: recover first"
-    # Halted or down nobody answers a release; the file stays and holds the OS that starts next.
-    if os.path.lexists(paths.restart_hold) and not still:
+    # Halted, down or not installed nobody answers a release; the file stays and holds the OS that starts next.
+    if os.path.lexists(paths.restart_hold) and not still and not no_os:
         return "EMERGENCY", "the mower is held after an unexpected restart: release it first"
-    if os.path.exists(paths.crash) and session_of_this_boot(paths) is None:
+    if not no_os and os.path.exists(paths.crash) and session_of_this_boot(paths) is None:
         return "KERNEL_CRASH", "a kernel crash in this boot that MowBite OS has not judged yet: start it first"
     if not active or still:
         return None

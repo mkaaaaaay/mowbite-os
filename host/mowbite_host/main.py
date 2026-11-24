@@ -94,9 +94,13 @@ def run():
     tool.restart_self = lambda: stopping.append(True)
     tool.connected = lambda: client.connected
     tool.judges_by_broker = True
-    tool.host_went_back()
-    tool.recover(start_stopped=True)
-    installer.settle(where)
+    # A failure here (a full rootfs, a stop that was refused) is logged; the loop recovers again and host.* answers.
+    for name, step in (("host_went_back", tool.host_went_back), ("recover", lambda: tool.recover(start_stopped=True)),
+                       ("settle", lambda: installer.settle(where))):
+        try:
+            step()
+        except Exception as error:  # noqa: BLE001
+            print(f"{name}: {type(error).__name__}: {error}", flush=True)
     host = service.Host(where, tool, os_state.OsWatch(where, service_os, tool), service_os, client.publish)
     client.start()
     settle = Settle(tool, client)
