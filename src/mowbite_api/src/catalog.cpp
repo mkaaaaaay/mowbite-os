@@ -1312,6 +1312,37 @@ const std::vector<Method>& Methods() {
        "without an emergency or the restart hold; never during an update. The restart hold judges at the start as "
        "always",
        NoParams(), Object("result", "os of mowbite/host/status after the restart", HostOs()), kHostOffered},
+      {"host.confirm_start", "mowbite_host",
+       "Ends the trial period of a newly written system (trial in mowbite/host/status) once its start is good: no "
+       "failed service, a WLAN connection, MowBite OS running, the first installation done; else START_NOT_OK with "
+       "what fails, or BUSY while the first installation runs. Every call counts as reaching the mower, so it does "
+       "not go back into the USB mode on its own in this start. Without a trial period nothing to do",
+       NoParams(), Object("result", "The trial period after the call", {Bool("trial", "Always false: it is over")}),
+       kHostOffered},
+      {"host.wifi_scan", "mowbite_host",
+       "The WLANs the mower sees now, the one in use first, then by signal; UNSUPPORTED without NetworkManager",
+       NoParams(),
+       Object("result", "What the mower sees",
+              {List("networks", "Each {ssid, signal 0 to 100, secure, in_use}, at most 64", Type::kObject)}),
+       kHostOffered},
+      {"host.wifi_set", "mowbite_host",
+       "Tries the WLAN in the background and answers at once: the mower keeps it only once it connected, else the "
+       "connection before comes back. The outcome is wifi in mowbite/host/status. The password is never sent back, "
+       "logged or shown in a status; INVALID for a name or password out of range, BUSY while a change runs",
+       Object("params", "The WLAN",
+              {Text("ssid", "Its name, 1 to 32 bytes", true),
+               Text("password", "8 to 63 printable ASCII characters or 64 hex digits; none for an open WLAN")}),
+       Object("result", "wifi of mowbite/host/status",
+              {Text("state", "trying, connected or failed", true, {"trying", "connected", "failed"}),
+               Text("ssid", "The WLAN", true), Nullable(Text("reason", "Why it failed, else null")),
+               Nullable(Text("message", "English text for the log, else null")), Integer("t", "unix s", "When")}),
+       kHostOffered},
+      {"host.usb_mode", "mowbite_host",
+       "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back "
+       "to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: "
+       "a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off; never "
+       "during an update. UNSUPPORTED on other mowers",
+       NoParams(), Object("result", "Answered before the restart", {Bool("rebooting", "Always true")}), kHostOffered},
   };
   return methods;
 }

@@ -10,7 +10,7 @@ import unittest
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
-from mowbite_host import bundle, compat, paths, updater  # noqa: E402
+from mowbite_host import bundle, compat, paths, service, updater  # noqa: E402
 
 OS = {"api": 15, "api_break": 1, "min_app": "1.5.0", "planner_interface": 2, "planner_files_version": 3,
       "bundled": {"app": {"revision": "aaaaaaa", "version": "1.5.0", "serial": 100},
@@ -135,6 +135,11 @@ class CompatTest(unittest.TestCase):
         enum = schema["$defs"]["update.start.params"]["properties"]["component"]["enum"]
         self.assertEqual(enum, list(updater.COMPONENTS))
         self.assertLessEqual(set(compat.EXPLAIN), set(schema["x-reasons"]["UPDATE"]))
+        # Every method the host answers, and every reason its own methods refuse with.
+        self.assertLessEqual(set(service.METHODS), set(schema["x-methods"]))
+        own = {"HOLD", "BUSY", "EMERGENCY", "INVALID", "INTERNAL", "UNFINISHED", "KERNEL_CRASH", "NO_HOLD",
+               "SCHEDULED_START", "UNSUPPORTED", "START_NOT_OK", "WIFI_FAILED"}
+        self.assertLessEqual(own, set(schema["x-reasons"]["UPDATE_REFUSED"]))
 
 
 if __name__ == "__main__":

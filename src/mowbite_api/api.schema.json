@@ -6793,6 +6793,24 @@
       },
       "type": "array"
     },
+    "host.confirm_start.params": {
+      "description": "The params of host.confirm_start: None",
+      "type": "object"
+    },
+    "host.confirm_start.result": {
+      "additionalProperties": false,
+      "description": "The result of host.confirm_start: The trial period after the call",
+      "properties": {
+        "trial": {
+          "description": "Always false: it is over",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "trial"
+      ],
+      "type": "object"
+    },
     "host.restart_os.params": {
       "description": "The params of host.restart_os: None",
       "type": "object"
@@ -6881,6 +6899,110 @@
         "last_crash",
         "revision",
         "stalled"
+      ],
+      "type": "object"
+    },
+    "host.usb_mode.params": {
+      "description": "The params of host.usb_mode: None",
+      "type": "object"
+    },
+    "host.usb_mode.result": {
+      "additionalProperties": false,
+      "description": "The result of host.usb_mode: Answered before the restart",
+      "properties": {
+        "rebooting": {
+          "description": "Always true",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "rebooting"
+      ],
+      "type": "object"
+    },
+    "host.wifi_scan.params": {
+      "description": "The params of host.wifi_scan: None",
+      "type": "object"
+    },
+    "host.wifi_scan.result": {
+      "additionalProperties": false,
+      "description": "The result of host.wifi_scan: What the mower sees",
+      "properties": {
+        "networks": {
+          "description": "Each {ssid, signal 0 to 100, secure, in_use}, at most 64",
+          "items": {
+            "description": "One item",
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "networks"
+      ],
+      "type": "object"
+    },
+    "host.wifi_set.params": {
+      "additionalProperties": false,
+      "description": "The params of host.wifi_set: The WLAN",
+      "properties": {
+        "password": {
+          "description": "8 to 63 printable ASCII characters or 64 hex digits; none for an open WLAN",
+          "type": "string"
+        },
+        "ssid": {
+          "description": "Its name, 1 to 32 bytes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ssid",
+        "password"
+      ],
+      "type": "object"
+    },
+    "host.wifi_set.result": {
+      "additionalProperties": false,
+      "description": "The result of host.wifi_set: wifi of mowbite/host/status",
+      "properties": {
+        "message": {
+          "description": "English text for the log, else null",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why it failed, else null",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ssid": {
+          "description": "The WLAN",
+          "type": "string"
+        },
+        "state": {
+          "description": "trying, connected or failed",
+          "enum": [
+            "trying",
+            "connected",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "t": {
+          "description": "unix s",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "state",
+        "ssid",
+        "reason",
+        "message",
+        "t"
       ],
       "type": "object"
     },
@@ -16944,11 +17066,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:60",
+  "$id": "urn:mowbite-os:api:61",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 60,
+  "x-api": 61,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17672,12 +17794,40 @@
       "params": "#/$defs/events.history.list.params",
       "result": "#/$defs/events.history.list.result"
     },
+    "host.confirm_start": {
+      "description": "Ends the trial period of a newly written system (trial in mowbite/host/status) once its start is good: no failed service, a WLAN connection, MowBite OS running, the first installation done; else START_NOT_OK with what fails, or BUSY while the first installation runs. Every call counts as reaching the mower, so it does not go back into the USB mode on its own in this start. Without a trial period nothing to do",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.confirm_start.params",
+      "result": "#/$defs/host.confirm_start.result"
+    },
     "host.restart_os": {
       "description": "Starts MowBite OS again, its restarts from 0: always when it is stopped, down or halted, else only in IDLE without an emergency or the restart hold; never during an update. The restart hold judges at the start as always",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.restart_os.params",
       "result": "#/$defs/host.restart_os.result"
+    },
+    "host.usb_mode": {
+      "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off; never during an update. UNSUPPORTED on other mowers",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.usb_mode.params",
+      "result": "#/$defs/host.usb_mode.result"
+    },
+    "host.wifi_scan": {
+      "description": "The WLANs the mower sees now, the one in use first, then by signal; UNSUPPORTED without NetworkManager",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.wifi_scan.params",
+      "result": "#/$defs/host.wifi_scan.result"
+    },
+    "host.wifi_set": {
+      "description": "Tries the WLAN in the background and answers at once: the mower keeps it only once it connected, else the connection before comes back. The outcome is wifi in mowbite/host/status. The password is never sent back, logged or shown in a status; INVALID for a name or password out of range, BUSY while a change runs",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.wifi_set.params",
+      "result": "#/$defs/host.wifi_set.result"
     },
     "incidents.delete": {
       "description": "Deletes one incident, without an id all",
@@ -22993,13 +23143,13 @@
         "severity": "info",
         "texts": {
           "de": {
-            "fix": "Nichts zu tun, das Update versucht es weiter, sobald der Mäher wieder frei ist.",
-            "help": "Ein Plan des Zeitplans startet in weniger als 30 Minuten. Bis dahin wartet das Update.",
+            "fix": "Ein Update von Hand später erneut starten. Ein automatisches Update versucht es in der nächsten Nacht wieder.",
+            "help": "Ein Plan des Zeitplans startet in weniger als 30 Minuten. Das Update wartet höchstens 30 Minuten und endet dann.",
             "name": "Geplanter Start"
           },
           "en": {
-            "fix": "Nothing to do, the update tries again once the mower is free.",
-            "help": "A plan of the schedule starts in less than 30 minutes. Until then the update waits.",
+            "fix": "Start an update by hand again later. An automatic update tries again the next night.",
+            "help": "A plan of the schedule starts in less than 30 minutes. The update waits at most 30 minutes, then it ends.",
             "name": "Scheduled start"
           }
         }
@@ -23152,6 +23302,24 @@
           }
         }
       },
+      "KERNEL_CRASH": {
+        "description": "The kernel of the mower crashed; it holds the mower in every state",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Mäher und Umgebung ansehen, dann den Notaus zurücksetzen. Kommt es öfter vor, die Protokolle für eine Meldung sichern.",
+            "help": "Das Betriebssystem des Mähers ist abgestürzt und neu gestartet. Der Mäher fährt und mäht nicht, bis er freigegeben wird, gleich was er vorher tat.",
+            "name": "Kernel-Absturz"
+          },
+          "en": {
+            "fix": "Look at the mower and around it, then reset the emergency. If it happens again, keep the logs for a report.",
+            "help": "The operating system of the mower crashed and started again. The mower does not drive or mow until it is released, whatever it did before.",
+            "name": "Kernel crash"
+          }
+        }
+      },
       "NOT_UPDATING": {
         "description": "No update runs that could be stopped",
         "fields": {},
@@ -23167,6 +23335,24 @@
             "fix": "Nothing to do.",
             "help": "No update is running that could be stopped.",
             "name": "No update running"
+          }
+        }
+      },
+      "NO_HOLD": {
+        "description": "MowBite OS did not hold the mower for the update",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun, das Update versucht es von selbst weiter.",
+            "help": "MowBite OS hat den Mäher für das Update nicht angehalten, etwa weil gerade etwas startet.",
+            "name": "Mäher nicht angehalten"
+          },
+          "en": {
+            "fix": "Nothing to do, the update keeps trying automatically.",
+            "help": "MowBite OS couldn't pause the mower for the update, e.g. because something is starting.",
+            "name": "Mower not paused"
           }
         }
       },
@@ -23206,6 +23392,62 @@
           }
         }
       },
+      "SCHEDULED_START": {
+        "description": "A plan of the schedule starts within 1800 s; MowBite OS grants no hold for an update until then",
+        "fields": {
+          "at": "unix s"
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Ein Update von Hand später erneut starten. Ein automatisches Update versucht es in der nächsten Nacht wieder.",
+            "help": "Ein Plan des Zeitplans startet in weniger als 30 Minuten. Das Update wartet höchstens 30 Minuten und endet dann.",
+            "name": "Geplanter Start"
+          },
+          "en": {
+            "fix": "Start an update by hand again later. An automatic update tries again the next night.",
+            "help": "A plan of the schedule starts in less than 30 minutes. The update waits at most 30 minutes, then it ends.",
+            "name": "Scheduled start"
+          }
+        }
+      },
+      "START_NOT_OK": {
+        "description": "The first start of a newly written system is not good yet; the message lists what fails",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Kurz warten und erneut bestätigen. Bleibt es dabei, die Meldung für eine Nachfrage sichern.",
+            "help": "Der neu installierte Mäher läuft noch nicht ganz: ein Dienst ist ausgefallen, das WLAN fehlt oder MowBite OS läuft noch nicht.",
+            "name": "Start noch nicht in Ordnung"
+          },
+          "en": {
+            "fix": "Wait a moment and confirm again. If it stays like this, keep the message for a report.",
+            "help": "The newly installed mower isn't fully up: a service failed, the WLAN is missing or MowBite OS isn't running yet.",
+            "name": "Start not OK yet"
+          }
+        }
+      },
+      "UNFINISHED": {
+        "description": "An update did not finish; the mower goes back to the revision before it first",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Kurz warten, der Mäher kehrt von selbst zur vorigen Version zurück.",
+            "help": "Ein früheres Update wurde nicht beendet.",
+            "name": "Update nicht beendet"
+          },
+          "en": {
+            "fix": "Wait a moment, the mower goes back to the version before automatically.",
+            "help": "An earlier update did not finish.",
+            "name": "Update not finished"
+          }
+        }
+      },
       "UNKNOWN_REVISION": {
         "description": "The mower does not know this revision",
         "fields": {},
@@ -23221,6 +23463,42 @@
             "fix": "Check again and choose a version it shows.",
             "help": "The mower does not know this version.",
             "name": "Unknown version"
+          }
+        }
+      },
+      "UNSUPPORTED": {
+        "description": "This mower or its system cannot do this",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun.",
+            "help": "Dieser Mäher oder sein System kann das nicht.",
+            "name": "Nicht möglich"
+          },
+          "en": {
+            "fix": "Nothing to do.",
+            "help": "This mower or its system can't do this.",
+            "name": "Not possible"
+          }
+        }
+      },
+      "WIFI_FAILED": {
+        "description": "The mower could not join the WLAN; the connection before stays",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Namen und Passwort prüfen und noch einmal versuchen.",
+            "help": "Der Mäher konnte sich nicht mit diesem WLAN verbinden. Die bisherige Verbindung bleibt.",
+            "name": "WLAN nicht verbunden"
+          },
+          "en": {
+            "fix": "Check the name and password, then try again.",
+            "help": "The mower couldn't join this WLAN. The previous connection stays.",
+            "name": "WLAN not connected"
           }
         }
       }
