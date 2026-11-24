@@ -182,8 +182,8 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
               {"data_rollback", data_rollback}};
 }
 
-Json DataRollbackInfo(const std::string* text) {
-  if (text == nullptr) return Json();
+Json DataRollbackInfo(const std::optional<std::string>& text) {
+  if (!text) return Json();
   const Json note = Json::parse(*text, nullptr, false);
   if (!note.is_object()) return Json{{"confirm", true}};
   Json info = Json::object();

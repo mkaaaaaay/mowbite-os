@@ -123,7 +123,7 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
 
 // The note data_store.py leaves after a way back (data_rollback.json) for system.info: its fields of the catalog, null
 // for no text; a text that is no object counts as a note with confirm, as the logic takes it.
-Json DataRollbackInfo(const std::string* text);
+Json DataRollbackInfo(const std::optional<std::string>& text);
 
 // stop_release of system.info from the times of hw/capabilities: null without a free time.
 Json StopRelease(double free_s, double hold_s, double max_hold_s);

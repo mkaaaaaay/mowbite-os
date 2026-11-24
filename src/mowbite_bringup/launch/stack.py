@@ -176,7 +176,6 @@ def journal_dir(path, data_dir, logger):
 # The arguments every platform has, beside its own.
 def arguments(platform, module):
     return [
-        DeclareLaunchArgument("config", default_value=layers.STACK),
         # The values of this platform, on top of config.
         DeclareLaunchArgument("platform_config", default_value=layers.platform_file(platform)),
         # Values on top of both, e.g. those of the simulation or a test; by default the platform file once more.
@@ -193,6 +192,7 @@ def arguments(platform, module):
 # The arguments of the stage of the choice as well.
 def shared_arguments(data_dir):
     return [
+        DeclareLaunchArgument("config", default_value=layers.STACK),
         # Without it nothing is kept and no update can hold the driver; with it, it is prepared for the data schema of
         # the image before any node starts.
         DeclareLaunchArgument("data_dir", default_value=data_dir),
@@ -478,7 +478,6 @@ def container(nodes, data_dir, logger, oom_score_adj=""):
 
 # The container with these components and the planner beside it.
 def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
-
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
     # dict of parameters goes under its full name. calib_root is the folder of mowbite_calibration: only under it
     # planner.calib.evaluate reads a recording.
@@ -615,8 +614,9 @@ def chosen_platform(data_dir, logger):
         logger.error(f"Cannot read {path}, the mower is chosen anew: {error}")
         return None
     name = note.get("platform") if isinstance(note, dict) else None
-    if not isinstance(name, str) or name not in layers.platforms():
-        logger.warning(f"{path} names {name!r}, which this image does not have ({', '.join(layers.platforms())}): "
+    names = layers.platforms()
+    if not isinstance(name, str) or name not in names:
+        logger.warning(f"{path} names {name!r}, which this image does not have ({', '.join(names)}): "
                        "the mower is chosen anew")
         return None
     return name
@@ -652,8 +652,7 @@ def start(context, platform):
         data_dir = context.launch_configurations.get("data_dir") or os.environ.get("MOWBITE_DATA_DIR", "")
         platform = chosen_platform(data_dir, launch.logging.get_logger("mowbite.launch")) if data_dir else None
         if not platform:
-            return [DeclareLaunchArgument("config", default_value=layers.STACK),
-                    DeclareLaunchArgument("extra_config", default_value=layers.STACK),
+            return [DeclareLaunchArgument("extra_config", default_value=layers.STACK),
                     *shared_arguments(data_dir), OpaqueFunction(function=choice_setup)]
     try:
         module = platform_module(platform)

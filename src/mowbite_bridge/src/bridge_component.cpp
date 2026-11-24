@@ -231,10 +231,7 @@ class BridgeNode : public rclcpp::Node {
                            declare_parameter("params_json", std::string("{}")),
                            declare_parameter("update_path", std::string()), nullptr,
                            declare_parameter("openmower_names", true),
-                           [this] {
-                             const auto text = ReadNote(kRollbackNote);
-                             return DataRollbackInfo(text ? &*text : nullptr);
-                           }}),
+                           [this] { return DataRollbackInfo(ReadNote(kRollbackNote)); }}),
         events_(JoinPath(data_dir_, "event_history"),
                 static_cast<std::size_t>(std::max<int64_t>(0, declare_parameter("event_history_days", 60))),
                 static_cast<std::uintmax_t>(std::max(0.0, declare_parameter("event_history_max_mb", 20.0)) * 1e6)),
