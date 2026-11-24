@@ -70,10 +70,10 @@ tron_mcu:
     # on hw/button, the logic releases as for emergency.reset. The MCU keeps stop until a clear frame (measured
     # 2026-11-15), so the gesture works only with stop_clear_period > 0: STOP cleared every stop_clear_period s during
     # the emergency, from stop_clear_delay s after the latch on; a held STOP stays shown. The MCU no longer locks itself
-    # then: before the first such clear the driver writes data_dir/stop-clear-mark, and a start with it latches. 0 until
-    # the gesture passed its measurement on this Tron.
+    # then: before the first such clear the driver writes data_dir/stop-clear-mark, and a start with it latches. Measured
+    # on the Tron 2026-11-24 (G37 stage B).
     stop_release: true
-    stop_clear_period: 0.0
+    stop_clear_period: 0.25
     stop_clear_delay: 1.5
     # Longest hw/silence of the setup program in s (0 offers none), taken only during a setup step. Without host the
     # MCU stopped the blade within 0.6 s (14.11.), the wheels only in some runs (above), and in 20 s it latched nothing
