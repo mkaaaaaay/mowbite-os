@@ -15,6 +15,8 @@ A case is the class Case of its file:
   blade(since)            (t, running) of every blade command the board got since then
   board_quiet(quiet)      optional: the board sends nothing while quiet; the run starts with it quiet
   quiet_bytes()           with board_quiet: the bytes the board got from the driver while quiet
+  blade_fault(fault)      optional: the blade motor reports a fault (inputs off); blade_fault_text is named in the
+                          refusal
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_driver_contract.py
 """
@@ -269,6 +271,30 @@ class TestDriverContract(unittest.TestCase):
         self.assertFalse(p.set_blade(True, lease_s=1.0, speed=150).success)
         time.sleep(0.3)
         self.assertFalse(p.status.blade_on)
+
+    def test_fa_blade_motor_fault(self):
+        if not hasattr(CASE, "blade_fault"):
+            self.skipTest("the board has no blade motor fault")
+        p = self.probe
+        self.assertTrue(p.set_blade(True, lease_s=p.capabilities.blade_lease_max_s).success)
+        self.assertTrue(p.wait_for(lambda p: p.status.blade_on, 2), "blade_on not reported")
+        CASE.blade_fault(True)
+        try:
+            off = p.wait_for(lambda p: not p.status.blade_on and p.status, 3)
+            self.assertTrue(off, "blade stays on with a motor fault")
+            self.assertEqual(off.blade_off_reason, HardwareStatus.BLADE_OFF_MOTOR_FAULT)
+            self.assertFalse(off.emergency)
+            r = p.set_blade(True, lease_s=1.0)
+            self.assertFalse(r.success)
+            self.assertEqual(r.emergency_reason, 0)
+            self.assertIn(CASE.blade_fault_text, r.message)
+        finally:
+            CASE.blade_fault(False)
+        deadline = time.monotonic() + 3
+        while not p.set_blade(True, lease_s=0.5).success:
+            self.assertLess(time.monotonic(), deadline, "blade refused after the fault cleared")
+            time.sleep(0.2)
+        self.assertTrue(p.set_blade(False).success)
 
     def test_g_host_emergency_blocks_blade_and_drive(self):
         p = self.probe

@@ -876,6 +876,33 @@ TEST_F(BladeControlTest, ReconnectEndsTheLease) {
   EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kReconnect);
 }
 
+TEST_F(BladeControlTest, AMotorFaultSwitchesTheBladeOffAndRefusesItUntilItClears) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(1.0);
+  control_.OnBladeMotorStatus(-6);
+  Run(2.0);
+  EXPECT_FALSE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.Status(now_).blade_off_reason, BladeOffReason::kMotorFault);
+  EXPECT_EQ(Times(IsBladeOff, 1.0).size(), 3u);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kMotorFault);
+  Run(2.5);
+  EXPECT_EQ(Times(IsBladeOn).size(), 1u);
+  control_.OnBladeMotorStatus(0);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  Run(3.0);
+  EXPECT_EQ(Times(IsBladeOn).size(), 2u);
+}
+
+TEST_F(BladeControlTest, RunningAndLockingAreNoFault) {
+  Run(0.5);
+  ASSERT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+  for (int status : {0, 1, 2}) control_.OnBladeMotorStatus(status);
+  Run(1.0);
+  EXPECT_TRUE(control_.Status(now_).blade_on);
+  EXPECT_EQ(control_.SetBlade(BladeOn(), now_), BladeResult::kOk);
+}
+
 TEST_F(ControlTest, ChargeOnlyOnDebouncedContact) {
   Run(0.1);
   control_.OnDockContactSample(true);

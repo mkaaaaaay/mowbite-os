@@ -48,6 +48,9 @@ Duties:
   `blade_height_control` the driver gives its limits and the height it cuts at for `height_mm` 0
   (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic sends at each start of the blade.
   Without it the logic always sends 0.
+- Blade motor fault: when your board reports a fault of the blade motor (stall, overload, over-current, ...), the
+  driver switches the blade off with `BLADE_OFF_MOTOR_FAULT` and refuses it, naming the fault, until a report
+  without one; no emergency.
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.
@@ -137,6 +140,7 @@ through `hw/*` alone:
 - `d` blade off when its lease runs out, told three times
 - `e` blade stays on while the lease is renewed
 - `f` blade requests outside lease, height or speed refused
+- `fa` a blade motor fault switches the blade off and refuses it until it clears (with `blade_fault` in the case)
 - `g` an emergency of the host blocks blade and drive
 - `h` stop and `i` lift stay latched until the release
 - `j` the host latches with its own bits only

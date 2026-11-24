@@ -114,6 +114,7 @@ enum class BladeOffReason : uint8_t {
   kBlocked = 3,
   kDock = 4,
   kReconnect = 5,
+  kMotorFault = 6,
 };
 
 struct BladeRequest {
@@ -162,7 +163,8 @@ enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBl
 // The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE, NO_SETUP; empty for kNone.
 const char* HostTestRefusalCode(HostTestRefusal refusal);
 
-enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld };
+enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld,
+                         kMotorFault };
 
 const char* BladeResultText(BladeResult result);
 
@@ -218,6 +220,9 @@ class McuControl {
   void OnImu(const ImuCounts& imu, double now);
   // Speed of the blade motor as the MCU reports it (motors frame, about once a second).
   void OnBladeRpm(int rpm, double now);
+  // Status code of the blade motor from the same frame: below zero is a fault, it switches the blade off and refuses
+  // it until a report without fault.
+  void OnBladeMotorStatus(int status);
   // Speed and turn rate as the MCU measures them (m/s, rad/s, about 100 Hz).
   void OnWheelSpeed(float linear, float angular, double now);
   // setup/motion of the setup program: a step that moves the wheels or the blade runs while it is active.
@@ -371,6 +376,8 @@ class McuControl {
   bool blade_turning_ = false;
   // The last blade report showed blade_still_rpm or more.
   bool blade_rpm_high_ = false;
+  // The last blade motor report showed a fault.
+  bool blade_fault_ = false;
 
   // When the stop frames began; empty while the wheels are commanded or once they stood after wheel_stop_time_s.
   std::optional<double> wheel_stop_s_;

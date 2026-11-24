@@ -15,6 +15,8 @@ class Case:
         self.files = layers.files("tron")
         self.cmd_vel_timeout = layers.parameters(self.files, "tron_mcu")["cmd_vel_timeout"]
         self.quiet = False
+        self.blade_status = 0
+        self.blade_fault_text = "stall (-6)"
 
     def board(self):
         return fake_tron(self.links, "--flags", self.flags, "--log", self.log, "--log-max-mb", "5")
@@ -26,10 +28,15 @@ class Case:
                                               "hold_file": self.hold_file}])
 
     def inputs(self, stop=False, lift=False):
-        write_json(self.flags, {"stop": int(stop), "lift": int(lift), "mcu_quiet": int(self.quiet)})
+        write_json(self.flags, {"stop": int(stop), "lift": int(lift), "mcu_quiet": int(self.quiet),
+                                "blade_status": self.blade_status})
 
     def board_quiet(self, quiet):
         self.quiet = quiet
+        self.inputs()
+
+    def blade_fault(self, fault):
+        self.blade_status = -6 if fault else 0
         self.inputs()
 
     def quiet_bytes(self):

@@ -40,7 +40,8 @@ tilt_roll or tilt_pitch is at least that far, as for an MCU that takes lift from
 counts only while tilt_roll is 0 and tilt_pitch at most 0 (level or the front up), as the Tron's MCU, which shows lift
 only with both front wheels off the ground. gyro_bias_dps overrides
 --gyro-bias-dps, e.g. a bias that changes with the temperature. battery_voltage (V, 24.5), battery_temperature and
-blade_temperature (degC, 30) go into the battery and the blade motor report.
+blade_temperature (degC, 30) go into the battery and the blade motor report, blade_status (0) is its status code
+(below zero a fault, e.g. -6 stall).
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
 charge current only after the host sent Charge 1: charge_current A (3.0; 0 for a contact that does not charge), none
 once battery_percentage (80) reaches 100. Its wheels leave the hollows of the station only at
@@ -841,7 +842,7 @@ def main():
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, "
                         "lift_tilt, lift_front_only, gyro_bias_dps, charge_current, battery_percentage, "
                         "battery_voltage, battery_temperature, blade_temperature, "
-                        "standstill_noise, fast_speed_hold, mcu_quiet")
+                        "standstill_noise, fast_speed_hold, mcu_quiet, blade_status")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -997,7 +998,7 @@ def main():
                     cutter_percent = 0
                 # 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", BLADE_RPM if cutter_percent else 0, 80 if cutter_percent else 0, 2450,
-                                     celsius(flags.get("blade_temperature", 30)), 0)
+                                     celsius(flags.get("blade_temperature", 30)), int(flags.get("blade_status", 0)))
                 if not quiet:
                     send(mcu.fd, encode([(FROM_MCU, 13, cutter + motors)]))
             if now >= next_gnss:

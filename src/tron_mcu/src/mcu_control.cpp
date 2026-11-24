@@ -26,6 +26,7 @@ const char* BladeResultText(BladeResult result) {
     case BladeResult::kBlocked: return "mower blocked";
     case BladeResult::kDocked: return "mower on the dock";
     case BladeResult::kHeld: return "mower held for an update";
+    case BladeResult::kMotorFault: return "blade motor fault";
   }
   return "unknown";
 }
@@ -103,6 +104,11 @@ void McuControl::OnBladeRpm(int rpm, double now) {
   LatchEmergency(kReasonMowerNotStopped);
   // A lost off frame is the likely cause, so the off frames go out again with every such report.
   StartRepeat(blade_off_repeat_, BladeOff(), now);
+}
+
+void McuControl::OnBladeMotorStatus(int status) {
+  blade_fault_ = status < 0;
+  if (blade_fault_) DropBlade(BladeOffReason::kMotorFault);
 }
 
 void McuControl::OnWheelSpeed(float linear, float angular, double now) {
@@ -199,6 +205,10 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32
   if (DockContact()) {
     DropBlade(BladeOffReason::kDock);
     return BladeResult::kDocked;
+  }
+  if (blade_fault_) {
+    DropBlade(BladeOffReason::kMotorFault);
+    return BladeResult::kMotorFault;
   }
   BladeSetting setting;
   setting.speed_percent = request.speed_percent ? request.speed_percent : config_.blade_speed_percent;

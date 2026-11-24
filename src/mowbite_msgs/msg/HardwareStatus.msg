@@ -70,6 +70,8 @@ uint8 BLADE_OFF_LEASE_EXPIRED = 2
 uint8 BLADE_OFF_BLOCKED = 3
 uint8 BLADE_OFF_DOCK = 4
 uint8 BLADE_OFF_RECONNECT = 5
+# The blade motor reported a fault (stall, overload, over-current, ...).
+uint8 BLADE_OFF_MOTOR_FAULT = 6
 # Blade commanded on, and why it went off the last time.
 bool blade_on
 uint8 blade_off_reason

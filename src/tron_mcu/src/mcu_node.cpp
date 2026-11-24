@@ -67,6 +67,21 @@ static_assert(static_cast<uint8_t>(tron::StopPress::kLong) == mowbite_msgs::msg:
 static_assert(static_cast<uint8_t>(tron::StopPress::kCanceled) == mowbite_msgs::msg::ButtonEvent::PRESS_CANCELED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(tron::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
+static_assert(static_cast<uint8_t>(tron::BladeOffReason::kMotorFault) == HardwareStatus::BLADE_OFF_MOTOR_FAULT);
+
+// Fault codes of the motor boards as the MCU reports them in the motors frame.
+const char* MotorFaultText(int status) {
+  switch (status) {
+    case -1: return "error";
+    case -2: return "over-current";
+    case -3: return "over-voltage";
+    case -4: return "under-voltage";
+    case -5: return "over-heat";
+    case -6: return "stall";
+    case -7: return "overload";
+  }
+  return "unknown";
+}
 
 const char* BladeOffText(tron::BladeOffReason reason) {
   switch (reason) {
@@ -76,6 +91,7 @@ const char* BladeOffText(tron::BladeOffReason reason) {
     case tron::BladeOffReason::kBlocked: return "blocked";
     case tron::BladeOffReason::kDock: return "dock contact";
     case tron::BladeOffReason::kReconnect: return "port reopened";
+    case tron::BladeOffReason::kMotorFault: return "blade motor fault";
   }
   return "unknown";
 }
@@ -673,9 +689,14 @@ class McuNode : public rclcpp::Node {
         break;
       case Module::kMotors:
         if (auto motors = tron::DecodeMotors(packet.payload)) {
+          if (motors->cutter.status < 0 && motors_.cutter.status >= 0) {
+            RCLCPP_ERROR(get_logger(), "Blade motor fault: %s (%d), blade off and refused until the fault clears",
+                         MotorFaultText(motors->cutter.status), motors->cutter.status);
+          }
           motors_ = *motors;
           motors_s_ = now;
           control_.Call<&C::OnBladeRpm>(motors->cutter.rpm, now);
+          control_.Call<&C::OnBladeMotorStatus>(motors->cutter.status);
         }
         break;
       case Module::kVersion:
@@ -982,6 +1003,10 @@ class McuNode : public rclcpp::Node {
     auto result = control_.Call<&C::SetBlade>(request, MonotonicSeconds(), &res.emergency_reason);
     res.success = result == tron::BladeResult::kOk;
     res.message = tron::BladeResultText(result);
+    if (result == tron::BladeResult::kMotorFault) {
+      const int status = motors_.cutter.status;
+      res.message += std::string(": ") + MotorFaultText(status) + " (" + std::to_string(status) + ")";
+    }
     if (!res.success) {
       RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000, "Blade request refused: %s", res.message.c_str());
     }
