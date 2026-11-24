@@ -304,6 +304,34 @@ class TestBladeArguments(unittest.TestCase):
         self.assertIn("not for the Tron", str(refused.exception.code))
 
 
+class TestCuttingHeight(unittest.TestCase):
+    def test_the_deck_times_are_asked_after_the_run_with_the_blade_off(self):
+        events = []
+        t = m.TronMeasurement.__new__(m.TronMeasurement)
+        t.ask = lambda text: True
+        t.ready = t.mark = lambda *a: None
+        t.blade_turning = lambda *a: events.append("on")
+        t.blade_run = lambda step, percent, s, until, height_mm: events.append(f"on {height_mm}")
+        t.blade_stands = lambda *a: 0.2
+        t.blade_still_rpm = 300
+        t.mower = types.SimpleNamespace(set_blade=lambda on: events.append("off"))
+        t.person = types.SimpleNamespace(number=lambda text: events.append("asked") or 2.0)
+        t.rec = types.SimpleNamespace(write=lambda kind, **r: events.append((r["way"], r["from_mm"], r["to_mm"],
+                                                                             r["moved_s"])))
+        t.height_runs("T10")
+        # A question between two changes would let the lease run out: none while the blade is on.
+        on = False
+        for e in events:
+            if isinstance(e, str) and e.startswith("on"):
+                on = True
+            elif e == "off":
+                on = False
+            self.assertFalse(on and e == "asked", events)
+        self.assertEqual([e for e in events if isinstance(e, tuple)],
+                         [("on", 90, 30, 2.0), ("off", 30, 90, 2.0), ("on", 90, 60, 2.0), ("on", 60, 30, 2.0),
+                          ("on", 30, 90, 2.0), ("off", 90, 90, 2.0)])
+
+
 class TestLiftItems(unittest.TestCase):
     def test_only_the_front_past_the_tilt_of_t71(self):
         items = m.lift_blade_items({"front": 37.6, "rear": 41.0, "left": 39.4, "right": 40.0}, {"rear"}, 3)

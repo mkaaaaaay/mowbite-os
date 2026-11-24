@@ -2788,23 +2788,25 @@ class TronMeasurement(Measurement):
         if self.ask(f"{step}.1 blade motor {text}"):
             self.ready(step)
             self.mark(f"{step}.1", text)
-            self.height_change(f"{step}.1", TRON_BLADE_HEIGHT_MM, HEIGHT_LOW_MM)
-            self.height_off(f"{step}.1", HEIGHT_LOW_MM)
+            changes = [self.height_change(f"{step}.1", TRON_BLADE_HEIGHT_MM, HEIGHT_LOW_MM)]
+            changes.append(self.height_off(f"{step}.1", HEIGHT_LOW_MM))
+            self.heights_moved(changes)
         heights = ", ".join(str(h) for h in HEIGHT_WHILE_TURNING)
         text = f"on at {TRON_BLADE_HEIGHT_MM} mm, then {heights} mm while it turns, {HEIGHT_RUN_S:.0f} s each, then off"
         if self.ask(f"{step}.2 blade motor {text}"):
             self.ready(step)
             self.mark(f"{step}.2", text)
             self.blade_turning(f"{step}.2", HEIGHT_BLADE_PERCENT)
-            last = TRON_BLADE_HEIGHT_MM
+            changes, last = [], TRON_BLADE_HEIGHT_MM
             for height in HEIGHT_WHILE_TURNING:
-                self.height_change(f"{step}.2", last, height)
+                changes.append(self.height_change(f"{step}.2", last, height))
                 last = height
-            self.height_off(f"{step}.2", last)
+            changes.append(self.height_off(f"{step}.2", last))
+            self.heights_moved(changes)
 
     def height_change(self, step, from_mm, to_mm):
-        """The blade on at `to_mm` for HEIGHT_RUN_S (a new on frame), the motor's rpm and status meanwhile; the person
-        tells how long the deck moved."""
+        """The blade on at `to_mm` for HEIGHT_RUN_S (a new on frame), the motor's rpm and status meanwhile. Nothing
+        is asked here: a question between two changes would let the lease run out and the blade stop."""
         rpms, faults = [], set()
 
         def sample():
@@ -2821,20 +2823,23 @@ class TronMeasurement(Measurement):
         stopped = bool(turning) and min(rpms[turning[0]:]) < self.blade_still_rpm
         print(f"     {from_mm} -> {to_mm} mm: blade motor {min(rpms, default=None)}..{max(rpms, default=None)} rpm"
               f"{', stopped meanwhile' if stopped else ''}{f', faults {sorted(faults)}' if faults else ''}")
-        moved = self.person.number(f"s the deck took from {from_mm} to {to_mm} mm (0: it did not move)")
-        self.rec.write("height", step=step, way="on", from_mm=from_mm, to_mm=to_mm, since=since,
-                       rpm_min=min(rpms, default=None), rpm_max=max(rpms, default=None), stopped=stopped,
-                       faults=sorted(faults), moved_s=moved)
+        return dict(step=step, way="on", from_mm=from_mm, to_mm=to_mm, since=since, rpm_min=min(rpms, default=None),
+                    rpm_max=max(rpms, default=None), stopped=stopped, faults=sorted(faults))
 
     def height_off(self, step, from_mm):
         print("     sending hw/blade off")
         since = time.monotonic()
         self.mower.set_blade(False)
         still = self.blade_stands(step, since, "the off request")
-        moved = self.person.number(f"s the deck took from {from_mm} to {TRON_BLADE_HEIGHT_MM} mm after the off "
-                                   "(0: it did not move)")
-        self.rec.write("height", step=step, way="off", from_mm=from_mm, to_mm=TRON_BLADE_HEIGHT_MM, since=since,
-                       still_s=still, moved_s=moved)
+        return dict(step=step, way="off", from_mm=from_mm, to_mm=TRON_BLADE_HEIGHT_MM, since=since, still_s=still)
+
+    def heights_moved(self, changes):
+        """After the run, with the blade off: how long the deck took for each change (from the video)."""
+        for change in changes:
+            after = " after the off" if change["way"] == "off" else ""
+            change["moved_s"] = self.person.number(f"s the deck took from {change['from_mm']} to {change['to_mm']} "
+                                                   f"mm{after} (0: it did not move)")
+            self.rec.write("height", **change)
 
     STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8, "T9": t9, "T10": t10}
 
