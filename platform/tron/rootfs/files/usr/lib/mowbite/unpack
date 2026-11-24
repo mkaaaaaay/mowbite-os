@@ -1,0 +1,85 @@
+#!/usr/bin/python3 -I
+"""The pack the installer wrote into the reserved file: check it, unpack it over /, then overwrite the whole file
+with zeros and the empty mark, so the Wi-Fi keys in it do not stay. A pack that fails a check is left as it is and
+nothing is unpacked; the installer can write the system again.
+  unpack [pack file] [root]
+Layout: a 512-byte header ("MOWBITE-PACK 1", "len <bytes>", "sha256 <hex>"), a ustar archive, zeros.
+"""
+import hashlib
+import io
+import os
+import sys
+import tarfile
+
+BLOCK = 512
+MAGIC = b"MOWBITE-PACK 1\n"
+EMPTY = b"MOWBITE-PACK-EMPTY 1\n"
+# What the installer puts in: vendor parts, host name, Wi-Fi profiles, bundles for the update inbox.
+ALLOWED = ("etc/", "usr/", "vendor/", "userdata/mowbite-update/inbox/")
+
+
+def header(block):
+    fields = {}
+    for line in block[len(MAGIC):].rstrip(b"\0").decode("ascii").splitlines():
+        key, _, value = line.partition(" ")
+        fields[key] = value
+    return int(fields["len"]), fields["sha256"]
+
+
+def check(archive):
+    """Names outside ALLOWED, or None when the archive may be unpacked."""
+    with tarfile.open(fileobj=io.BytesIO(archive)) as t:
+        bad = [m.name for m in t.getmembers() if not m.name.startswith(ALLOWED) or ".." in m.name.split("/")]
+    return bad or None
+
+
+def clear(f, size):
+    f.seek(0)
+    zeros = bytes(1 << 20)
+    left = size
+    while left:
+        left -= f.write(zeros[:min(left, len(zeros))])
+    f.seek(0)
+    f.write(EMPTY)
+    f.flush()
+    os.fsync(f.fileno())
+
+
+def main(path="/var/lib/mowbite/pack", root="/"):
+    with open(path, "r+b") as f:
+        first = f.read(BLOCK)
+        if first.startswith(EMPTY):
+            return 0
+        if not first.startswith(MAGIC):
+            print(f"{path}: neither a pack nor the empty mark, left as it is")
+            return 0
+        size = os.fstat(f.fileno()).st_size
+        try:
+            length, want = header(first)
+        except (KeyError, ValueError, UnicodeDecodeError):
+            print(f"{path}: unreadable pack header, left as it is")
+            return 0
+        if BLOCK + length > size:
+            print(f"{path}: pack longer than its file, left as it is")
+            return 0
+        archive = f.read(length)
+        if hashlib.sha256(archive).hexdigest() != want:
+            print(f"{path}: pack does not match its sha256, left as it is")
+            return 0
+        bad = check(archive)
+        if bad:
+            print(f"{path}: pack has entries outside the allowed places: {bad[:5]}, left as it is")
+            return 0
+        with tarfile.open(fileobj=io.BytesIO(archive)) as t:
+            t.extractall(root, filter="data")
+        os.sync()
+        if root == "/":
+            with open("/etc/hostname") as h, open("/proc/sys/kernel/hostname", "w") as k:
+                k.write(h.read().strip())
+        clear(f, size)
+        print(f"{path}: unpacked {length} bytes and cleared")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(*sys.argv[1:]))

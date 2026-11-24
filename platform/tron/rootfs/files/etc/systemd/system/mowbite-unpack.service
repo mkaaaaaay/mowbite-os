@@ -1,0 +1,12 @@
+[Unit]
+Description=Pack of this Tron from the installer, on the first boot
+ConditionPathExists=/var/lib/mowbite/pack
+RequiresMountsFor=/userdata /var/lib/mowbite
+Before=NetworkManager.service ssh.service avahi-daemon.service mowbite-host.service mowbite-os.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/mowbite/unpack
+
+[Install]
+WantedBy=multi-user.target

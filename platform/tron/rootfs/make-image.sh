@@ -6,8 +6,16 @@
 # holds vendor files and secrets: it stays in the owner's encrypted storage, never in a repo, an upload or a release.
 #   make-image.sh <base .tar> <vendor rootfs dir> <host key dir> <root key .pub> <new .img> [root password hash]
 # "-" for the vendor rootfs or the host keys leaves them out (probe image for QEMU, keys made on the first boot).
+#   make-image.sh --installer <base .tar> <new .img>
+# The base image of the installer: no vendor parts, keys or password, a reserved pack file (/var/lib/mowbite/pack,
+# 256 MiB, unpacked by mowbite-unpack on the first boot) and <new .img>.json with the byte ranges it covers.
 # Prints no secrets; work files lie next to the image and are removed at the end.
 set -euo pipefail
+INSTALLER=
+if [ "${1:-}" = --installer ]; then
+    INSTALLER=1
+    set -- "${2:?base .tar of build-base.sh}" - - - "${3:?new .img}"
+fi
 BASE=${1:?base .tar of build-base.sh}
 VENDOR=${2:?directory with the vendor rootfs}
 HOSTKEYS=${3:?directory with ssh_host_*_key and .pub}
@@ -22,10 +30,13 @@ FEATURES=none,has_journal,ext_attr,resize_inode,dir_index,filetype,extent,64bit,
 MKE2FS=/usr/sbin/mke2fs
 
 test ! -e "$OUT" || { echo "$OUT exists" >&2; exit 1; }
-test -f "$BASE" && test -f "$ROOTKEY"
+test -f "$BASE"
 test "$VENDOR" = - || test -d "$VENDOR"
 test "$HOSTKEYS" = - || test -d "$HOSTKEYS"
-grep -q '^ssh-' "$ROOTKEY" || { echo "$ROOTKEY is no public key" >&2; exit 1; }
+if [ -z "$INSTALLER" ]; then
+    test -f "$ROOTKEY"
+    grep -q '^ssh-' "$ROOTKEY" || { echo "$ROOTKEY is no public key" >&2; exit 1; }
+fi
 if [ -n "$ROOTHASH" ]; then
     test "$(wc -l < "$ROOTHASH")" = 1 && grep -qE '^\$(6|y)\$[^:[:space:]]+$' "$ROOTHASH" \
         || { echo "$ROOTHASH is no sha512 or yescrypt hash" >&2; exit 1; }
@@ -93,7 +104,7 @@ fi
 
 # Host keys, key for root and WLAN profiles; the directories they go to exist in the base, apart from /root/.ssh.
 mkdir -p "$work/p/etc/ssh" "$work/p/root/.ssh" "$work/p/etc/NetworkManager/system-connections"
-private=(./root/.ssh ./root/.ssh/authorized_keys)
+private=()
 for k in "$HOSTKEYS"/ssh_host_*_key; do
     test "$HOSTKEYS" != - || break
     n=$(basename "$k")
@@ -101,8 +112,11 @@ for k in "$HOSTKEYS"/ssh_host_*_key; do
     install -m 644 "$k.pub" "$work/p/etc/ssh/$n.pub"
     private+=("./etc/ssh/$n" "./etc/ssh/$n.pub")
 done
-install -m 600 "$ROOTKEY" "$work/p/root/.ssh/authorized_keys"
-chmod 700 "$work/p/root/.ssh"
+if [ -z "$INSTALLER" ]; then
+    install -m 600 "$ROOTKEY" "$work/p/root/.ssh/authorized_keys"
+    chmod 700 "$work/p/root/.ssh"
+    private+=(./root/.ssh ./root/.ssh/authorized_keys)
+fi
 for c in "$VENDOR"/etc/NetworkManager/system-connections/*; do
     test "$VENDOR" != - && test -f "$c" || continue
     n=$(basename "$c")
@@ -117,7 +131,9 @@ for c in "$VENDOR"/etc/NetworkManager/system-connections/*; do
 done
 grep -qxF etc/NetworkManager/system-connections "$work/base.list"
 grep -qxF root "$work/base.list"
-tar -C "$work/p" -cf "$work/private.tar" --owner=0 --group=0 --numeric-owner --no-recursion "${private[@]}"
+if [ ${#private[@]} -gt 0 ]; then
+    tar -C "$work/p" -cf "$work/private.tar" --owner=0 --group=0 --numeric-owner --no-recursion "${private[@]}"
+fi
 # The password hash goes into root's line of the base's shadow, which keeps its group (shadow) and mode.
 if [ -n "$ROOTHASH" ]; then
     mkdir -p "$work/s"
@@ -135,10 +151,58 @@ tar -Af "$work/all.tar" "$work/files.tar"
 if [ -e "$work/vendor.tar" ]; then
     tar -Af "$work/all.tar" "$work/vendor.tar"
 fi
-tar -Af "$work/all.tar" "$work/private.tar"
+if [ -e "$work/private.tar" ]; then
+    tar -Af "$work/all.tar" "$work/private.tar"
+fi
+PACK=var/lib/mowbite/pack
+PACK_LEN=268435456
+if [ -n "$INSTALLER" ]; then
+    # Filled with the empty mark instead of zeros: mke2fs leaves zero blocks out, the pack needs them all.
+    mkdir -p "$work/k/var/lib/mowbite"
+    python3 -I - "$HERE/files/usr/lib/mowbite/unpack" "$work/k/$PACK" "$PACK_LEN" <<'PY'
+import importlib.machinery, importlib.util, sys
+loader = importlib.machinery.SourceFileLoader("unpack", sys.argv[1])
+unpack = importlib.util.module_from_spec(importlib.util.spec_from_loader("unpack", loader))
+loader.exec_module(unpack)
+empty = unpack.EMPTY
+n = int(sys.argv[3])
+with open(sys.argv[2], "wb") as f:
+    f.write((empty * (n // len(empty) + 1))[:n])
+PY
+    chmod 755 "$work/k/var" "$work/k/var/lib" "$work/k/var/lib/mowbite"
+    chmod 600 "$work/k/$PACK"
+    tar -C "$work/k" -cf "$work/pack.tar" --owner=0 --group=0 --numeric-owner --no-recursion ./var/lib/mowbite \
+        "./$PACK"
+    tar -Af "$work/all.tar" "$work/pack.tar"
+fi
 
 truncate -s "$SIZE" "$OUT"
 "$MKE2FS" -q -F -t ext4 -O "$FEATURES" -b 4096 -I 256 -E root_owner=0:0 -d "$work/all.tar" "$OUT" $((SIZE / 4096))
 test "$(stat -c %s "$OUT")" -eq "$SIZE"
+if [ -n "$INSTALLER" ]; then
+    # Where the pack lies in the image: its runs of blocks in file order, as byte offset and length.
+    /usr/sbin/debugfs -R "stat /$PACK" "$OUT" 2>/dev/null > "$work/pack.stat"
+    python3 -I - "$work/pack.stat" "$OUT" "$BASE" "$PACK_LEN" > "$OUT.json" <<'PY'
+import hashlib, json, os, re, sys
+stat, out, base, length = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+pieces, next_block = [], 0
+for a, b, p, q in (tuple(map(int, m)) for m in re.findall(r"\((\d+)-(\d+)\):(\d+)-(\d+)", open(stat).read())):
+    assert a == next_block and q - p == b - a, f"pack extents out of order: {a}-{b}:{p}-{q}"
+    next_block = b + 1
+    if pieces and pieces[-1][0] + pieces[-1][1] == p * 4096:
+        pieces[-1][1] += (q - p + 1) * 4096
+    else:
+        pieces.append([p * 4096, (q - p + 1) * 4096])
+assert next_block * 4096 == length == sum(n for _, n in pieces), f"pack covers {next_block} blocks"
+h = hashlib.sha256()
+with open(out, "rb") as f:
+    while chunk := f.read(8 << 20):
+        h.update(chunk)
+print(json.dumps({"schema": 1, "platform": "tron", "base": os.path.basename(base).removesuffix(".tar"),
+                  "file": os.path.basename(out), "size": os.path.getsize(out), "sha256": h.hexdigest(),
+                  "pack": pieces}, indent=2))
+PY
+fi
 echo "image $OUT: ${#items[@]} vendor items, ${#parents[@]} new parent directories," \
-     "$(( ${#private[@]} - 2 )) host key and WLAN files, root password: $([ -n "$ROOTHASH" ] && echo set || echo none)"
+     "${#private[@]} key and WLAN files, root password: $([ -n "$ROOTHASH" ] && echo set || echo none)," \
+     "pack: $([ -n "$INSTALLER" ] && echo "$OUT.json" || echo none)"

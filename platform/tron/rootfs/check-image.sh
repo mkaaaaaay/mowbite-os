@@ -52,8 +52,36 @@ test "$(stat_of /usr/lib/mowbite/crash)" = "0755 0:0"; result "crash script 0755
           exit !((root == "set" || root == "none") && !others) }'
 result "root password hashed or locked, no other password" $?
 test "$(stat_of /etc/shadow)" = "0640 0:42"; result "/etc/shadow 0640 root:shadow" $?
-test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
-test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
+if [ -e "$IMG.json" ]; then
+    # Base image of the installer: no key for root, the pack file empty at the place its .json names.
+    ! "$DEBUGFS" -c -R "stat /root/.ssh/authorized_keys" "$IMG" 2>&1 | grep -q '^Inode:'
+    result "no authorized_keys" $?
+    test "$(stat_of /var/lib/mowbite/pack)" = "0600 0:0"; result "pack 0600 root" $?
+    python3 -I - "$IMG" "$IMG.json" "$HERE/files/usr/lib/mowbite/unpack" <<'PY'
+import hashlib, importlib.machinery, importlib.util, json, os, sys
+img, meta, script = sys.argv[1:4]
+loader = importlib.machinery.SourceFileLoader("unpack", script)
+unpack = importlib.util.module_from_spec(importlib.util.spec_from_loader("unpack", loader))
+loader.exec_module(unpack)
+j = json.load(open(meta))
+assert j["size"] == os.path.getsize(img) and j["file"] == os.path.basename(img)
+h = hashlib.sha256()
+with open(img, "rb") as f:
+    while chunk := f.read(8 << 20):
+        h.update(chunk)
+    assert h.hexdigest() == j["sha256"]
+    # The pieces in order hold the file as make-image wrote it: the empty mark over and over.
+    got = b""
+    for o, n in j["pack"]:
+        f.seek(o)
+        got += f.read(n)
+    assert got == (unpack.EMPTY * (len(got) // len(unpack.EMPTY) + 1))[:len(got)] and len(got) == 268435456
+PY
+    result "base .json: size, sha256 and the empty pack in its ranges" $?
+else
+    test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
+    test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
+fi
 for d in /etc/ssh /etc/NetworkManager/system-connections; do
     "$DEBUGFS" -c -R "ls -p $d" "$IMG" 2>/dev/null | awk -F/ -v d="$d" '
         $6 != "" && $6 != "." && $6 != ".." && ($6 ~ /_key$/ || d ~ /system-connections/) {
