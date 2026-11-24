@@ -143,6 +143,16 @@ def sim_files(work):
             os.path.join(work, "data"))
 
 
+def schedule_allowed(work):
+    """sim.yaml with the schedule allowed for this platform, written into work, for extra_config of sim_stack."""
+    path = os.path.join(work, "schedule.yaml")
+    with open(os.path.join(get_package_share_directory("mowbite_sim"), "config", "sim.yaml")) as f:
+        text = f.read()
+    with open(path, "w") as f:
+        f.write(text + "\nmowbite_schedule:\n  ros__parameters:\n    allowed: true\n")
+    return path
+
+
 def without_sunset(data_dir, **settings):
     """Settings of params.set in data_dir with dock_at_sunset 0 and the given ones: a run in the simulation keeps mowing
     past the real sunset at its datum, which falls into working hours in winter."""

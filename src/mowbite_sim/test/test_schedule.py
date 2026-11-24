@@ -20,7 +20,6 @@ import unittest
 import launch
 import launch_testing.actions
 import rclpy
-from ament_index_python.packages import get_package_share_directory
 from launch.actions import TimerAction
 from mowbite_msgs.msg import ClockStatus, HardwareStatus, MapStatus, MqttPublish, RobotPose, RobotState
 from mowbite_msgs.msg import RpcError, RpcRequest, RpcResponse
@@ -29,12 +28,11 @@ from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (LATCHED, SimProbe, container_pid, mosquitto, mqtt_connect, read_json,  # noqa: E402
-                        restarted, sim_files, sim_stack, wait_until)
+                        restarted, schedule_allowed, sim_files, sim_stack, wait_until)
 
 MQTT_PORT = 18877
 WORK = tempfile.mkdtemp(prefix="mowbite_schedule_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
-CONFIG = os.path.join(WORK, "schedule.yaml")
 READY = "mowbite/schedule/ready"
 DAYS = [1, 2, 3, 4, 5, 6, 7]
 # stack.py: the wait before the container starts again.
@@ -52,14 +50,9 @@ GARDEN = {"areas": [{"id": "yard", "properties": {"type": "nav", "name": "Yard"}
 
 
 def generate_test_description():
-    # sim.yaml with the schedule allowed for this platform.
-    with open(os.path.join(get_package_share_directory("mowbite_sim"), "config", "sim.yaml")) as f:
-        text = f.read()
-    with open(CONFIG, "w") as f:
-        f.write(text + "\nmowbite_schedule:\n  ros__parameters:\n    allowed: true\n")
     return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT),
                                      TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT,
-                                                                                extra_config=CONFIG)]),
+                                                                                extra_config=schedule_allowed(WORK))]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 

@@ -19,7 +19,8 @@ from launch.actions import TimerAction
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import TRON_SPEED as SPEED  # noqa: E402
-from sim_common import EXIT_CODES, MqttBroker, mosquitto, sim_files, sim_stack, wheel_speeds  # noqa: E402
+from sim_common import (EXIT_CODES, MqttBroker, mosquitto, schedule_allowed, sim_files, sim_stack,  # noqa: E402
+                        wheel_speeds)
 
 MQTT_PORT = 18855
 WORK = tempfile.mkdtemp(prefix="mowbite_os_data_rollback_")
@@ -35,7 +36,8 @@ def generate_test_description():
     with open(NOTE_FILE, "w") as f:
         json.dump(NOTE, f)
     return launch.LaunchDescription([mosquitto(WORK, MQTT_PORT),
-                                     TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT)]),
+                                     TimerAction(period=1.0, actions=[sim_stack(WORK, MQTT_PORT,
+                                                                                extra_config=schedule_allowed(WORK))]),
                                      launch_testing.actions.ReadyToTest()]), {}
 
 

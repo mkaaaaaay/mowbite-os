@@ -21,7 +21,7 @@ import launch
 import launch_testing.actions
 import rclpy
 from launch.actions import ExecuteProcess
-from mowbite_msgs.msg import HardwareStatus, RobotState
+from mowbite_msgs.msg import HardwareStatus, RobotState, RpcError, RpcRequest, RpcResponse
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import SimProbe, journal_dir, loopback_group, sim_files, stop_process  # noqa: E402
@@ -66,6 +66,10 @@ class Probe(SimProbe):
         self.status = None
         self.node.create_subscription(RobotState, "bridge/robot_state", self._set("robot"), 10)
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
+        # setup.* straight to the setup node, as the bridge hands them on.
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.start()
 
     def state(self):
