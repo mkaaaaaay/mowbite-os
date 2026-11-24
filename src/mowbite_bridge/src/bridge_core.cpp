@@ -147,6 +147,8 @@ void BridgeCore::Connected(int mqtt_version) {
     const auto text = kept_.find(topic);
     if (text != kept_.end()) out_.mqtt.push_back({topic, text->second, true, 1, std::nullopt});
   }
+  for (const auto& topic : cleared_) out_.mqtt.push_back({topic, "", true, 1, std::nullopt});
+  cleared_.clear();
   // BOOTED once per start, after the first connect.
   if (booted_) {
     out_.mqtt.push_back({kEventsTopic, *booted_, false, 0, std::nullopt});
@@ -531,10 +533,12 @@ void BridgeCore::SendResult(const Reply& to, const Json& id, const std::string& 
 }
 
 void BridgeCore::Keep(const std::string& topic, const std::string& payload) {
-  // An empty retained text clears the broker's copy; there is nothing to send again after that.
+  // An empty retained text clears the broker's copy, once; without a connection at the next connect.
   if (payload.empty()) {
     kept_.erase(topic);
+    if (!connected_) cleared_.insert(topic);
   } else {
+    cleared_.erase(topic);
     if (std::find(kept_order_.begin(), kept_order_.end(), topic) == kept_order_.end()) kept_order_.push_back(topic);
     kept_[topic] = payload;
   }

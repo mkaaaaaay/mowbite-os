@@ -134,6 +134,29 @@ TEST(BridgeCoreConnection, AnEmptyRetainedTextClearsAndIsNotSentAgain) {
   EXPECT_FALSE(Find(core.Take(), "map_overlay/json"));
 }
 
+TEST(BridgeCoreConnection, AnEmptyRetainedTextBeforeTheConnectClearsAtTheConnect) {
+  BridgeCore core({});
+  core.OnPublish("mowbite/schedule/ready", "", true);
+  core.OnPublish("map_overlay/json", "x", true);
+  core.OnPublish("map_overlay/json", "", true);
+  core.OnPublish("other/json", "", true);
+  core.OnPublish("other/json", "y", true);
+  core.Connected();
+  const Outbox out = core.Take();
+  ASSERT_TRUE(Find(out, "mowbite/schedule/ready"));
+  EXPECT_EQ(Find(out, "mowbite/schedule/ready")->payload, "");
+  EXPECT_TRUE(Find(out, "mowbite/schedule/ready")->retain);
+  ASSERT_TRUE(Find(out, "map_overlay/json"));
+  EXPECT_EQ(Find(out, "map_overlay/json")->payload, "");
+  ASSERT_TRUE(Find(out, "other/json"));
+  EXPECT_EQ(Find(out, "other/json")->payload, "y");
+  core.ConnectionLost();
+  core.Connected();
+  const Outbox again = core.Take();
+  EXPECT_FALSE(Find(again, "mowbite/schedule/ready"));
+  EXPECT_FALSE(Find(again, "map_overlay/json"));
+}
+
 // B18 (start and end), E3 (ii)
 TEST(BridgeCoreConnection, BootedIntoTheSinkAtOnceAndLiveOnceAfterTheFirstConnect) {
   BridgeCore core({});

@@ -256,6 +256,8 @@ class BridgeCore {
   // Retained texts in the order they first came, sent again after each connect.
   std::vector<std::string> kept_order_;
   std::map<std::string, std::string> kept_;
+  // Retained texts cleared while not connected, cleared at the broker at the next connect.
+  std::set<std::string> cleared_;
   std::optional<std::string> booted_;
   // The calls at the nodes by their number: the client's id, the method, since when and where the answer goes; the
   // node gets tag_ + number.
