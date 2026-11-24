@@ -2,6 +2,8 @@
 Description=mowbite-host: updates of MowBite OS and how it is
 After=mowbite-update-recover.service mosquitto.service network.target
 Wants=mosquitto.service
+# Inbox, downloads and recoveries live on /userdata, never under its empty mount point in the rootfs.
+RequiresMountsFor=/userdata
 
 [Service]
 Type=notify

@@ -1,23 +1,37 @@
 #!/usr/bin/python3 -I
 """The pack the installer wrote into the reserved file: check it, unpack it over /, then overwrite the whole file
-with zeros and the empty mark, so the Wi-Fi keys in it do not stay. A pack that fails a check is left as it is and
-nothing is unpacked; the installer can write the system again.
+with zeros and the empty mark, remove it and trim, so the Wi-Fi keys in it do not stay. A pack that fails a check is
+left as it is and nothing is unpacked; the installer can write the system again.
   unpack system|all [pack file] [root]
 system runs before udev and module loading and unpacks all but userdata/ (kernel modules, firmware, Wi-Fi profiles);
 all runs once /userdata is mounted, unpacks everything again and clears the file.
 Layout: a 512-byte header ("MOWBITE-PACK 1", "len <bytes>", "sha256 <hex>"), a ustar archive, zeros.
+What the archive may hold, nothing else (no entries for the folders above these):
+- the vendor parts of /usr/lib/mowbite/vendor-files and everything below them; links only relative and pointing into
+  a vendor part,
+- the files etc/hostname and etc/mowbite/install-id,
+- plain files directly in etc/NetworkManager/system-connections/ (*.nmconnection) and userdata/mowbite-update/inbox/.
 """
 import hashlib
 import io
 import os
+import posixpath
+import subprocess
 import sys
 import tarfile
 
 BLOCK = 512
 MAGIC = b"MOWBITE-PACK 1\n"
 EMPTY = b"MOWBITE-PACK-EMPTY 1\n"
-# What the installer puts in: vendor parts, host name, Wi-Fi profiles, bundles for the update inbox.
-ALLOWED = ("etc/", "usr/", "vendor/", "userdata/mowbite-update/inbox/")
+VENDOR_FILES = os.path.join(os.path.dirname(os.path.realpath(__file__)), "vendor-files")
+FILES = ("etc/hostname", "etc/mowbite/install-id")
+CONNECTIONS = "etc/NetworkManager/system-connections"
+INBOX = "userdata/mowbite-update/inbox"
+
+
+def vendor_parts(path=VENDOR_FILES):
+    with open(path) as f:
+        return [line.split("#")[0].strip().strip("/") for line in f if line.split("#")[0].strip()]
 
 
 def header(block):
@@ -28,22 +42,51 @@ def header(block):
     return int(fields["len"]), fields["sha256"]
 
 
-def check(archive, root):
-    """Entries that may not be unpacked (outside ALLOWED or refused by the data filter), or None."""
+def in_part(path, parts):
+    return any(path == p or path.startswith(p + "/") for p in parts)
+
+
+def refusal(m, parts):
+    """Why the entry m may not be unpacked, or None."""
+    name = m.name
+    if name.startswith("/") or name != posixpath.normpath(name) or ".." in name.split("/"):
+        return "not a plain relative path"
+    if in_part(name, parts):
+        if m.isfile() or m.isdir():
+            return None
+        if m.issym():
+            to = posixpath.normpath(posixpath.join(posixpath.dirname(name), m.linkname))
+            if m.linkname.startswith("/") or to.startswith("..") or not in_part(to, parts):
+                return f"link to {m.linkname} leaves the vendor parts"
+            return None
+        return "neither file, folder nor link"
+    if name in FILES:
+        return None if m.isfile() else "not a plain file"
+    folder, base = posixpath.split(name)
+    if folder == CONNECTIONS and base.endswith(".nmconnection") or folder == INBOX:
+        return None if m.isfile() else "not a plain file"
+    return "outside the allowed places"
+
+
+def check(archive, root, parts):
+    """Entries that may not be unpacked (refused by the list above or by the data filter), or None."""
     bad = []
     with tarfile.open(fileobj=io.BytesIO(archive)) as t:
         for m in t.getmembers():
-            if not m.name.startswith(ALLOWED) or ".." in m.name.split("/"):
-                bad.append(m.name)
-                continue
-            try:
-                tarfile.data_filter(m, root)
-            except tarfile.FilterError as e:
-                bad.append(f"{m.name} ({e})")
+            why = refusal(m, parts)
+            if why is None:
+                try:
+                    tarfile.data_filter(m, root)
+                except tarfile.FilterError as e:
+                    why = str(e)
+            if why:
+                bad.append(f"{m.name} ({why})")
     return bad or None
 
 
-def clear(f, size):
+def clear(f, size, path, trim):
+    """Zeros and the empty mark over the whole file, then the file goes and, on the mower, the free blocks are
+    trimmed."""
     f.seek(0)
     zeros = bytes(1 << 20)
     left = size
@@ -53,9 +96,26 @@ def clear(f, size):
     f.write(EMPTY)
     f.flush()
     os.fsync(f.fileno())
+    os.unlink(path)
+    if not trim:
+        return
+    try:
+        subprocess.run(["fstrim", os.path.dirname(path) or "/"], check=False, timeout=600)
+    except (OSError, subprocess.SubprocessError) as e:
+        print(f"fstrim: {e}")
 
 
-def main(stage, path="/var/lib/mowbite/pack", root="/"):
+def set_hostname(root):
+    if root != "/":
+        return
+    try:
+        with open("/etc/hostname") as h, open("/proc/sys/kernel/hostname", "w") as k:
+            k.write(h.read().strip())
+    except OSError as e:
+        print(f"host name not set: {e}")
+
+
+def main(stage, path="/var/lib/mowbite/pack", root="/", parts_file=VENDOR_FILES):
     if stage not in ("system", "all"):
         print(f"unknown stage {stage}")
         return 2
@@ -79,7 +139,10 @@ def main(stage, path="/var/lib/mowbite/pack", root="/"):
         if hashlib.sha256(archive).hexdigest() != want:
             print(f"{path}: pack does not match its sha256, left as it is")
             return 0
-        bad = check(archive, root)
+        try:
+            bad = check(archive, root, vendor_parts(parts_file))
+        except (OSError, tarfile.TarError) as e:
+            bad = [str(e)]
         if bad:
             print(f"{path}: pack has entries that may not be unpacked: {bad[:5]}, left as it is")
             return 0
@@ -90,14 +153,13 @@ def main(stage, path="/var/lib/mowbite/pack", root="/"):
             members = [m for m in t.getmembers() if stage == "all" or not m.name.startswith("userdata/")]
             t.extractall(root, members=members, filter="data")
         os.sync()
-        if root == "/":
-            with open("/etc/hostname") as h, open("/proc/sys/kernel/hostname", "w") as k:
-                k.write(h.read().strip())
-        if stage == "system":
-            print(f"{path}: unpacked {len(members)} entries without userdata/")
-            return 0
-        clear(f, size)
-        print(f"{path}: unpacked {length} bytes and cleared")
+        if stage == "all":
+            clear(f, size, path, root == "/")
+    set_hostname(root)
+    if stage == "system":
+        print(f"{path}: unpacked {len(members)} entries without userdata/")
+    else:
+        print(f"{path}: unpacked {length} bytes, cleared and removed")
     return 0
 
 

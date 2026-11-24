@@ -1,7 +1,7 @@
 #!/bin/bash
 # The rootfs image of one Tron: the base tar of build-base.sh, files/ of the repo over it, the vendor parts
-# (vendor-files.txt) and the WLAN profiles from the owner's own rootfs backup, the SSH host keys, the key for root and
-# optionally the password hash for root.
+# (files/usr/lib/mowbite/vendor-files) and the WLAN profiles from the owner's own rootfs backup, the SSH host keys,
+# the key for root and optionally the password hash for root.
 # ext4 with only the features of the vendor rootfs (kernel 5.10), exactly the size of the rootfs partition. The image
 # holds vendor files and secrets: it stays in the owner's encrypted storage, never in a repo, an upload or a release.
 #   make-image.sh <base .tar> <vendor rootfs dir> <host key dir> <root key .pub> <new .img> [root password hash]
@@ -83,7 +83,7 @@ tar -C "$work/web" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --m
 items=()
 parents=()
 if [ "$VENDOR" != - ]; then
-    mapfile -t items < <(sed 's/#.*//; /^[[:space:]]*$/d' "$HERE/vendor-files.txt")
+    mapfile -t items < <(sed 's/#.*//; /^[[:space:]]*$/d' "$HERE/files/usr/lib/mowbite/vendor-files")
 fi
 for item in "${items[@]}"; do
     test -e "$VENDOR/$item" || test -L "$VENDOR/$item" || { echo "missing in the vendor rootfs: $item" >&2; exit 1; }

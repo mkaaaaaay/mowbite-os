@@ -143,6 +143,8 @@ logger -t mowbite-measure "stopping $SERVICE for the measurement, recording $run
 os_stopping=1
 systemctl stop "$SERVICE" || fail "systemctl stop $SERVICE failed"
 exec 3<&0
+# measure.py stays root: it has to see every process that holds a port of the mower (/proc/<pid>/fd of other users)
+# and starts the nodes themselves as $NODE_USER.
 (
     source /usr/lib/mowbite/os-setup "$current"
     export ROS_LOG_DIR=$run/ros-log PYTHONUNBUFFERED=1

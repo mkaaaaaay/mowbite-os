@@ -23,13 +23,18 @@ SIZE = 1 << 20
 
 
 def archive(entries):
-    """entries: (name, data, mode), or (name, None, link target) for a symlink."""
+    """entries: (name, data, mode), (name, None, link target) for a symlink, (name, None, mode) for a folder,
+    (name, "hard", target) for a hard link."""
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as t:
         for name, data, extra in entries:
             info = tarfile.TarInfo(name)
-            if data is None:
-                info.type, info.linkname, info.mode = tarfile.SYMTYPE, extra, 0o777
+            if data is None and isinstance(extra, int):
+                info.type, info.mode = tarfile.DIRTYPE, extra
+                t.addfile(info)
+                continue
+            if data is None or data == "hard":
+                info.type, info.linkname, info.mode = tarfile.SYMTYPE if data is None else tarfile.LNKTYPE, extra, 0o777
                 t.addfile(info)
                 continue
             info.size = len(data)
@@ -58,11 +63,16 @@ class TestUnpack(unittest.TestCase):
         with open(self.file, "wb") as f:
             f.write(content)
         self.assertEqual(up.main(stage, self.file, self.root), 0)
+        if not os.path.exists(self.file):
+            return None
         with open(self.file, "rb") as f:
             return f.read()
 
-    def test_a_good_pack_is_unpacked_and_cleared(self):
+    def test_a_good_pack_is_unpacked_and_removed(self):
         tar = archive([
+            ("etc/hostname", b"mowbite-ab12\n", 0o644),
+            ("etc/mowbite/install-id", b"0123456789abcdef0123456789abcdef\n", 0o600),
+            ("usr/lib/modules/5.10.209", None, 0o755),
             ("etc/NetworkManager/system-connections/mowbite-wifi-1.nmconnection", b"psk=x\n", 0o600),
             ("usr/lib/modules/5.10.209/a.ko", b"ko", 0o644),
             ("userdata/mowbite-update/inbox/os.bundle", b"b", 0o644),
@@ -76,9 +86,8 @@ class TestUnpack(unittest.TestCase):
             self.assertEqual(f.read(), b"psk=x\n")
         self.assertEqual(os.stat(wifi).st_mode & 0o777, 0o600)
         self.assertTrue(os.path.exists(os.path.join(self.root, "userdata/mowbite-update/inbox/os.bundle")))
-        self.assertEqual(len(after), SIZE)
-        self.assertTrue(after.startswith(up.EMPTY))
-        self.assertEqual(after[len(up.EMPTY):], bytes(SIZE - len(up.EMPTY)))
+        self.assertEqual(os.stat(os.path.join(self.root, "etc/mowbite/install-id")).st_mode & 0o777, 0o600)
+        self.assertIsNone(after, "the pack file stays")
 
     def test_the_system_stage_leaves_userdata_and_the_pack(self):
         tar = archive([
@@ -89,9 +98,8 @@ class TestUnpack(unittest.TestCase):
         self.assertEqual(self.run_on(content, "system"), content)
         self.assertTrue(os.path.exists(os.path.join(self.root, "usr/lib/modules/5.10.209/a.ko")))
         self.assertFalse(os.path.exists(os.path.join(self.root, "userdata")))
-        after = self.run_on(content)
+        self.assertIsNone(self.run_on(content))
         self.assertTrue(os.path.exists(os.path.join(self.root, "userdata/mowbite-update/inbox/os.bundle")))
-        self.assertTrue(after.startswith(up.EMPTY))
 
     def test_an_unknown_stage_does_nothing(self):
         content = pack(archive([("etc/hostname", b"mowbite-ab12\n", 0o644)]))
@@ -112,7 +120,22 @@ class TestUnpack(unittest.TestCase):
         absolute = archive([("etc/hostname", b"mowbite-ab12\n", 0o644),
                             ("usr/lib/aarch64-linux-gnu/librga.so", None, "/usr/lib/aarch64-linux-gnu/librga.so.2")])
         escaping = archive([("etc/hostname", b"mowbite-ab12\n", 0o644), ("etc/x", None, "../../../root")])
+        # A link inside a vendor part that leads out of the parts, and a file written through it.
+        through = archive([("usr/lib/kernel/driver/x", None, "../../../../root"),
+                           ("usr/lib/kernel/driver/x/.ssh/authorized_keys", b"k", 0o600)])
+        settings = archive([("etc/mowbite/os.conf", b"MOWBITE_HARDWARE=true\n", 0o644)])
+        shadow = archive([("etc/shadow", b"root::0:0\n", 0o600)])
+        folder = archive([("etc", None, 0o755), ("etc/hostname", b"mowbite-ab12\n", 0o644)])
+        deeper = archive([("etc/NetworkManager/system-connections/a/b.nmconnection", b"x", 0o600)])
+        hard = archive([("usr/lib/modules/5.10.209/a.ko", b"ko", 0o644),
+                        ("usr/lib/modules/5.10.209/b.ko", "hard", "usr/lib/modules/5.10.209/a.ko")])
         for content in [
+            pack(through),
+            pack(settings),
+            pack(shadow),
+            pack(folder),
+            pack(deeper),
+            pack(hard),
             pack(tar, sha="0" * 64),
             pack(outside),
             pack(absolute),

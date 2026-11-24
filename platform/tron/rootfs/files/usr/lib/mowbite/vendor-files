@@ -1,4 +1,5 @@
-# Vendor parts that make-image.sh copies from the owner's rootfs backup (paths from /, directories with contents).
+# Vendor parts that make-image.sh copies from the owner's rootfs backup and unpack takes from the installer's pack
+# (paths from /, directories with contents).
 # Never in the repo or the base rootfs: no licence for redistribution.
 # Kernel modules for 5.10.209 with modules.* (WLAN bcmdhd, init_test)
 usr/lib/modules/5.10.209

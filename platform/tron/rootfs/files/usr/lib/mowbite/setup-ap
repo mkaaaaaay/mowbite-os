@@ -1,0 +1,45 @@
+#!/bin/bash
+# Setup access point as a fallback: when wlan0 has no network a while after the start, the profile mowbite-setup of
+# the installer goes up on wlan1, so the owner reaches the mower without writing it again (a typo in the Wi-Fi key).
+# It goes down again as soon as wlan0 is connected. Only while wlan0 is not connected: next to a connected wlan0 the
+# chip puts the access point on the channel of the home network. wlan1 is unmanaged otherwise
+# (NetworkManager/conf.d/20-unused-wifi.conf) and only managed while the access point is up.
+set -uo pipefail
+PROFILE=mowbite-setup
+WAIT_S=${SETUP_AP_WAIT_S:-180}
+POLL_S=${SETUP_AP_POLL_S:-15}
+
+connected() { [ "$(nmcli -t -g GENERAL.STATE device show wlan0 2>/dev/null | cut -d' ' -f1)" = 100 ]; }
+log() { echo "setup-ap: $*"; }
+
+down() {
+    nmcli connection down "$PROFILE" >/dev/null 2>&1
+    nmcli device set wlan1 managed no
+    log "access point down"
+}
+
+waited=0
+while ! connected; do
+    if [ "$waited" -ge "$WAIT_S" ]; then
+        break
+    fi
+    sleep "$POLL_S"
+    waited=$((waited + POLL_S))
+done
+if connected; then
+    log "wlan0 connected, no access point"
+    exit 0
+fi
+log "wlan0 without network after ${waited} s: access point $PROFILE on wlan1"
+nmcli device set wlan1 managed yes || { log "wlan1 cannot be managed"; exit 1; }
+trap 'down; exit 0' TERM INT
+if ! nmcli connection up "$PROFILE" ifname wlan1; then
+    down
+    exit 1
+fi
+while ! connected; do
+    sleep "$POLL_S" &
+    wait $!
+done
+log "wlan0 connected"
+down

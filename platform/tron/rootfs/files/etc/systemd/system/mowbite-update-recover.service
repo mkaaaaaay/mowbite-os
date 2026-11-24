@@ -4,6 +4,8 @@ ConditionPathExists=|/opt/mowbite/pending
 ConditionPathExists=|/opt/mowbite-planner/pending
 ConditionPathExists=|/opt/mowbite-app/pending
 Before=mowbite-os.service
+# Inbox, downloads and recoveries live on /userdata, never under its empty mount point in the rootfs.
+RequiresMountsFor=/userdata
 
 [Service]
 Type=oneshot

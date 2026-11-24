@@ -36,7 +36,8 @@ for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron
          /usr/lib/mowbite/tron-stereo-ae /usr/lib/udev/rules.d/60-mowbite-stereo.rules \
          /etc/systemd/system/multi-user.target.wants/mowbite-tron-stereo-gain.service \
          /usr/lib/udev/rules.d/60-mowbite-rear.rules \
-         /etc/systemd/system/sysinit.target.wants/systemd-pstore.service; do
+         /etc/systemd/system/sysinit.target.wants/systemd-pstore.service /usr/lib/mowbite/vendor-files \
+         /usr/lib/mowbite/setup-ap /etc/systemd/system/multi-user.target.wants/mowbite-setup-ap.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
 for t in motd-news apt-daily apt-daily-upgrade; do
@@ -44,6 +45,12 @@ for t in motd-news apt-daily apt-daily-upgrade; do
     result "off: $t.timer" $?
 done
 test "$(stat_of /usr/lib/mowbite/crash)" = "0755 0:0"; result "crash script 0755 root" $?
+# The hardware stays off until the setup: the defaults say so and the settings of the image change nothing.
+"$DEBUGFS" -c -R "cat /usr/lib/mowbite/os.defaults" "$IMG" 2>/dev/null | grep -qx 'MOWBITE_HARDWARE=false'
+result "os.defaults: MOWBITE_HARDWARE=false" $?
+"$DEBUGFS" -c -R "stat /etc/mowbite/os.conf" "$IMG" 2>/dev/null | grep -q '^Inode:' \
+    && ! "$DEBUGFS" -c -R "cat /etc/mowbite/os.conf" "$IMG" 2>/dev/null | grep -qv '^[[:space:]]*\(#\|$\)'
+result "os.conf: no active setting" $?
 # Classifies the password fields without printing them: root hashed or locked, every other account locked.
 "$DEBUGFS" -c -R "cat /etc/shadow" "$IMG" 2>/dev/null | awk -F: '
     $1 == "root" { root = $2 ~ /^\$(6|y)\$/ ? "set" : $2 ~ /^[!*]/ ? "none" : "bad"; next }

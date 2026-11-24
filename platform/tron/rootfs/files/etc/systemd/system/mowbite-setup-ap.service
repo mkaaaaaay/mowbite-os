@@ -1,0 +1,14 @@
+[Unit]
+Description=Setup access point while wlan0 has no network
+ConditionPathExists=/etc/NetworkManager/system-connections/mowbite-setup.nmconnection
+After=NetworkManager.service mowbite-unpack-inbox.service
+Requires=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/mowbite/setup-ap
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=multi-user.target
