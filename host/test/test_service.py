@@ -11,12 +11,15 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "boot"))
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from mowbite_host import files, installer, os_state, probe, service, updater  # noqa: E402
+from mowbite_host import files, installer, os_state, probe, service, updater, wifi  # noqa: E402
+from mowbite_host.command import nmcli_fields  # noqa: E402
 from mowbite_host.broker import Message  # noqa: E402
 import support  # noqa: E402
 from test_components import P1, X, ComponentBase  # noqa: E402
@@ -328,6 +331,272 @@ class FakeRpc:
 
     def call(self, method, params=None):
         return self.answers.get(method)
+
+
+class Commands:
+    """command.run of the tests: handlers by the first words of argv, each (code, stdout, stderr) or a callable of
+    argv; every call is kept. A program without a handler is not there."""
+
+    def __init__(self):
+        self.calls = []
+        self.handlers = {}
+
+    def on(self, words, answer):
+        self.handlers[tuple(words)] = answer
+
+    def __call__(self, argv, timeout=30):
+        self.calls.append(list(argv))
+        for length in range(len(argv), 0, -1):
+            answer = self.handlers.get(tuple(argv[:length]))
+            if answer is not None:
+                return answer(argv) if callable(answer) else answer
+        raise FileNotFoundError(argv[0])
+
+    def ran(self, *words):
+        return [call for call in self.calls if call[:len(words)] == list(words)]
+
+
+class CallsBase(HostBase):
+    def setUp(self):
+        super().setUp()
+        self.commands = Commands()
+        self.host = service.Host(self.paths, self.updater, self.watch, self.fake, self.published, self.commands)
+
+
+class ConfirmStartTest(CallsBase):
+    def setUp(self):
+        super().setUp()
+        self.install()
+        self.write(self.paths.trial, "")
+        self.commands.on([self.paths.trial_tool, "ssh"], (0, "", ""))
+        self.commands.on([self.paths.trial_tool, "end"], lambda argv: (os.remove(self.paths.trial), (0, "", ""))[1])
+        self.commands.on(["systemctl", "--failed"], (0, "", ""))
+        self.commands.on(["nmcli"], (0, "ethernet:unavailable\nwifi:connected\nloopback:unmanaged\n", ""))
+
+    def confirm(self):
+        return self.answer("host.confirm_start")
+
+    def test_without_a_trial_period_nothing_to_do(self):
+        os.remove(self.paths.trial)
+        self.assertEqual(self.confirm()["result"], {"trial": False})
+        self.assertEqual(self.commands.calls, [])
+
+    def test_a_good_start_ends_it(self):
+        self.assertTrue(self.host.host_status()["trial"])
+        self.assertEqual(self.confirm()["result"], {"trial": False})
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "end")), 1)
+        self.assertFalse(self.published.last(service.HOST_STATUS)[1]["trial"])
+
+    def test_a_refusal_still_counts_as_the_login(self):
+        self.commands.on(["systemctl", "--failed"], (0, "tron-hwinit.service loaded failed failed Tron\n", ""))
+        self.commands.on(["nmcli"], (0, "wifi:disconnected\n", ""))
+        self.fake.stop()
+        error = self.confirm()["error"]["data"]
+        self.assertEqual(error["reason"], "START_NOT_OK")
+        for part in ("tron-hwinit.service", "no WLAN connection", "MowBite OS is stopped"):
+            self.assertIn(part, error["message"])
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+        self.assertEqual(self.commands.ran(self.paths.trial_tool, "end"), [])
+        self.assertTrue(os.path.exists(self.paths.trial))
+
+    def test_waits_for_the_first_installation(self):
+        self.updater.state["first"] = True
+        self.assertEqual(self.confirm()["error"]["data"]["reason"], "BUSY")
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+
+    def test_a_rootfs_without_the_tool(self):
+        del self.commands.handlers[(self.paths.trial_tool, "ssh")]
+        self.assertEqual(self.confirm()["error"]["data"]["reason"], "INTERNAL")
+
+
+class UsbModeTest(CallsBase):
+    def setUp(self):
+        super().setUp()
+        self.install()
+        self.write(self.paths.device_tree, "airseekers,tron\0rockchip,rk3588\0")
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=tron\n")
+        self.commands.on(list(service.LOADER_REBOOT), (0, "", ""))
+        # Holds of the update before.
+        self.fake.holds.clear()
+        self.after = service.REBOOT_AFTER
+        service.REBOOT_AFTER = 0.05
+
+    def tearDown(self):
+        service.REBOOT_AFTER = self.after
+        super().tearDown()
+
+    def usb(self):
+        return self.answer("host.usb_mode")
+
+    def rebooted(self):
+        time.sleep(0.3)
+        return self.commands.ran(*service.LOADER_REBOOT) != []
+
+    def test_idle_with_the_hold_also_off_the_contacts(self):
+        self.fake.session(charging=False)
+        self.assertEqual(self.usb()["result"], {"rebooting": True})
+        self.assertTrue(self.rebooted())
+        self.assertTrue(os.path.exists(self.paths.hold))
+        self.assertEqual(self.answer("update.status")["error"]["data"]["reason"], "BUSY")
+
+    def test_a_stopped_os_needs_no_hold(self):
+        self.fake.stop()
+        self.assertEqual(self.usb()["result"], {"rebooting": True})
+        self.assertTrue(self.rebooted())
+        self.assertEqual(self.fake.holds, [])
+
+    def test_refused_while_it_works_or_without_the_hold(self):
+        for session, reason in (({"state": "MOWING"}, "BUSY"), ({"emergency": True}, "EMERGENCY")):
+            self.fake.session(**session)
+            self.assertEqual(self.usb()["error"]["data"]["reason"], reason)
+        self.fake.session()
+        self.fake.grant = False
+        self.assertEqual(self.usb()["error"]["data"]["reason"], "NO_HOLD")
+        self.assertFalse(self.rebooted())
+        self.assertFalse(self.host.rebooting)
+
+    def test_not_during_an_update(self):
+        self.fake.grant = False
+        self.updater.gate_wait = 30
+        self.bundle(B)
+        self.updater.check()
+        self.updater.start("os")
+        time.sleep(0.3)
+        self.assertEqual(self.usb()["error"]["data"]["reason"], "HOLD")
+        self.updater.abort()
+        self.updater.join()
+        self.assertFalse(self.rebooted())
+
+    def test_only_a_tron(self):
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=nx60i\n")
+        self.assertEqual(self.usb()["error"]["data"]["reason"], "UNSUPPORTED")
+        self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=tron\n")
+        os.remove(self.paths.device_tree)
+        self.assertEqual(self.usb()["error"]["data"]["reason"], "UNSUPPORTED")
+        self.assertEqual(self.fake.holds, [])
+
+    def test_a_failed_reboot_gives_the_hold_back(self):
+        self.commands.on(list(service.LOADER_REBOOT), (1, "", "Access denied"))
+        with redirect_stdout(StringIO()):
+            self.assertEqual(self.usb()["result"], {"rebooting": True})
+            self.assertTrue(self.rebooted())
+        self.assertFalse(os.path.exists(self.paths.hold))
+        self.assertFalse(self.host.rebooting)
+
+
+KEY = "Geheim:Schl\\uessel 42"
+SCAN = ("*:Heim\\:netz:70:WPA2\n:Heim\\:netz:40:WPA2\n:Gast:90:--\n:::\n:Nachbar:55:WPA1 WPA2\n"
+        ":Gast:20:--\n")
+
+
+class WifiTest(CallsBase):
+    def setUp(self):
+        super().setUp()
+        os.makedirs(self.paths.nm_connections)
+        self.old = os.path.join(self.paths.nm_connections, wifi.PREFIX + "0ld.nmconnection")
+        self.foreign = os.path.join(self.paths.nm_connections, "hersteller.nmconnection")
+        self.write(self.old, "[connection]\n")
+        self.write(self.foreign, "[connection]\n")
+        self.commands.on(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"],
+                         (0, "wlan0:wifi\nwlan1:wifi\nlo:loopback\n", ""))
+        self.commands.on(["nmcli", "-t", "-f", "UUID,DEVICE"], (0, "1111-old:wlan0\n2222:lo\n", ""))
+        self.commands.on(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY"], (0, SCAN, ""))
+        self.commands.on(["nmcli", "connection", "load"], (0, "", ""))
+        self.commands.on(["nmcli", "connection", "reload"], (0, "", ""))
+        self.commands.on(["nmcli", "--wait"], (0, "", ""))
+        self.out = StringIO()
+
+    def set(self, params):
+        with redirect_stdout(self.out):
+            answer = self.answer("host.wifi_set", params)
+            self.host.wifi.join()
+            self.host.look()
+        return answer
+
+    def profiles(self):
+        return sorted(os.listdir(self.paths.nm_connections))
+
+    # Nowhere but in the profile: answers, statuses, log lines, the command lines of nmcli.
+    def assert_key_kept(self):
+        seen = json.dumps([sent[1] for sent in self.published.sent]) + self.out.getvalue() + json.dumps(
+            self.commands.calls) + json.dumps(self.host.host_status())
+        self.assertNotIn(KEY, seen)
+        self.assertNotIn("Geheim", seen)
+
+    def test_scan(self):
+        networks = self.answer("host.wifi_scan")["result"]["networks"]
+        self.assertEqual(networks, [
+            {"ssid": "Heim:netz", "signal": 70, "secure": True, "in_use": True},
+            {"ssid": "Gast", "signal": 90, "secure": False, "in_use": False},
+            {"ssid": "Nachbar", "signal": 55, "secure": True, "in_use": False}])
+
+    def test_scan_right_after_a_scan(self):
+        self.commands.on(["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY"],
+                         lambda argv: (0, SCAN, "") if argv[-1] == "no" else (1, "", "Error: Scanning not allowed"))
+        self.assertEqual(len(self.answer("host.wifi_scan")["result"]["networks"]), 3)
+
+    def test_a_network_that_connects_is_kept(self):
+        answer = self.set({"ssid": "Heim:netz", "password": KEY})
+        self.assertEqual(answer["result"]["state"], "trying")
+        status = self.published.last(service.HOST_STATUS)[1]["wifi"]
+        self.assertEqual((status["state"], status["ssid"], status["reason"]), ("connected", "Heim:netz", None))
+        own = [name for name in self.profiles() if name.startswith(wifi.PREFIX)]
+        self.assertEqual(len(own), 1)
+        self.assertNotIn(os.path.basename(self.old), own)
+        self.assertIn(os.path.basename(self.foreign), self.profiles())
+        path = os.path.join(self.paths.nm_connections, own[0])
+        self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
+        with open(path) as f:
+            text = f.read()
+        self.assertIn("psk=Geheim:Schl\\\\uessel 42\n", text)
+        self.assertIn("ssid=" + "".join(f"{b};" for b in b"Heim:netz") + "\n", text)
+        up = self.commands.ran("nmcli", "--wait")
+        self.assertEqual(up[0][3:6], ["connection", "up", "uuid"])
+        self.assertEqual(up[0][-2:], ["ifname", "wlan0"])
+        self.assert_key_kept()
+
+    def test_a_network_that_does_not_connect_goes_back(self):
+        self.commands.on(["nmcli", "--wait"], lambda argv: (
+            (4, "", "Error: Connection activation failed: Secrets were required") if argv[6] != "1111-old"
+            else (0, "", "")))
+        self.set({"ssid": "Heim", "password": KEY})
+        status = self.published.last(service.HOST_STATUS)[1]["wifi"]
+        self.assertEqual((status["state"], status["reason"]), ("failed", "WIFI_FAILED"))
+        self.assertIn("the connection before is back", status["message"])
+        self.assertEqual(self.profiles(), sorted([os.path.basename(self.old), os.path.basename(self.foreign)]))
+        self.assertEqual(self.commands.ran("nmcli", "--wait")[-1][3:7], ["connection", "up", "uuid", "1111-old"])
+        self.assert_key_kept()
+
+    def test_an_open_network(self):
+        self.set({"ssid": "Gast"})
+        own = [name for name in self.profiles() if name.startswith(wifi.PREFIX)]
+        with open(os.path.join(self.paths.nm_connections, own[0])) as f:
+            self.assertNotIn("wifi-security", f.read())
+
+    def test_invalid(self):
+        for params in ({"ssid": ""}, {"ssid": "x" * 33}, {"ssid": "a\nb"}, {"ssid": "Heim", "password": "kurz"},
+                       {"ssid": "Heim", "password": "Geheim\nzeile"}, {"ssid": "Heim", "password": 12345678}):
+            self.assertEqual(self.set(params)["error"]["data"]["reason"], "INVALID", params)
+        self.assertEqual(self.commands.calls, [])
+        self.assert_key_kept()
+
+    def test_one_change_at_a_time(self):
+        gate = threading.Event()
+        self.commands.on(["nmcli", "--wait"], lambda argv: (gate.wait(5), (0, "", ""))[1])
+        self.assertEqual(self.answer("host.wifi_set", {"ssid": "Heim", "password": KEY})["result"]["state"], "trying")
+        self.assertEqual(self.answer("host.wifi_set", {"ssid": "Gast"})["error"]["data"]["reason"], "BUSY")
+        gate.set()
+        with redirect_stdout(self.out):
+            self.host.wifi.join()
+
+    def test_without_network_manager(self):
+        self.commands.handlers.clear()
+        self.assertEqual(self.answer("host.wifi_scan")["error"]["data"]["reason"], "UNSUPPORTED")
+        self.assertEqual(self.set({"ssid": "Heim", "password": KEY})["error"]["data"]["reason"], "UNSUPPORTED")
+
+    def test_nmcli_fields(self):
+        self.assertEqual(nmcli_fields("a\\:b:c\\\\:"), ["a:b", "c\\", ""])
 
 
 class ProbeTest(unittest.TestCase):

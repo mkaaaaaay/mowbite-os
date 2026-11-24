@@ -9,21 +9,25 @@ import json
 import os
 import queue
 import re
+import threading
 import time
 
-from mowbite_host import Refused, gate
+from mowbite_host import Refused, command, gate, trial, wifi
 from mowbite_host.updater import COMPONENTS
 
 SCHEMA = 1
 HOST_STATUS = "mowbite/host/status"
 UPDATE_STATUS = "mowbite/update/status"
-METHODS = ("host.restart_os", "update.abort", "update.check", "update.rollback", "update.set_auto",
-           "update.set_channel", "update.start", "update.status")
+METHODS = ("host.confirm_start", "host.restart_os", "host.usb_mode", "host.wifi_scan", "host.wifi_set", "update.abort",
+           "update.check", "update.rollback", "update.set_auto", "update.set_channel", "update.start", "update.status")
 OFFLINE = json.dumps({"schema": SCHEMA, "online": False})
 TICK_EVERY = 5 * 60.0
 CHECK_EVERY = 6 * 3600.0
 # How often the state of the OS is read from its files.
 LOOK_EVERY = 2.0
+# host.usb_mode answers first and reboots this much later.
+REBOOT_AFTER = 2.0
+LOADER_REBOOT = ("systemctl", "--no-block", "--reboot-argument=loader", "reboot")
 RESPONSE_TOPIC = re.compile(r"rpc/response/[A-Za-z0-9._-]{1,64}")
 MAX_CORRELATION = 1024
 # Requests beyond this many waiting are dropped.
@@ -63,12 +67,16 @@ def _reset_jobs(params):
 
 class Host:
     """updater: updater.Updater; watch: os_state.OsWatch; carrier: what runs the OS; publish(topic, text, retain,
-    correlation=None) sends when connected."""
+    correlation=None) sends when connected; run: command.run."""
 
-    def __init__(self, paths, updater, watch, carrier, publish):
+    def __init__(self, paths, updater, watch, carrier, publish, run=command.run):
         self.paths, self.updater, self.watch, self.carrier, self.publish = paths, updater, watch, carrier, publish
+        self.run_command = run
+        self.wifi = wifi.Wifi(paths, run)
         self.requests = queue.Queue(maxsize=MAX_WAITING)
+        self.rebooting = False
         self._os = None
+        self._shown = None
         self._update_text = None
         self._complaints = {}
         # None: the answer is update.status.
@@ -82,15 +90,22 @@ class Host:
             "update.set_auto": self._set_auto,
             "update.set_channel": lambda p: self.updater.set_channel(_text(p, "channel")),
             "host.restart_os": self._restart_os,
+            "host.confirm_start": self._confirm_start,
+            "host.wifi_scan": lambda p: self.wifi.scan(),
+            "host.wifi_set": lambda p: self.wifi.set(p.get("ssid"), p.get("password")),
+            "host.usb_mode": self._usb_mode,
         }
 
     def host_status(self):
-        return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os}
+        return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os,
+                "trial": trial.active(self.paths), "wifi": self.wifi.status()}
 
+    # Sends mowbite/host/status when the OS, the trial period or the WLAN change changed.
     def look(self):
-        os_now = self.watch.read()
-        if os_now != self._os:
-            self._os = os_now
+        self._os = self.watch.read()
+        shown = (self._os, trial.active(self.paths), self.wifi.status())
+        if shown != self._shown:
+            self._shown = shown
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
 
     def update_changed(self, status):
@@ -139,11 +154,13 @@ class Host:
         try:
             if not isinstance(params, dict):
                 raise Invalid("params has to be an object")
+            if self.rebooting:
+                raise Refused("BUSY", "the mower reboots into the USB mode")
             if method.startswith("update.") and isinstance(params.get("app_version"), str):
                 self.updater.remember_app(params["app_version"])
             result = self._methods[method](params)
             reply = {"jsonrpc": "2.0", "id": call_id, "result": self.updater.status() if result is None else result}
-        except Invalid as why:
+        except (Invalid, wifi.Invalid) as why:
             reply = self._error(call_id, INVALID_PARAMS, str(why), "INVALID")
         except Refused as why:
             code = INVALID_PARAMS if why.reason == "INVALID" else INVALID_REQUEST
@@ -181,6 +198,39 @@ class Host:
         self.look()
         return self._os
 
+    def _confirm_start(self, params):
+        result = trial.confirm(self.paths, self.run_command, self.watch.read(),
+                               self.updater.state.get("first") is True)
+        self.look()
+        return result
+
+    # Tron only: through the gate (hold_for_reboot), then a reboot into the loader mode of U-Boot, where the PC program
+    # reaches the mower over USB. The answer goes out before the reboot.
+    def _usb_mode(self, params):
+        try:
+            with open(self.paths.device_tree, "rb") as f:
+                rockchip = b"rockchip,rk3588" in f.read()
+        except OSError:
+            rockchip = False
+        if not rockchip or self.updater.platform() != "tron":
+            raise Refused("UNSUPPORTED", "only a Tron has the USB mode")
+        self.updater.hold_for_reboot()
+        self.rebooting = True
+        timer = threading.Timer(REBOOT_AFTER, self._reboot_loader)
+        timer.daemon = True
+        timer.start()
+        return {"rebooting": True}
+
+    def _reboot_loader(self):
+        try:
+            code, _, err = self.run_command(list(LOADER_REBOOT))
+        except OSError as error:
+            code, err = 1, str(error)
+        if code != 0:
+            print(f"usb_mode: the reboot failed: {err or code}", flush=True)
+            self.updater.release_hold()
+            self.rebooting = False
+
     # A step of the main loop that fails (a full or read-only disk) is logged once per text; the host goes on.
     def _step(self, name, call):
         try:
@@ -200,6 +250,8 @@ class Host:
         while not stop():
             alive()
             now = time.monotonic()
+            if self.rebooting:
+                next_check = next_tick = next_look = now + LOOK_EVERY
             if now >= next_check:
                 next_check = now + CHECK_EVERY
                 self._step("check", lambda: self.updater.check(fetch=True))

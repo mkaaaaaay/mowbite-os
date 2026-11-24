@@ -80,8 +80,9 @@ def job_open(paths):
 
 
 # The reason the switch may not happen now, None when it may; active: whether the service of the OS runs, still:
-# whether it is halted or down (off); recovering: for undoing an unfinished switch, which is no reason then.
-def before_hold(paths, active, still=False, recovering=False):
+# whether it is halted or down (off); recovering: for undoing an unfinished switch, which is no reason then;
+# contacts: whether a running OS has to stand on its charging contacts.
+def before_hold(paths, active, still=False, recovering=False, contacts=True):
     if not recovering and unfinished(paths):
         return "UNFINISHED", "an update did not finish: recover first"
     # Halted or down nobody answers a release; the file stays and holds the OS that starts next.
@@ -98,7 +99,7 @@ def before_hold(paths, active, still=False, recovering=False):
         return "EMERGENCY", "an emergency stands: release it first"
     if session.get("state") != "IDLE":
         return "BUSY", f"MowBite OS is {session.get('state')}"
-    if session.get("charging") is not True:
+    if contacts and session.get("charging") is not True:
         return "NO_DOCK_CONTACT", "the mower is not on its charging contacts"
     return None
 

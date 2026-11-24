@@ -53,6 +53,12 @@ class Paths:
         self.lock = p + "/run/mowbite-host.lock"
         self.crash = p + "/run/mowbite/crash"
         self.boot_id = p + "/proc/sys/kernel/random/boot_id"
+        self.device_tree = p + "/proc/device-tree/compatible"
+        # The trial period of a newly written rootfs (Tron): its mark and its tool.
+        self.trial = p + "/etc/mowbite/probezeit"
+        self.trial_tool = p + "/usr/lib/mowbite/probezeit"
+        # Profiles of NetworkManager; the host writes its WLAN profiles there as mowbite-wifi-*.nmconnection.
+        self.nm_connections = p + "/etc/NetworkManager/system-connections"
         # Written by MowBite OS in its data_dir (mowbite_hold, stack.py).
         data = p + data_dir
         self.data = data

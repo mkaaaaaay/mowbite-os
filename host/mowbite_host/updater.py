@@ -172,7 +172,7 @@ class Updater:
 
     # The platform of this mower: MOWBITE_PLATFORM of the device, else the one chosen in the app (platform.json of
     # data_dir), else the one its running OS is built for alone; None when none names one.
-    def _platform(self):
+    def platform(self):
         named = self.paths.env().get("MOWBITE_PLATFORM")
         if named:
             return named
@@ -264,7 +264,7 @@ class Updater:
     def status(self):
         with self._lock:
             components = []
-            platform = self._platform()
+            platform = self.platform()
             for component, name in COMPONENTS.items():
                 entry = self._entry(component)
                 components.append({
@@ -386,7 +386,7 @@ class Updater:
             self._candidates = candidates
         if fetch and self.net:
             self.net.start(self.state["origin"]["channel"], self.state["origin"]["index_serial"], self.serial_of,
-                           self._platform())
+                           self.platform())
         self._changed()
 
     # From the main loop: the result of a refresh from the net that ended, then its bundles as candidates.
@@ -426,7 +426,7 @@ class Updater:
         if component not in COMPONENTS:
             raise Refused("INVALID", f"no component {component}")
         if revision is None:
-            available = self._available(component, self._platform())
+            available = self._available(component, self.platform())
             if available is None:
                 raise Refused("NO_NEWER", "no newer revision found in the inbox or from the net")
             revision = available["revision"]
@@ -496,8 +496,8 @@ class Updater:
             raise Aborted()
 
     # gate.before_hold; with jobs an unfinished mowing job closes the gate as well.
-    def _closed(self, jobs, active, still=False, recovering=False):
-        why = gate.before_hold(self.paths, active, still, recovering)
+    def _closed(self, jobs, active, still=False, recovering=False, contacts=True):
+        why = gate.before_hold(self.paths, active, still, recovering, contacts)
         if why is None and jobs and gate.job_open(self.paths):
             why = "JOB_OPEN", "a mowing job is unfinished: finish or reset it, or update with reset_jobs"
         return why
@@ -532,9 +532,29 @@ class Updater:
                 raise Refused(why[0], f"the gate stayed closed: {why[1]}")
             self._abort.wait(GATE_EVERY)
 
+    # The gate of host.usb_mode, judged once without waiting: an OS that runs idles without an emergency, on its
+    # contacts or not, and grants the hold, so nothing starts the wheels or the blade until the reboot. The hold stays;
+    # release_hold() gives it back when the reboot fails.
+    def hold_for_reboot(self):
+        if self.busy():
+            raise Refused("HOLD", "an update runs")
+        state, _, started = self.carrier.show()
+        if state not in SETTLED:
+            raise Refused("BUSY", "MowBite OS is starting or stopping")
+        active = state == "active"
+        still = state == "failed" or (active and gate.off(self.paths, started) is not None)
+        why = self._closed(False, active, still, contacts=False)
+        if why is None and active and not still:
+            why = self._ask_hold(False, contacts=False)
+        if why is not None:
+            raise Refused(why[0], why[1])
+
+    def release_hold(self):
+        self._release_hold()
+
     # Asks the OS for its hold: None once hold.json shows it and the files still open the gate, else why not, with
     # the hold given back.
-    def _ask_hold(self, jobs, recovering=False):
+    def _ask_hold(self, jobs, recovering=False, contacts=True):
         asked = time.time()
         until = time.monotonic() + HOLD_WAIT
         why = _why_no_hold(self.os_rpc.request_hold(HOLD_SECONDS))
@@ -542,7 +562,7 @@ class Updater:
         while time.monotonic() < until:
             if gate.hold_granted(self.paths, asked, time.time(), HOLD_SECONDS - 60):
                 # Granted only in IDLE; the files must still say so after it.
-                why = self._closed(jobs, self.carrier.active(), recovering=recovering)
+                why = self._closed(jobs, self.carrier.active(), recovering=recovering, contacts=contacts)
                 if why is None:
                     return None
                 break
@@ -655,7 +675,7 @@ class Updater:
         if why:
             raise Refused(why, compat.EXPLAIN[why])
         try:
-            bundle.check_platform(staged, self._platform())
+            bundle.check_platform(staged, self.platform())
             bundle.check_base(staged, self.paths.base)
             bundle.check_requires(staged, self._env())
         except Refused as refused:
@@ -921,7 +941,7 @@ class Updater:
             return
         self._first_at = now + FIRST_EVERY
         self.check()
-        platform = self._platform()
+        platform = self.platform()
         for component in FIRST_ORDER:
             available = self._available(component, platform)
             if not available or available["blocked"]:
@@ -953,7 +973,7 @@ class Updater:
         runs = self.carrier.show()[0] in ("active", "failed")
         left_alone = {"os": bool(self.installer.current()) and not runs, "planner": not runs}
         self.check()
-        platform = self._platform()
+        platform = self.platform()
         for component in AUTO_ORDER:
             available = self._available(component, platform)
             if (left_alone.get(component) or not available or available["blocked"] or self._wants_room(component) or

@@ -52,10 +52,10 @@ def read_json(path):
 
 # text as the file at path in a folder of another user: whole or not at all, and nothing is written through a link
 # that waits there.
-def write_new(path, text):
+def write_new(path, text, mode=0o644):
     tmp = path + ".tmp"
     remove(tmp)
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     with os.fdopen(fd, "w") as f:
         f.write(text)
         f.flush()
