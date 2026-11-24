@@ -142,6 +142,9 @@ class CompatTest(unittest.TestCase):
         self.assertLessEqual(own, set(schema["x-reasons"]["UPDATE_REFUSED"]))
         # An open WLAN has no password: the host takes None.
         self.assertEqual(schema["$defs"]["host.wifi_set.params"]["required"], ["ssid"])
+        self.assertIn("hidden", schema["$defs"]["host.wifi_set.params"]["properties"])
+        self.assertIn("challenge", schema["$defs"]["host.confirm_start.params"]["properties"])
+        self.assertLessEqual({"proof", "notes"}, set(schema["$defs"]["host.confirm_start.result"]["properties"]))
 
 
 if __name__ == "__main__":

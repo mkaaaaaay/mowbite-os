@@ -1,5 +1,6 @@
 """The WLAN of the mower over NetworkManager: host.wifi_scan lists what the mower sees, host.wifi_set tries a network
-in the background and keeps it only once it connected, else the connection before comes back.
+in the background and keeps it only once it connected and a request reached the host over it within REACH_WAIT (a
+guest WLAN may connect and still cut the mower off); else the connection before comes back.
 
 The key of a network goes only into the profile file of NetworkManager (root, 0600), never into an answer, the status,
 a log line or the command line of a program.
@@ -17,6 +18,7 @@ from mowbite_host.command import nmcli_fields
 PREFIX = "mowbite-wifi-"
 MAX_NETWORKS = 64
 CONNECT_WAIT = 45
+REACH_WAIT = 300.0
 HEX_KEY = re.compile(r"[0-9A-Fa-f]{64}")
 
 
@@ -46,14 +48,16 @@ def _keyfile_text(text):
     return "\\s" + text[1:] if text.startswith(" ") else text
 
 
-def profile(ssid, key, connection_id):
+def profile(ssid, key, connection_id, hidden=False):
     # The SSID as its bytes, which a key file of NetworkManager takes for any name.
     lines = ["[connection]", f"id={PREFIX}{connection_id[:8]}", f"uuid={connection_id}", "type=wifi",
              "autoconnect-priority=10", "", "[wifi]", "mode=infrastructure",
-             "ssid=" + "".join(f"{byte};" for byte in ssid.encode()), ""]
+             "ssid=" + "".join(f"{byte};" for byte in ssid.encode())]
+    lines += ["hidden=true", ""] if hidden else [""]
     if key is not None:
         lines += ["[wifi-security]", "key-mgmt=wpa-psk", "psk=" + _keyfile_text(key), ""]
-    lines += ["[ipv4]", "method=auto", "", "[ipv6]", "method=auto", ""]
+    # The name servers of the router over IPv4 only, as in every profile of the image (make-image.sh).
+    lines += ["[ipv4]", "method=auto", "", "[ipv6]", "method=auto", "ignore-auto-dns=true", ""]
     return "\n".join(lines)
 
 
@@ -65,6 +69,9 @@ class Wifi:
         self._status = None
         self._worker = None
         self._lock = threading.Lock()
+        # A network that connected and waits to be reached: {ssid, before, path, others, until}.
+        self._pending = None
+        self._reached = threading.Event()
 
     def status(self):
         with self._lock:
@@ -115,16 +122,37 @@ class Wifi:
         ordered = sorted(networks.values(), key=lambda n: (not n["in_use"], -n["signal"], n["ssid"]))
         return {"networks": ordered[:MAX_NETWORKS]}
 
+    # From the thread of the broker client: a request came in, after a change over the new network.
+    def reached(self):
+        self._reached.set()
+
+    # From the main loop: keeps a network that was reached, or after REACH_WAIT goes back to the one before.
+    def look(self, now=None):
+        pending = self._pending
+        if pending is None or (self._worker is not None and self._worker.is_alive()):
+            return
+        if self._reached.is_set():
+            self._pending = None
+            self._drop(pending["others"])
+            return
+        if (time.monotonic() if now is None else now) >= pending["until"]:
+            self._pending = None
+            self._worker = threading.Thread(target=self._back, args=(pending,), daemon=True)
+            self._worker.start()
+
     # Starts the change and answers at once: the caller may be on the network the mower leaves.
-    def set(self, ssid, key):
+    def set(self, ssid, key, hidden=False):
         ssid, key = check_ssid(ssid), check_key(key)
+        if not isinstance(hidden, bool):
+            raise Invalid("hidden has to be true or false")
         if not os.path.isdir(self.paths.nm_connections):
             raise Refused("UNSUPPORTED", "NetworkManager keeps no profiles on this mower")
-        if self._worker is not None and self._worker.is_alive():
+        self.look()
+        if (self._worker is not None and self._worker.is_alive()) or self._pending is not None:
             raise Refused("BUSY", "a change of the WLAN runs")
         device = self._device()
         self._set("trying", ssid)
-        self._worker = threading.Thread(target=self._change, args=(device, ssid, key), daemon=True)
+        self._worker = threading.Thread(target=self._change, args=(device, ssid, key, hidden), daemon=True)
         self._worker.start()
         return self.status()
 
@@ -144,9 +172,27 @@ class Wifi:
     def _own_profiles(self):
         return sorted(glob.glob(os.path.join(self.paths.nm_connections, PREFIX + "*.nmconnection")))
 
-    def _change(self, device, ssid, key):
+    def _drop(self, paths):
+        for path in paths:
+            files.remove(path)
+        self._nmcli("connection", "reload")
+
+    def _back(self, pending):
+        ssid = pending["ssid"]
         try:
-            self._try(device, ssid, key)
+            files.remove(pending["path"])
+            self._nmcli("connection", "reload")
+            again, _, _ = self._nmcli("--wait", str(CONNECT_WAIT), "connection", "up", "uuid", pending["before"],
+                                      timeout=CONNECT_WAIT + 15)
+            back = "the connection before is back" if again == 0 else "the connection before did not come back"
+            self._set("failed", ssid, "WIFI_FAILED", f"nothing reached the mower over {ssid}; {back}")
+        except Exception as error:  # noqa: BLE001 - the status tells, the host goes on
+            self._set("failed", ssid, "INTERNAL", type(error).__name__)
+        print(f"wifi: back from {ssid!r}: {self.status()['message']}", flush=True)
+
+    def _change(self, device, ssid, key, hidden=False):
+        try:
+            self._try(device, ssid, key, hidden)
         except Refused as why:
             self._set("failed", ssid, why.reason, str(why))
         except Exception as error:  # noqa: BLE001 - the status tells, the host goes on
@@ -155,20 +201,24 @@ class Wifi:
         print(f"wifi: {status['state']} for {ssid!r}" + (f": {status['message']}" if status["message"] else ""),
               flush=True)
 
-    def _try(self, device, ssid, key):
+    def _try(self, device, ssid, key, hidden=False):
         before = self._active_on(device)
         connection_id = str(uuid.uuid4())
         path = os.path.join(self.paths.nm_connections, f"{PREFIX}{connection_id[:8]}.nmconnection")
         others = [p for p in self._own_profiles() if p != path]
-        files.write_new(path, profile(ssid, key, connection_id), 0o600)
+        files.write_new(path, profile(ssid, key, connection_id, hidden), 0o600)
         code, _, err = self._nmcli("connection", "load", path)
         if code == 0:
             code, _, err = self._nmcli("--wait", str(CONNECT_WAIT), "connection", "up", "uuid", connection_id,
                                        "ifname", device, timeout=CONNECT_WAIT + 15)
         if code == 0:
-            for other in others:
-                files.remove(other)
-            self._nmcli("connection", "reload")
+            if before is None:
+                self._drop(others)
+            else:
+                # The profiles before stay until the new network has shown it reaches the mower.
+                self._reached.clear()
+                self._pending = {"ssid": ssid, "before": before, "path": path, "others": others,
+                                 "until": time.monotonic() + REACH_WAIT}
             self._set("connected", ssid)
             return
         files.remove(path)

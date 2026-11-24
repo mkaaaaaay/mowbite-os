@@ -6794,13 +6794,32 @@
       "type": "array"
     },
     "host.confirm_start.params": {
-      "description": "The params of host.confirm_start: None",
+      "description": "The params of host.confirm_start: Optional",
+      "properties": {
+        "challenge": {
+          "description": "32 to 128 hex digits (0-9, a-f) for proof; INVALID otherwise",
+          "type": "string"
+        }
+      },
+      "required": [],
       "type": "object"
     },
     "host.confirm_start.result": {
       "additionalProperties": false,
       "description": "The result of host.confirm_start: The trial period after the call",
       "properties": {
+        "notes": {
+          "description": "Other services that failed, as \"failed: <unit>\"; missing without",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "proof": {
+          "description": "HMAC-SHA256 in hex of the challenge under the install id the installer put on this mower; missing without a challenge or an id",
+          "type": "string"
+        },
         "trial": {
           "description": "Always false: it is over",
           "type": "boolean"
@@ -6946,6 +6965,10 @@
       "additionalProperties": false,
       "description": "The params of host.wifi_set: The WLAN",
       "properties": {
+        "hidden": {
+          "description": "A WLAN that does not send its name; false without",
+          "type": "boolean"
+        },
         "password": {
           "description": "8 to 63 printable ASCII characters or 64 hex digits; none for an open WLAN",
           "type": "string"
@@ -17065,11 +17088,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:62",
+  "$id": "urn:mowbite-os:api:63",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 62,
+  "x-api": 63,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17794,7 +17817,7 @@
       "result": "#/$defs/events.history.list.result"
     },
     "host.confirm_start": {
-      "description": "Ends the trial period of a newly written system (trial in mowbite/host/status) once its start is good: no failed service, a WLAN connection, MowBite OS running, the first installation done; else START_NOT_OK with what fails, or BUSY while the first installation runs. Every call counts as reaching the mower, so it does not go back into the USB mode on its own in this start. Without a trial period nothing to do",
+      "description": "Ends the trial period of a newly written system (trial in mowbite/host/status) once its start is good: the pack of the installer unpacked, a WLAN connection, MowBite OS running, the first installation done; else START_NOT_OK with what fails, or BUSY while the first installation runs. A call counts as reaching the mower only while the first installation runs or once the start is good, so a bad start still goes back into the USB mode on its own. Without a trial period nothing to do",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.confirm_start.params",
@@ -17808,7 +17831,7 @@
       "result": "#/$defs/host.restart_os.result"
     },
     "host.usb_mode": {
-      "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off; never during an update. UNSUPPORTED on other mowers",
+      "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off. An update that has not begun its switch ends for it (result aborted); during a switch HOLD. UNSUPPORTED on other mowers",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.usb_mode.params",
@@ -17822,7 +17845,7 @@
       "result": "#/$defs/host.wifi_scan.result"
     },
     "host.wifi_set": {
-      "description": "Tries the WLAN in the background and answers at once: the mower keeps it only once it connected, else the connection before comes back. The outcome is wifi in mowbite/host/status. The password is never sent back, logged or shown in a status; INVALID for a name or password out of range, BUSY while a change runs",
+      "description": "Tries the WLAN in the background and answers at once: the mower keeps it only once it connected and any request reached it over the new WLAN within 5 min, else the connection before comes back (wifi failed, WIFI_FAILED). The outcome is wifi in mowbite/host/status. The password is never sent back, logged or shown in a status; INVALID for a name or password out of range, BUSY while a change runs or waits to be reached",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.wifi_set.params",

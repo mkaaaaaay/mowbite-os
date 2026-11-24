@@ -37,6 +37,9 @@ INVALID_PARAMS = -32602
 INTERNAL_ERROR = -32603
 
 
+CHALLENGE = re.compile(r"[0-9a-f]{32,128}")
+
+
 class Invalid(Exception):
     pass
 
@@ -92,7 +95,7 @@ class Host:
             "host.restart_os": self._restart_os,
             "host.confirm_start": self._confirm_start,
             "host.wifi_scan": lambda p: self.wifi.scan(),
-            "host.wifi_set": lambda p: self.wifi.set(p.get("ssid"), p.get("password")),
+            "host.wifi_set": lambda p: self.wifi.set(p.get("ssid"), p.get("password"), p.get("hidden", False)),
             "host.usb_mode": self._usb_mode,
         }
 
@@ -125,6 +128,8 @@ class Host:
     def on_request(self, message):
         if message.retained:
             return
+        # Whoever sends a request reaches the mower, over the network it is on now.
+        self.wifi.reached()
         try:
             request = json.loads(message.payload)
         except (ValueError, UnicodeDecodeError, RecursionError):
@@ -199,8 +204,11 @@ class Host:
         return self._os
 
     def _confirm_start(self, params):
+        challenge = _text(params, "challenge", required=False)
+        if challenge is not None and not CHALLENGE.fullmatch(challenge):
+            raise Invalid("challenge has to be 32 to 128 hex digits")
         result = trial.confirm(self.paths, self.run_command, self.watch.read(),
-                               self.updater.state.get("first") is True)
+                               self.updater.state.get("first") is True, challenge)
         self.look()
         return result
 
@@ -214,6 +222,7 @@ class Host:
             rockchip = False
         if not rockchip or self.updater.platform() != "tron":
             raise Refused("UNSUPPORTED", "only a Tron has the USB mode")
+        self.updater.give_way()
         self.updater.hold_for_reboot()
         self.rebooting = True
         timer = threading.Timer(REBOOT_AFTER, self._reboot_loader)
@@ -264,6 +273,7 @@ class Host:
                 self._step("recover", self.updater.recover_due)
                 self._step("net", self.updater.poll)
                 self._step("first", self.updater.first_install)
+                self._step("wifi", self.wifi.look)
             try:
                 item = self.requests.get(timeout=max(0.05, min(next_look, next_tick) - time.monotonic()))
             except queue.Empty:

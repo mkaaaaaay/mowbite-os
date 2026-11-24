@@ -3,6 +3,8 @@
 
   python3 -I host/test/test_service.py
 """
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -388,17 +390,41 @@ class ConfirmStartTest(CallsBase):
         self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "end")), 1)
         self.assertFalse(self.published.last(service.HOST_STATUS)[1]["trial"])
 
-    def test_a_refusal_still_counts_as_the_login(self):
-        self.commands.on(["systemctl", "--failed"], (0, "tron-hwinit.service loaded failed failed Tron\n", ""))
+    # A bad start does not count as reaching the mower: asked again and again it still goes back on its own.
+    def test_a_bad_start_is_not_counted(self):
+        self.commands.on(["systemctl", "--failed"], (0, "mowbite-unpack.service loaded failed failed Pack\n"
+                                                        "tron-hwinit.service loaded failed failed Tron\n", ""))
         self.commands.on(["nmcli"], (0, "wifi:disconnected\n", ""))
         self.fake.stop()
-        error = self.confirm()["error"]["data"]
+        for _ in range(3):
+            error = self.confirm()["error"]["data"]
         self.assertEqual(error["reason"], "START_NOT_OK")
-        for part in ("tron-hwinit.service", "no WLAN connection", "MowBite OS is stopped"):
+        for part in ("mowbite-unpack.service", "tron-hwinit.service", "no WLAN connection", "MowBite OS is stopped"):
             self.assertIn(part, error["message"])
-        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+        self.assertEqual(self.commands.ran(self.paths.trial_tool, "ssh"), [])
         self.assertEqual(self.commands.ran(self.paths.trial_tool, "end"), [])
         self.assertTrue(os.path.exists(self.paths.trial))
+
+    # Only the units that put the pack in place count; another failed one is a note.
+    def test_a_failed_camera_unit_is_a_note(self):
+        self.commands.on(["systemctl", "--failed"], (0, "mowbite-tron-stereo-gain.service loaded failed failed S\n",
+                                                        ""))
+        self.assertEqual(self.confirm()["result"],
+                         {"trial": False, "notes": ["failed: mowbite-tron-stereo-gain.service"]})
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+
+    # The installer proves it talks to the mower it wrote: HMAC of its challenge under the id of the pack.
+    def test_proof_of_the_mower(self):
+        challenge = "ab" * 16
+        self.assertNotIn("proof", self.answer("host.confirm_start", {"challenge": challenge})["result"])
+        self.write(self.paths.install_id, "00112233445566778899aabbccddeeff\n")
+        result = self.answer("host.confirm_start", {"challenge": challenge})["result"]
+        want = hmac.new(b"00112233445566778899aabbccddeeff", challenge.encode(), hashlib.sha256).hexdigest()
+        self.assertEqual(result, {"trial": False, "proof": want})
+        self.assertEqual(self.confirm()["result"], {"trial": False})
+        for bad in ("ab", "x" * 32, 5):
+            reason = self.answer("host.confirm_start", {"challenge": bad})["error"]["data"]["reason"]
+            self.assertEqual(reason, "INVALID", bad)
 
     def test_waits_for_the_first_installation(self):
         self.updater.state["first"] = True
@@ -456,17 +482,43 @@ class UsbModeTest(CallsBase):
         self.assertFalse(self.rebooted())
         self.assertFalse(self.host.rebooting)
 
-    def test_not_during_an_update(self):
+    # An update that waits at its gate (here for the charging contacts) gives way; the owner wants the USB mode.
+    def test_an_update_at_its_gate_gives_way(self):
+        self.fake.session(charging=False)
+        self.updater.gate_wait = 30
+        self.bundle(B)
+        self.updater.check()
+        self.updater.start("os")
+        time.sleep(0.3)
+        self.assertEqual(self.usb()["result"], {"rebooting": True})
+        self.assertEqual(self.updater.state["last"]["result"], "aborted")
+        self.assertTrue(self.rebooted())
+
+    def test_not_during_a_switch(self):
+        self.updater._working = True
+        self.updater._phase = {**self.updater._phase, "phase": "switching", "component": "os"}
+        try:
+            self.assertEqual(self.usb()["error"]["data"]["reason"], "HOLD")
+        finally:
+            self.updater._working = False
+        self.assertFalse(self.rebooted())
+
+    # An abort counts for its run only: later the hold is asked for as always.
+    def test_after_an_aborted_update(self):
         self.fake.grant = False
         self.updater.gate_wait = 30
         self.bundle(B)
         self.updater.check()
         self.updater.start("os")
         time.sleep(0.3)
-        self.assertEqual(self.usb()["error"]["data"]["reason"], "HOLD")
-        self.updater.abort()
+        self.answer("update.abort")
         self.updater.join()
-        self.assertFalse(self.rebooted())
+        # Granted a little later, as by the OS.
+        self.fake.grant = True
+        updater.HOLD_WAIT = 2.0
+        request_hold = self.fake.request_hold
+        self.fake.request_hold = lambda seconds: threading.Timer(0.2, request_hold, (seconds,)).start()
+        self.assertEqual(self.usb()["result"], {"rebooting": True})
 
     def test_only_a_tron(self):
         self.write(self.paths.env_files[1], "MOWBITE_PLATFORM=nx60i\n")
@@ -536,12 +588,18 @@ class WifiTest(CallsBase):
                          lambda argv: (0, SCAN, "") if argv[-1] == "no" else (1, "", "Error: Scanning not allowed"))
         self.assertEqual(len(self.answer("host.wifi_scan")["result"]["networks"]), 3)
 
-    def test_a_network_that_connects_is_kept(self):
+    def own(self):
+        return [name for name in self.profiles() if name.startswith(wifi.PREFIX)]
+
+    def test_a_network_that_connects_is_kept_once_reached(self):
         answer = self.set({"ssid": "Heim:netz", "password": KEY})
         self.assertEqual(answer["result"]["state"], "trying")
         status = self.published.last(service.HOST_STATUS)[1]["wifi"]
         self.assertEqual((status["state"], status["ssid"], status["reason"]), ("connected", "Heim:netz", None))
-        own = [name for name in self.profiles() if name.startswith(wifi.PREFIX)]
+        self.assertEqual(len(self.own()), 2)
+        self.answer("host.wifi_scan")
+        self.host.wifi.look()
+        own = self.own()
         self.assertEqual(len(own), 1)
         self.assertNotIn(os.path.basename(self.old), own)
         self.assertIn(os.path.basename(self.foreign), self.profiles())
@@ -568,10 +626,50 @@ class WifiTest(CallsBase):
         self.assertEqual(self.commands.ran("nmcli", "--wait")[-1][3:7], ["connection", "up", "uuid", "1111-old"])
         self.assert_key_kept()
 
+    # Connected, but nothing reaches the mower over it (a guest WLAN): back to the network before.
+    def test_a_network_not_reached_goes_back(self):
+        self.set({"ssid": "Gast"})
+        new = [name for name in self.own() if name != os.path.basename(self.old)]
+        self.host.wifi.look(now=time.monotonic() + wifi.REACH_WAIT - 1)
+        self.assertEqual(len(self.own()), 2)
+        with redirect_stdout(self.out):
+            self.host.wifi.look(now=time.monotonic() + wifi.REACH_WAIT + 1)
+            self.host.wifi.join()
+        self.assertEqual(self.own(), [os.path.basename(self.old)])
+        self.assertNotIn(new[0], self.profiles())
+        self.assertEqual(self.commands.ran("nmcli", "--wait")[-1][3:7], ["connection", "up", "uuid", "1111-old"])
+        status = self.host.wifi.status()
+        self.assertEqual((status["state"], status["reason"]), ("failed", "WIFI_FAILED"))
+        self.assertIn("nothing reached the mower over Gast", status["message"])
+        self.assertEqual(self.answer("host.wifi_set", {"ssid": "Gast"})["result"]["state"], "trying")
+        with redirect_stdout(self.out):
+            self.host.wifi.join()
+
+    # Without a connection before there is nothing to go back to.
+    def test_without_a_connection_before(self):
+        self.commands.on(["nmcli", "-t", "-f", "UUID,DEVICE"], (0, "2222:lo\n", ""))
+        self.set({"ssid": "Gast"})
+        self.assertEqual(len(self.own()), 1)
+        self.assertNotIn(os.path.basename(self.old), self.own())
+
+    def test_one_change_until_reached(self):
+        self.set({"ssid": "Gast"})
+        self.host.wifi.reached()
+        self.assertEqual(self.set({"ssid": "Heim", "password": KEY})["result"]["state"], "trying")
+
+    def test_hidden_and_the_name_servers(self):
+        self.set({"ssid": "Versteckt", "hidden": True})
+        new = [name for name in self.own() if name != os.path.basename(self.old)]
+        with open(os.path.join(self.paths.nm_connections, new[0])) as f:
+            text = f.read()
+        self.assertIn("hidden=true\n", text)
+        self.assertIn("[ipv6]\nmethod=auto\nignore-auto-dns=true\n", text)
+        self.assertEqual(self.set({"ssid": "Gast", "hidden": "ja"})["error"]["data"]["reason"], "INVALID")
+
     def test_an_open_network(self):
         self.set({"ssid": "Gast"})
-        own = [name for name in self.profiles() if name.startswith(wifi.PREFIX)]
-        with open(os.path.join(self.paths.nm_connections, own[0])) as f:
+        new = [name for name in self.own() if name != os.path.basename(self.old)]
+        with open(os.path.join(self.paths.nm_connections, new[0])) as f:
             self.assertNotIn("wifi-security", f.read())
 
     def test_invalid(self):

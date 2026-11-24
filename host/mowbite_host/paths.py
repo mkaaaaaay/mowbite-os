@@ -57,6 +57,8 @@ class Paths:
         # The trial period of a newly written rootfs (Tron): its mark and its tool.
         self.trial = p + "/etc/mowbite/probezeit"
         self.trial_tool = p + "/usr/lib/mowbite/probezeit"
+        # A random id from the pack of the installer, the key of the proof in host.confirm_start.
+        self.install_id = p + "/etc/mowbite/install-id"
         # Profiles of NetworkManager; the host writes its WLAN profiles there as mowbite-wifi-*.nmconnection.
         self.nm_connections = p + "/etc/NetworkManager/system-connections"
         # Written by MowBite OS in its data_dir (mowbite_hold, stack.py).
