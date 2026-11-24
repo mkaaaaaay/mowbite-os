@@ -401,6 +401,8 @@ if offers("logs.recent"):
 if offers("map.area_properties"):
     r = rpc("map.area_properties", None, "4")
     expected = ["name", "type", "active", "mowable", "angle", "outline_count", "outline_overlap_count", "outline_offset"]
+    if isinstance(api_version, int) and api_version >= 59:
+        expected.append("mow_height_mm")
     # mowbite_map adds the planner's keys while a node offers planner.settings
     if methods is not None and "planner.settings" in methods:
         expected += ["mow_around", "angle_min", "angle_max"]

@@ -1254,7 +1254,11 @@ const std::vector<Method>& Methods() {
        "changed meanwhile)",
        List("params", "[map] or [map, {expected_sha256}]", Type::kObject),
        Text("result", "Successfully stored map (n areas)"), ""},
-      {"map.area_properties", "mowbite_map", "The properties an area of the map may have", NoParams(),
+      {"map.area_properties", "mowbite_map",
+       "The properties an area of the map may have. mow_height_mm: the cutting height of a mowing area in mm instead of "
+       "/mower_logic/mow_height_mm from the next start of the blade in it; map.replace takes it as params.set takes "
+       "that setting, rounded and within its range; no effect where system.info.blade_height is null",
+       NoParams(),
        List("result", "Property names", Type::kString), ""},
       {"ntrip.get", "mowbite_ntrip", "The access to the caster for corrections, without user and password",
        NoParams(), NtripAccess(), ""},

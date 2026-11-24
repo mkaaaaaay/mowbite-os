@@ -124,6 +124,8 @@ class MowingPlanner {
   Reason MapProblem() const;
   // The first active docking station of the map, none while the map is not readable.
   std::optional<DockPose> Dock() const;
+  // The cutting height of the area (properties.mow_height_mm), none without one or for an unknown id.
+  std::optional<double> MowHeight(const std::string& area_id) const;
 
  private:
   struct MapArea {
@@ -133,6 +135,8 @@ class MowingPlanner {
     bool active = true;
     bool mowable = true;
     Ring outline;
+    // properties.mow_height_mm, none without one.
+    std::optional<double> mow_height_mm;
   };
 
   std::vector<MapArea> map_;

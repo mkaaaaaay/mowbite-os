@@ -287,6 +287,8 @@ class LogicCore {
   void ReportRestart(const RestartReport& report);
   // The job of mowing, finished or not; empty without one.
   const std::string& JobId() const;
+  // The id of the area the job mows now, empty outside of mowing.
+  std::string MowingAreaId() const;
   // The safety node released after emergency.reset or STOP (now_s monotonic): the end of the emergency that follows
   // within kReleaseSourceS carries the source, rpc with the client of the command or button. Without that end the
   // tick after kReleaseSourceS refuses it with STILL_ACTIVE and the bits that stay.

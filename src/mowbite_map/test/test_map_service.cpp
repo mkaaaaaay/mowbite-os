@@ -115,7 +115,7 @@ TEST(MapService, ReportsWhatItStores) {
   ASSERT_TRUE(answer.has_value());
   ASSERT_TRUE(answer->ok);
   const json expected = {"name", "type", "active", "mowable", "angle", "outline_count", "outline_overlap_count",
-                         "outline_offset"};
+                         "outline_offset", "mow_height_mm"};
   EXPECT_EQ(answer->result, expected);
   // The planner's settings are not stored by this map, so they are not reported (they are kept anyway).
   for (const char* later : {"mow_around", "angle_min", "angle_max"}) {
@@ -127,13 +127,14 @@ TEST(MapService, ReportsThePlannerPropertiesOnlyWhilePlannerSettingsIsOffered) {
   TempDir dir;
   MapService service = Started(ConfigFor(dir));
   const auto names = [&] { return service.Call("map.area_properties", json())->result; };
-  EXPECT_EQ(names().size(), 8u);
+  EXPECT_EQ(names().size(), 9u);
   service.SetPlannerSettingsOffered(true);
-  const json offered = {"name",          "type",          "active",    "mowable",   "angle",     "outline_count",
-                        "outline_overlap_count", "outline_offset", "mow_around", "angle_min", "angle_max"};
+  const json offered = {"name",          "type",           "active",        "mowable",    "angle",
+                        "outline_count", "outline_overlap_count", "outline_offset", "mow_height_mm", "mow_around",
+                        "angle_min",     "angle_max"};
   EXPECT_EQ(names(), offered);
   service.SetPlannerSettingsOffered(false);
-  EXPECT_EQ(names().size(), 8u);
+  EXPECT_EQ(names().size(), 9u);
 }
 
 TEST(MapService, StartsWithAnEmptyMapWithoutAFile) {

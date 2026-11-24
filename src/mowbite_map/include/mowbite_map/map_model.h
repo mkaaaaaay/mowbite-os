@@ -30,6 +30,8 @@ struct Area {
   std::optional<int> outline_count;
   std::optional<int> outline_overlap_count;
   std::optional<double> outline_offset;
+  // mm, the cutting height of the area instead of /mower_logic/mow_height_mm; within its range.
+  std::optional<int> mow_height_mm;
   // Properties this version does not know (planner settings, pin, margin, ...), written back as they are.
   json other_properties = json::object();
 };

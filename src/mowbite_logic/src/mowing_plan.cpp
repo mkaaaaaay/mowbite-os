@@ -198,6 +198,9 @@ void MowingPlanner::SetMap(const std::string& text) {
       area.active = properties.value("active", true);
       area.mowable = properties.value("mowable", true);
       area.outline = Opened(RequirePoints(entry["outline"], "outline"));
+      // mowbite_map takes only heights within the limits of the setting.
+      const auto height = properties.find("mow_height_mm");
+      if (height != properties.end() && height->is_number()) area.mow_height_mm = height->get<double>();
       map_.push_back(std::move(area));
     }
   } catch (const PlanError&) {
@@ -253,6 +256,13 @@ std::vector<JobArea> MowingPlanner::MowAreas() const {
     areas.push_back({area.id, area.name, area.active && area.mowable, shape});
   }
   return areas;
+}
+
+std::optional<double> MowingPlanner::MowHeight(const std::string& area_id) const {
+  for (const auto& area : map_) {
+    if (area.id == area_id) return area.mow_height_mm;
+  }
+  return std::nullopt;
 }
 
 Reason MowingPlanner::MapProblem() const {

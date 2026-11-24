@@ -722,6 +722,14 @@ TEST(ScheduleDrop, AnAreaLaterInTheListIsPassedOverThere) {
   EXPECT_TRUE(Find(events, "JOB_COMPLETE"));
 }
 
+TEST(ScheduleDrop, TheAreaMowedNowIsNamedWhileMowing) {
+  TestCore core = MowingRun();
+  ASSERT_EQ(core.NextJobStep(20).area_id, "a");
+  EXPECT_EQ(core.MowingAreaId(), "a");
+  EXPECT_TRUE(core.DropTasks(Plan().run_id, {}).empty());
+  EXPECT_EQ(core.MowingAreaId(), "");
+}
+
 TEST(ScheduleDrop, NothingLeftGoesHomeAndTheJobStaysOpen) {
   TestCore core = MowingRun();
   ASSERT_EQ(core.NextJobStep(20).area_id, "a");

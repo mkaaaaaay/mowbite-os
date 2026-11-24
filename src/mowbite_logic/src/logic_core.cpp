@@ -873,6 +873,11 @@ const std::string& LogicCore::JobId() const {
   return mowing_.job().progress().job_id;
 }
 
+std::string LogicCore::MowingAreaId() const {
+  const JobArea* area = Mowing() ? mowing_.job().CurrentArea() : nullptr;
+  return area ? area->id : "";
+}
+
 void LogicCore::GeometryChanged(const std::vector<std::string>& changed, const std::vector<std::string>& below_default,
                                 int version) {
   const auto list = [](const std::vector<std::string>& names) {

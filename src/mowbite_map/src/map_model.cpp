@@ -1,9 +1,12 @@
 #include "mowbite_map/map_model.h"
 
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <set>
 #include <stdexcept>
+
+#include "mowbite_api/catalog.h"
 
 namespace mowbite_map {
 
@@ -30,6 +33,15 @@ const json* Find(const json& object, const char* key) {
 double ToNumber(const json& value, const std::string& what) {
   if (!value.is_number() || !std::isfinite(value.get<double>())) throw MapError(what + " must be a finite number");
   return value.get<double>();
+}
+
+// As params.set takes /mower_logic/mow_height_mm: a number, rounded and within the range of the setting.
+int ToHeight(const json& value, const std::string& what) {
+  const double height = std::round(ToNumber(value, what));
+  for (const auto& setting : mowbite_api::LogicSettings()) {
+    if (setting.name == "mow_height_mm") return static_cast<int>(std::clamp(height, setting.min, setting.max));
+  }
+  throw MapError(what + ": no such setting");
 }
 
 std::string ToText(const json& value, const std::string& what) {
@@ -100,6 +112,7 @@ Area ParseArea(const json& j, size_t index) {
     area.outline_overlap_count = ToCount(*v, where + ": outline_overlap_count");
   }
   if (auto v = Take(properties, "outline_offset")) area.outline_offset = ToNumber(*v, where + ": outline_offset");
+  if (auto v = Take(properties, "mow_height_mm")) area.mow_height_mm = ToHeight(*v, where + ": mow_height_mm");
   area.other_properties = std::move(properties);
 
   const json* outline = Find(j, "outline");
@@ -151,6 +164,7 @@ json AreaJson(const Area& area) {
   if (area.outline_count) properties["outline_count"] = *area.outline_count;
   if (area.outline_overlap_count) properties["outline_overlap_count"] = *area.outline_overlap_count;
   if (area.outline_offset) properties["outline_offset"] = *area.outline_offset;
+  if (area.mow_height_mm) properties["mow_height_mm"] = *area.mow_height_mm;
   properties.update(area.other_properties);
   json outline = json::array();
   for (const auto& p : area.outline) outline.push_back(PointJson(p));
@@ -178,7 +192,8 @@ json DockJson(const DockingStation& dock) {
 
 const std::vector<std::string>& AreaPropertyNames() {
   static const std::vector<std::string> names = {
-      "name", "type", "active", "mowable", "angle", "outline_count", "outline_overlap_count", "outline_offset"};
+      "name",          "type",           "active",       "mowable",     "angle", "outline_count",
+      "outline_overlap_count", "outline_offset", "mow_height_mm"};
   return names;
 }
 

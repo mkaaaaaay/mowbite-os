@@ -216,6 +216,21 @@ TEST(MowingPlanMap, TheShapeOfAnAreaFollowsWhatItsPlanIsMadeOf) {
   // The inactive obstacle and the draft: none.
   EXPECT_EQ(shapes(replaced(R"({"x": 8, "y": 3})", R"({"x": 8, "y": 4})")), base);
   EXPECT_EQ(shapes(replaced(R"({"x": 41, "y": 1})", R"({"x": 41, "y": 2})")), base);
+  // A cutting height of an area: no other plan.
+  EXPECT_EQ(shapes(replaced(R"("outline_count": 2})", R"("outline_count": 2, "mow_height_mm": 45})")), base);
+}
+
+TEST(MowingPlanMap, TheCuttingHeightOfAnArea) {
+  MowingPlanner planner;
+  planner.SetMapStatus(true, Reason());
+  std::string map = kMap;
+  const std::string from = R"("outline_count": 2})";
+  map.replace(map.find(from), from.size(), R"("outline_count": 2, "mow_height_mm": 45})");
+  planner.SetMap(map);
+  EXPECT_EQ(planner.MowHeight("lawn"), std::optional<double>(45));
+  EXPECT_EQ(planner.MowHeight("side"), std::nullopt);
+  EXPECT_EQ(planner.MowHeight("nowhere"), std::nullopt);
+  EXPECT_EQ(planner.MowHeight(""), std::nullopt);
 }
 
 TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {

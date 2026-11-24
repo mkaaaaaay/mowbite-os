@@ -275,6 +275,7 @@ TEST(MapModel, RefusesBadProperties) {
   EXPECT_NE(with("mowable", 0).find("mowable must be true or false"), std::string::npos);
   EXPECT_NE(with("angle", "x").find("angle must be a finite number"), std::string::npos);
   EXPECT_NE(with("outline_offset", true).find("outline_offset"), std::string::npos);
+  EXPECT_NE(with("mow_height_mm", "high").find("mow_height_mm must be a finite number"), std::string::npos);
   EXPECT_NE(with("outline_count", 1.5).find("outline_count must be a whole number"), std::string::npos);
   EXPECT_NE(with("outline_count", -1).find("outline_count must be 0 or more"), std::string::npos);
   EXPECT_NE(with("outline_overlap_count", 3000000000LL).find("outline_overlap_count must be 0 or more"),
@@ -282,6 +283,28 @@ TEST(MapModel, RefusesBadProperties) {
   json map = SampleMap();
   map["areas"][0]["properties"] = 5;
   EXPECT_NE(Error(map).find("properties must be an object"), std::string::npos);
+}
+
+// As params.set takes /mower_logic/mow_height_mm: rounded and within 0..150, written back as a whole number.
+TEST(MapModel, TheCuttingHeightOfAnAreaAsTheSettingTakesIt) {
+  const auto height = [](const json& value) {
+    json map = SampleMap();
+    map["areas"][0]["properties"]["mow_height_mm"] = value;
+    const auto parsed = ParseMap(map);
+    EXPECT_TRUE(parsed.map) << parsed.error;
+    return parsed.map ? parsed.map->areas[0].mow_height_mm : std::nullopt;
+  };
+  EXPECT_EQ(height(45), 45);
+  EXPECT_EQ(height(45.4), 45);
+  EXPECT_EQ(height(200), 150);
+  EXPECT_EQ(height(-5), 0);
+  EXPECT_EQ(height(nullptr), std::nullopt);
+  EXPECT_EQ(ParseMap(SampleMap()).map->areas[0].mow_height_mm, std::nullopt);
+  json map = SampleMap();
+  map["areas"][0]["properties"]["mow_height_mm"] = 44.6;
+  const json written = ToJson(*ParseMap(map).map);
+  EXPECT_EQ(written["areas"][0]["properties"]["mow_height_mm"], json(45));
+  EXPECT_FALSE(ToJson(*ParseMap(SampleMap()).map)["areas"][0]["properties"].contains("mow_height_mm"));
 }
 
 TEST(MapModel, RefusesBadDocks) {
@@ -319,6 +342,6 @@ TEST(MapModel, NamesThePropertiesOfThePlanner) {
 
 TEST(MapModel, ReportsTheStoredAreaProperties) {
   const std::vector<std::string> expected = {"name",  "type", "active", "mowable", "angle", "outline_count",
-                                             "outline_overlap_count", "outline_offset"};
+                                             "outline_overlap_count", "outline_offset", "mow_height_mm"};
   EXPECT_EQ(mowbite_map::AreaPropertyNames(), expected);
 }

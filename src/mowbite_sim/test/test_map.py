@@ -189,7 +189,7 @@ class TestMap(unittest.TestCase):
         self.assertIn("map.area_properties", methods)
         answer = self.probe.rpc("map.area_properties")
         self.assertEqual(answer["result"], ["name", "type", "active", "mowable", "angle", "outline_count",
-                                            "outline_overlap_count", "outline_offset"])
+                                            "outline_overlap_count", "outline_offset", "mow_height_mm"])
 
     def test_02_replace_stores_closes_the_rings_and_publishes(self):
         self.assertEqual(self.status(MapStatus.DATUM_EMPTY).mowing_allowed, False)
