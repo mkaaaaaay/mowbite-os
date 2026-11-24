@@ -388,8 +388,10 @@ TrackView Tracker::ViewFrom(const Track& track, const Pose& pose) const {
     const double off_y = std::max(std::abs(by) - body_.half_width, 0.0);
     const bool around = std::hypot(off_x, off_y) - reach < config_.stop_living_around + release;
     const bool corridor = not_behind && beside <= config_.stop_living_margin;
-    if (around || (not_behind && beside <= config_.stop_living_margin + release &&
-                   view.ahead <= config_.stop_living_ahead + release)) {
+    // One that stops the mower holds it while it stays in its way within the slow zone.
+    const double stop_ahead =
+        track.stopping ? std::max(config_.stop_living_ahead + release, config_.slow_ahead) : config_.stop_living_ahead;
+    if (around || (not_behind && beside <= config_.stop_living_margin + release && view.ahead <= stop_ahead)) {
       view.zone = Zone::kStop;
     } else if (corridor && view.ahead <= config_.slow_ahead) {
       view.zone = Zone::kSlow;

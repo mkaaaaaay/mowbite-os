@@ -116,7 +116,8 @@ struct TrackerConfig {
   double slow_ahead = 2.0;
   double zone_sigma = 1.0;
   // A track that stops the mower leaves the stop zone only this much (m) beyond its edges: a thing on the edge does not
-  // let the mower go and stop again as the pose wanders by a few cm.
+  // let the mower go and stop again as the pose wanders by a few cm. A living thing that stops it holds it out to
+  // slow_ahead: a person standing in the way is waited for, however its place wavers.
   double zone_release = 0.2;
   // Tracks of UNKNOWN (geometry only) stop as objects; off until false stops in the grass are measured.
   bool unknown_stops = false;

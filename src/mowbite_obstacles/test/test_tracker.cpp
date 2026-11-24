@@ -477,6 +477,41 @@ TEST_F(TrackerTest, AThingThatStopsLeavesTheZoneOnlyWellBeyondItsEdge) {
   EXPECT_FALSE(tracker.StatusAt(1.6).stop);
 }
 
+TEST_F(TrackerTest, APersonThatStopsHoldsWhileInTheWayWithinTheSlowZone) {
+  Find person = Thing(Kind::kPerson, 0.605 + 0.1 + 0.9, 0.0);
+  person.cov_xx = person.cov_yy = 0.0;
+  ASSERT_TRUE(Confirmed(tracker, person).stop);
+  tracker.Tick(1.3);
+  // Its place comes out 0.5 m farther (beyond the release of 0.2 m): it still stops.
+  pose = {1.4, -0.5, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.4);
+  EXPECT_TRUE(tracker.StatusAt(1.4).stop);
+  // Beyond the slow zone it lets go, and needs the stop zone itself again to stop.
+  pose = {1.5, -1.2, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.5);
+  EXPECT_FALSE(tracker.StatusAt(1.5).stop);
+  pose = {1.6, -0.5, 0.0, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.6);
+  const Status status = tracker.StatusAt(1.6);
+  EXPECT_FALSE(status.stop);
+  EXPECT_TRUE(status.slow);
+}
+
+TEST_F(TrackerTest, APersonThatStopsLetsGoOnceOutOfTheWay) {
+  Find person = Thing(Kind::kPerson, 0.605 + 0.1 + 0.9, 0.0);
+  person.cov_xx = person.cov_yy = 0.0;
+  ASSERT_TRUE(Confirmed(tracker, person).stop);
+  tracker.Tick(1.3);
+  // The mower stands 1.5 m aside: the person is out of its corridor and out of reach around it.
+  pose = {1.4, 0.0, -1.5, 0.0, 0.0};
+  tracker.OnPose(pose);
+  tracker.Tick(1.4);
+  EXPECT_FALSE(tracker.StatusAt(1.4).stop);
+}
+
 TEST(Body, WithoutItTheSensorsAreNotSetUp) {
   Tracker tracker;
   tracker.SetSources({"stereo"});

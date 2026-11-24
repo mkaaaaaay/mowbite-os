@@ -792,6 +792,7 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
 - With stop the logic pauses MOWING with the reason OBSTACLE (blade off) and holds a leg of docking towards the
   station while a confirmed thing lies in the stop zone, and goes on by itself once the zone is seen free for
   `obstacle_free_wait` (10 s; `obstacle_near_wait` 30 s after a thing within `obstacle_near_ahead` 0.5 m of the nose).
+  A person or animal that stopped it holds it while it stays in the way within the slow zone (`slow_ahead`, 2 m).
   A place out of view or without sight is never free; then the user can continue past what no sensor sees. Without
   sight nothing stops. Paths of these legs carry `gate`: the follower stands without a fresh `logic/drive_gate`
   (`gate_timeout` 0.5 s) and goes at most `speed_slow` while a person or animal is in the slow zone.
