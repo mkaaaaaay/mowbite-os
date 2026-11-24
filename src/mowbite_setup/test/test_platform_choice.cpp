@@ -73,6 +73,14 @@ TEST(PlatformChoice, TheStageOfTheChoiceOffersTheMowers) {
   EXPECT_FALSE(bench.program.TakeLock());
 }
 
+// The ticks of the stage of the choice leave the open step platform to the choice.
+TEST(PlatformChoice, TheTicksLeaveTheStepToTheChoice) {
+  Bench bench(kChoice, "");
+  bench.program.SetWritable(true);
+  for (int i = 0; i < 3; ++i) bench.program.Tick(10.0 + i, kWall + i);
+  EXPECT_EQ(bench.StepState("platform"), "open");
+}
+
 TEST(PlatformChoice, OnAMowerTheStepIsOkAndTheSameChoiceDoesNothing) {
   Bench bench(kTron, "tron");
   EXPECT_EQ(bench.StepState("platform"), "ok");

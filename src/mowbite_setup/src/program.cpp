@@ -1680,11 +1680,12 @@ void Program::TickAssign(double now, double wall) {
   }
 }
 
-// The steps the OS ends by what it sees: a condition of done_when, the confirmed keys of geometry.
+// The steps the OS ends by what it sees: a condition of done_when, the confirmed keys of geometry. The step platform
+// follows the choice alone (MarkPlatform).
 void Program::TickWaiting(double wall) {
   if (!writable_) return;
   for (const Step& step : list_.steps) {
-    if (step.start || !step.automatic) continue;
+    if (step.start || !step.automatic || step.check == "platform") continue;
     Record& record = RecordOf(step);
     if (record.state == "ok" || !NeedsMet(step)) continue;
     bool met = false;
