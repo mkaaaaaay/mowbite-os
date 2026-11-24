@@ -271,6 +271,9 @@ class McuNode : public rclcpp::Node {
     config.mow_height_mm = static_cast<uint16_t>(std::clamp<int64_t>(declare_parameter("mow_height_mm", 60),
                                                                       tron::kMinCutterHeightMm,
                                                                       tron::kMaxCutterHeightMm));
+    config.blade_off_height_mm = static_cast<uint16_t>(
+        std::clamp<int64_t>(declare_parameter("blade_off_height_mm", int64_t{config.blade_off_height_mm}),
+                            tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
     config.blade_lease_max_s = declare_parameter("blade_lease_max", config.blade_lease_max_s);
     config.bumper_latches_emergency = declare_parameter("bumper_latches_emergency", true);
     const bool send_imu = declare_parameter("send_imu", true) && !read_only;

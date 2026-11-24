@@ -41,9 +41,10 @@ T9 asks how long the MCU keeps a setpoint once the host's frames end, by what ca
 tron_mcu starts again with measurement settings, the wheels turn in the air and hw/silence begins right after the
 chosen frame; the driver stops them when the silence ends. G adds a long silence with heartbeats alone afterwards, B
 (with --blade, the disc off) the blade on frame last: mowbite-measure --steps T9 [--hold V0,V1,V2,V3,G].
-T10 (only with --blade, the disc off) asks what the cutting height does, which the MCU does not report: the deck down
-with the start of the blade motor and up with its off, then new heights while it turns. The person reads the time the
-deck moved off a video; the programme records the motor's rpm and status meanwhile: mowbite-measure --steps T10 --blade.
+T10 (only with --blade, the disc off) asks what the cutting height does, which the MCU does not report: with the blade
+off another height in the off frames, the deck down with the start of the blade motor and up with its off, then new
+heights while it turns. The person reads the time the deck moved off a video; the programme records the motor's
+rpm and status meanwhile: mowbite-measure --steps T10 --blade.
 """
 import argparse
 import collections
@@ -182,6 +183,8 @@ LIFT_BLADE_PERCENT = 100
 # starts and back up as it goes off, then to each of HEIGHT_WHILE_TURNING while it turns, HEIGHT_RUN_S a height on a
 # renewed lease. The speed has no effect on the Tron (T6.1).
 HEIGHT_LOW_MM = 30
+# Before that, with the blade off, tron_mcu starts with its off frames at HEIGHT_PARKED_MM, then again as shipped.
+HEIGHT_PARKED_MM = 40
 HEIGHT_WHILE_TURNING = (60, 30, 90)
 HEIGHT_RUN_S = 10.0
 HEIGHT_BLADE_PERCENT = 30
@@ -2750,7 +2753,34 @@ class TronMeasurement(Measurement):
                         f"{HEIGHT_RUN_S * (1 + len(HEIGHT_WHILE_TURNING)) + BLADE_RUN_S:.0f} s a run, the deck goes "
                         f"between {HEIGHT_LOW_MM} and {TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
             return
+        self.height_parked(f"{step}.0")
         self.blade_allowed(step, lambda: self.height_runs(step))
+
+    def height_parked(self, step):
+        """No motor: tron_mcu starts again with its off frames at HEIGHT_PARKED_MM, then again as shipped."""
+        text = (f"tron_mcu starts again with the off frames at {HEIGHT_PARKED_MM} mm instead of "
+                f"{TRON_BLADE_HEIGHT_MM} mm, then again as shipped")
+        if not self.ask(f"{step} no motor, no wheel command: {text}"):
+            return
+        self.mark(step, text)
+        try:
+            for from_mm, to_mm in ((TRON_BLADE_HEIGHT_MM, HEIGHT_PARKED_MM), (HEIGHT_PARKED_MM, TRON_BLADE_HEIGHT_MM)):
+                old = self.start.driver_pid
+                since = time.monotonic()
+                if to_mm == TRON_BLADE_HEIGHT_MM:
+                    self.start.restart_driver()
+                else:
+                    self.start.restart_driver(blade_off_height_mm=to_mm)
+                self.wait_driver_back(step, old)
+                moved = self.person.number(f"s the deck took from {from_mm} to {to_mm} mm with the blade off "
+                                           "(0: it did not move)")
+                self.rec.write("height", step=step, way="parked", from_mm=from_mm, to_mm=to_mm, since=since,
+                               moved_s=moved)
+        finally:
+            if self.start.overrides:
+                old = self.start.driver_pid
+                self.start.restart_driver()
+                self.wait_driver_back(step, old)
 
     def height_runs(self, step):
         text = (f"on at {HEIGHT_LOW_MM} mm (the deck at {TRON_BLADE_HEIGHT_MM} mm), then off, which sends "

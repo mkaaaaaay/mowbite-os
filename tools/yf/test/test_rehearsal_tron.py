@@ -14,8 +14,8 @@ no finding, and the front on the blade motor goes up until lift shows. The fake 
 Tron does, so a run may start with STOP kept from the last one, as on the Tron after each start of tron_mcu, and has to
 release it first. The STOP check has to pass before the first wheel command and before the first blade on; STOP held
 through its release has to end the run before any. T8: STOP kept until the clear frame and while pressed, bumper and
-lift not kept, no wheel command and no blade at all. T10: every height goes out in order on a turning blade motor
-that the fake keeps at 3000 rpm. No process may be left.
+lift not kept, no wheel command and no blade at all. T10: tron_mcu starts once with its off frames at 40 mm, then
+every height goes out in order on a turning blade motor that the fake keeps at 3000 rpm. No process may be left.
 
 Reading the port while tron_mcu holds it (TIOCEXCL) needs root with CAP_SYS_ADMIN, as on the Tron:
   docker run --user 0 --cap-add SYS_ADMIN ... python3 -m unittest tools/yf/test/test_rehearsal_tron.py
@@ -449,19 +449,21 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertTrue(end["complete"])
         self.assertEqual(code, 0)
         heights = [(r["step"], r["way"], r["from_mm"], r["to_mm"]) for r in rec if r["kind"] == "height"]
-        self.assertEqual(heights, [("T10.1", "on", 90, 30), ("T10.1", "off", 30, 90), ("T10.2", "on", 90, 60),
+        self.assertEqual(heights, [("T10.0", "parked", 90, 40), ("T10.0", "parked", 40, 90),
+                                   ("T10.1", "on", 90, 30), ("T10.1", "off", 30, 90), ("T10.2", "on", 90, 60),
                                    ("T10.2", "on", 60, 30), ("T10.2", "on", 30, 90), ("T10.2", "off", 90, 90)])
         for r in rec:
             if r["kind"] == "height" and r["way"] == "on":
                 # The fake turns at 3000 rpm whatever the height and reports no fault.
                 self.assertEqual((r["rpm_max"], r["stopped"], r["faults"]), (3000, False, []), r)
-            elif r["kind"] == "height":
+            elif r["kind"] == "height" and r["way"] == "off":
                 self.assertLessEqual(r["still_s"], 3.0, r)
         requests = [r["height_mm"] for r in rec if r["kind"] == "blade" and r["on"]]
         changes = [h for i, h in enumerate(requests) if i == 0 or h != requests[i - 1]]
         self.assertEqual(changes, [30, 90, 60, 30, 90])
-        starts = [r["params"]["allow_blade"] for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
-        self.assertEqual(starts, [False, True, False])
+        starts = [(r["params"]["allow_blade"], r["params"].get("blade_off_height_mm"))
+                  for r in rec if r["kind"] == "process" and r["node"] == "tron_mcu"]
+        self.assertEqual(starts, [(False, None), (False, 40), (False, None), (True, None), (False, None)])
         self.assertFalse([r for r in rec if r["kind"] == "cmd" and (r["v"] or r["w"])])
 
 

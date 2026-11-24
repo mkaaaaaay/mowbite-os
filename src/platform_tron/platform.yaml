@@ -46,6 +46,8 @@ tron_mcu:
     # motor turned at about 3000 rpm at 30 and at 100 % (measured 2026-11-11; below 30 and above 100 not measured).
     blade_speed_percent: 100
     mow_height_mm: 60
+    # Height in the off frames, as the maker's software sends it.
+    blade_off_height_mm: 90
     # Longest blade lease in s; without a renewal the blade goes off when it runs out.
     blade_lease_max: 2.0
     bumper_latches_emergency: true
