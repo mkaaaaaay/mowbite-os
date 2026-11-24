@@ -94,8 +94,8 @@ Duties:
 - Buttons for home, start and power (optional): the node that reads them publishes SHORT and HELD on `hw/button`
   (`ButtonEvent`, HELD once at `button_hold_s`), and `button_hold_s` of `hw/capabilities` names that time; the same
   value feeds both, from one place of the platform. `hw/button` may have several publishers, e.g. the driver for STOP
-  and a node of its own for the other buttons. The logic ignores them in SETUP, while the emergency is latched and
-  while charging; a start by button passes the same checks as one from the app. Where holding POWER cuts the power
+  and a node of its own for the other buttons. The logic ignores them in SETUP and while the emergency is latched,
+  and while charging all but START held; a start by button passes the same checks as one from the app. Where holding POWER cuts the power
   in hardware (the Tron, after about 3 s), HELD of POWER comes just before: switching the blade off and stopping then
   is only an attempt, what is written has to be written before.
 - Capabilities: `platform` is the same name as in the geometry file; set `gnss_receiver_time` only where

@@ -752,6 +752,58 @@ TEST(LogicCommands, StopAtTheMowerKeepsMowingPaused) {
   EXPECT_FALSE(core.FollowerActive());
 }
 
+// HOME short goes home, START held starts or continues, START short pauses, POWER held stops what drives.
+TEST(LogicCommands, TheButtonsOfTheMowerStandForCommands) {
+  const auto commands = [](const TestCore& core) {
+    std::vector<std::string> out;
+    for (const auto& [button, press] : std::vector<std::pair<Button, Press>>{{Button::kHome, Press::kShort},
+                                                                              {Button::kStart, Press::kHeld},
+                                                                              {Button::kStart, Press::kShort},
+                                                                              {Button::kPower, Press::kHeld},
+                                                                              {Button::kHome, Press::kHeld},
+                                                                              {Button::kPower, Press::kShort},
+                                                                              {Button::kStop, Press::kLong}}) {
+      out.push_back(core.ButtonCommand(button, press));
+    }
+    return out;
+  };
+  using V = std::vector<std::string>;
+  EXPECT_EQ(commands(Idle()), (V{"docking.start", "mowing.start", "", "", "", "", ""}));
+  EXPECT_EQ(commands(Mowing()), (V{"mowing.abort", "", "mowing.pause", "mowing.pause", "", "", ""}));
+  EXPECT_EQ(commands(Paused()), (V{"mowing.abort", "mowing.continue", "", "", "", "", ""}));
+  EXPECT_EQ(commands(Docking()), (V{"", "", "", "docking.abort", "", "", ""}));
+  // Nothing in an emergency; on the contacts only the start.
+  const V none(7, "");
+  EXPECT_EQ(commands(PausedInEmergency()), none);
+  TestCore emergency = Idle();
+  emergency.OnHardwareStatus(InEmergency());
+  EXPECT_EQ(commands(emergency), none);
+  EXPECT_EQ(commands(OnDock()), (V{"", "mowing.start", "", "", "", "", ""}));
+  TestCore undocking = Undocking();
+  EXPECT_EQ(commands(undocking), none);
+  undocking.OnHardwareStatus(Healthy());
+  ASSERT_EQ(undocking.RobotState().state, "UNDOCKING");
+  EXPECT_EQ(commands(undocking), (V{"", "", "", "undocking.abort", "", "", ""}));
+}
+
+// A button runs its command with the checks of the app and says where it came from.
+TEST(LogicCommands, AButtonPausesAndGoesHomeAtTheMower) {
+  TestCore core = Mowing();
+  core.TakeEvents();
+  const json button = {{"client", kButtonClient}};
+  ASSERT_TRUE(core.Command(core.ButtonCommand(Button::kStart, Press::kShort), button).accepted);
+  auto events = core.TakeEvents();
+  const Event* paused = Find(events, "STATE");
+  ASSERT_NE(paused, nullptr);
+  EXPECT_EQ(paused->details["message"], "Paused at the mower");
+  EXPECT_EQ(core.RobotState().state, "PAUSED");
+  ASSERT_TRUE(core.Command(core.ButtonCommand(Button::kHome, Press::kShort), button).accepted);
+  events = core.TakeEvents();
+  EXPECT_TRUE(std::any_of(events.begin(), events.end(), [](const Event& e) {
+    return e.details.value("message", "") == "Going home: mowing stopped at the mower";
+  }));
+}
+
 TEST(LogicCommands, AnEmergencyEndsWithASourceOnlyAfterItsOwnRequest) {
   TestCore core = Idle();
   core.OnHardwareStatus(InEmergency());

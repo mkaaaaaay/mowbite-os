@@ -130,6 +130,8 @@ class LogicNode : public rclcpp::Node {
   void AnswerReleaseOutcomeLocked();
   void RefuseReleaseLocked(const Reason& why);
   void OnButton(const mowbite_msgs::msg::ButtonEvent& msg);
+  // HOME, START or POWER: the command of LogicCore::ButtonCommand with the client button, refused as from the app.
+  void OnMowerButton(Button button, Press press);
   void ReleaseEmergency(const std::string& rpc_id = "", uint32_t latch_count = 0,
                         const std::string& reason = "reset_emergency from the app");
   void SendDrive(uint8_t source, const geometry_msgs::msg::Twist& twist);

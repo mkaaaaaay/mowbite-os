@@ -28,6 +28,12 @@ constexpr int kWriterStuckMs = 5000;
 constexpr double kCalibrationStopWaitS = 10.0;
 
 using Wait = mowbite_hold::FileWriter::Wait;
+using mowbite_msgs::msg::ButtonEvent;
+static_assert(static_cast<int>(Button::kHome) == ButtonEvent::BUTTON_HOME);
+static_assert(static_cast<int>(Button::kStart) == ButtonEvent::BUTTON_START);
+static_assert(static_cast<int>(Button::kPower) == ButtonEvent::BUTTON_POWER);
+static_assert(static_cast<int>(Press::kHeld) == ButtonEvent::PRESS_HELD);
+static_assert(static_cast<int>(Press::kShort) == ButtonEvent::PRESS_SHORT);
 
 using mowbite_hold::WriteFileSafely;
 
@@ -513,10 +519,13 @@ void LogicNode::RefuseReleaseLocked(const Reason& why) {
 }
 
 // STOP let go after the gesture of the driver releases like emergency.reset, with its latch_count; held and canceled
-// only show on the lights.
+// only show on the lights. Any other button runs the command it stands for like one from the app.
 void LogicNode::OnButton(const mowbite_msgs::msg::ButtonEvent& msg) {
-  using mowbite_msgs::msg::ButtonEvent;
-  if (msg.button != ButtonEvent::BUTTON_STOP || msg.press != ButtonEvent::PRESS_LONG) return;
+  if (msg.button != ButtonEvent::BUTTON_STOP) {
+    OnMowerButton(static_cast<Button>(msg.button), static_cast<Press>(msg.press));
+    return;
+  }
+  if (msg.press != ButtonEvent::PRESS_LONG) return;
   bool emergency;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -528,6 +537,25 @@ void LogicNode::OnButton(const mowbite_msgs::msg::ButtonEvent& msg) {
   }
   RCLCPP_INFO(get_logger(), "STOP at the mower: releasing the emergency");
   ReleaseEmergency("", msg.latch_count, "STOP at the mower");
+  Step();
+}
+
+void LogicNode::OnMowerButton(Button button, Press press) {
+  std::string name;
+  CommandOutcome outcome;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    name = core_.View().ButtonCommand(button, press);
+    if (name.empty()) return;
+    outcome = core_.Call<&LogicCore::Command>(name, json{{"client", kButtonClient}}, NodeProblemLocked(name));
+  }
+  if (outcome.accepted) {
+    RCLCPP_INFO(get_logger(), "Button %d press %d: %s", static_cast<int>(button), static_cast<int>(press),
+                name.c_str());
+  } else {
+    RCLCPP_WARN(get_logger(), "Button %d press %d: %s refused: %s (%s)", static_cast<int>(button),
+                static_cast<int>(press), name.c_str(), outcome.why.code.c_str(), outcome.why.message.c_str());
+  }
   Step();
 }
 

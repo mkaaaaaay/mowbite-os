@@ -440,7 +440,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
     const int waiting = kPauseWaitsForUser;
     if (name == "mowing.pause") {
       if (mowing_.pause() & kPauseManual) return WrongState();
-      Pause(kPauseManual, Reason("MANUAL", "Paused by the app"));
+      Pause(kPauseManual, Reason("MANUAL", client_ == kButtonClient ? "Paused at the mower" : "Paused by the app"));
       return {};
     }
     if (name == "mowing.continue") {
@@ -465,7 +465,8 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       return {};
     }
     if (name == "mowing.abort") {
-      EndJob(false, true, Reason("MANUAL", "Going home: mowing stopped by the app"));
+      const std::string by = client_ == kButtonClient ? "at the mower" : "by the app";
+      EndJob(false, true, Reason("MANUAL", "Going home: mowing stopped " + by));
       return {};
     }
     // skip_area, skip_path: only the area or path the client saw.

@@ -296,6 +296,10 @@ class LogicCore {
   // STOP was let go after the gesture of the driver (hw/button LONG): true in an emergency, which the node then
   // releases like emergency.reset with source button; false outside of one.
   bool OnStopRelease();
+  // The command a button of the mower stands for now, empty for none: HOME short goes home, START held starts or
+  // continues, START short pauses mowing, POWER held stops what drives before the power goes. Nothing in SETUP or in
+  // an emergency, only START held while charging. The node runs it like one from the app, client kButtonClient.
+  std::string ButtonCommand(Button button, Press press) const;
   // robot.geometry.set changed the dimensions: event GEOMETRY_CHANGED with the keys that are other now and the keys of
   // the body below the platform's value; with the latter it is a warning with the reason BELOW_DEFAULT, else info. It
   // stops nothing, so it has no resume. With parts of SetShapeOutside it is a warning as well and names them in

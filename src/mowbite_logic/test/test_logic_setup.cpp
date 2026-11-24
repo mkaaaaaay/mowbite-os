@@ -39,6 +39,15 @@ std::vector<std::string> Types(const std::vector<Event>& events) {
 
 }  // namespace
 
+TEST(LogicSetup, TheButtonsOfTheMowerDoNothing) {
+  TestCore core = Ready();
+  ASSERT_EQ(core.ButtonCommand(Button::kStart, Press::kHeld), "mowing.start");
+  ASSERT_TRUE(core.OnSetupMotion(true, "wheels", 10.0).empty());
+  EXPECT_EQ(core.ButtonCommand(Button::kStart, Press::kHeld), "");
+  EXPECT_EQ(core.ButtonCommand(Button::kHome, Press::kShort), "");
+  EXPECT_EQ(core.ButtonCommand(Button::kPower, Press::kHeld), "");
+}
+
 TEST(LogicSetup, BeginsFromIdleAndEndsWithItsMotion) {
   TestCore core = Ready();
   ASSERT_TRUE(core.OnSetupMotion(true, "wheels", 10.0).empty());

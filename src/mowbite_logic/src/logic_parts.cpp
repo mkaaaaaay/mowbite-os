@@ -101,6 +101,31 @@ bool LogicCore::OnStopRelease() {
   return release_.OnStopRelease(CoreFacts(*this));
 }
 
+std::string LogicCore::ButtonCommand(Button button, Press press) const {
+  if (state_ == State::kSetup || emergency_) return "";
+  // Charging only START held counts: the mower starts from the station.
+  const bool start = button == Button::kStart && press == Press::kHeld;
+  if (hw_.battery_ok && hw_.dock_contact && !start) return "";
+  const bool mowing = state_ == State::kMowing;
+  const int pause = mowing_.pause();
+  if (button == Button::kHome && press == Press::kShort) {
+    return mowing ? "mowing.abort" : state_ == State::kIdle ? "docking.start" : "";
+  }
+  if (start) {
+    if (state_ == State::kIdle) return "mowing.start";
+    return mowing && (pause & (kPauseWaitsForUser | kPauseObstacle)) ? "mowing.continue" : "";
+  }
+  if (button == Button::kStart && press == Press::kShort) {
+    return mowing && !(pause & kPauseManual) ? "mowing.pause" : "";
+  }
+  if (button == Button::kPower && press == Press::kHeld) {
+    if (mowing) return pause & kPauseManual ? "" : "mowing.pause";
+    if (state_ == State::kDocking) return "docking.abort";
+    if (state_ == State::kUndocking) return "undocking.abort";
+  }
+  return "";
+}
+
 Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now_s) {
   return setup_.OnSetupMotion(CoreAccess(*this), active, step, now_s);
 }

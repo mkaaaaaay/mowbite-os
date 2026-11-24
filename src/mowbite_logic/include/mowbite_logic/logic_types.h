@@ -464,6 +464,10 @@ constexpr int kPauseObstacle = 1 << 4;
 constexpr int kPauseWaitsForUser = kPauseManual | kPauseEmergency | kPauseFault;
 // Pauses that never go home: the user or a person or animal may stand at the mower (G11, G45).
 constexpr int kPauseKeepsPlace = kPauseWaitsForUser | kPauseObstacle;
+// Buttons and presses of hw/button (ButtonEvent); a command from a button carries the client kButtonClient.
+enum class Button { kStop = 1, kHome = 2, kStart = 3, kPower = 4 };
+enum class Press { kHeld = 1, kLong = 2, kCanceled = 3, kShort = 4 };
+inline constexpr const char* kButtonClient = "button";
 enum class Leg { kNone, kPlanning, kApproach, kFollow, kSkippedPath, kCutting, kDetour };
 
 // A stretch of a path of the plan the mower mows while it keeps out of the circles: poses first to last of path.
