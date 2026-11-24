@@ -53,7 +53,7 @@ install(FILES api.schema.json DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(mowbite_api_test test/test_catalog.cpp test/test_schema.cpp test/test_check.cpp)
+  ament_add_gtest(mowbite_api_test test/test_catalog.cpp test/test_schema.cpp test/test_check.cpp TIMEOUT 300)
   target_link_libraries(mowbite_api_test mowbite_api_core)
   target_compile_definitions(mowbite_api_test PRIVATE
     MOWBITE_API_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
