@@ -137,6 +137,7 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
     records[step.id] = std::move(record);
   }
   records_ = std::move(records);
+  MarkPlatform();
   reset_date_ = file.contains("reset_date") && file["reset_date"].is_string() ? file["reset_date"].get<std::string>()
                                                                               : "";
   if (file.contains("lock_failures") && file["lock_failures"].is_number_unsigned()) {
@@ -1151,6 +1152,7 @@ std::optional<Refusal> Program::Reset(const json& params, double wall) {
   release_.reset();
   ResetSettings(wall);
   for (auto& [id, record] : records_) record = Record();
+  MarkPlatform();
   reached_.clear();
   events_.push_back({"SETUP", {{"what", "reset"}}});
   Changed();

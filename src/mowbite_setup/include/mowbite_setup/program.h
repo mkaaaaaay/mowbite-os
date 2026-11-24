@@ -190,6 +190,15 @@ class Program {
   // setup.keep: keeps a step that moves the wheels going; result tells whether the step runs.
   std::optional<Refusal> Keep(const json& params, double now, json* result);
 
+  // platform_choice.cpp. The mowers of the image as setup.platforms lists them ([{name, texts, image}]), the one the
+  // OS runs as (empty in the stage of the choice) and whether the installation fixed it.
+  void SetPlatforms(json platforms, std::string chosen, bool fixed);
+  json Platforms() const;
+  // setup.platform.set; result {restart}. Another mower than the one chosen takes every result back and closes the
+  // lock with a reset; TakePlatform then names it once, for platform.json and the restart.
+  std::optional<Refusal> ChoosePlatform(const json& params, double wall, json* result);
+  std::optional<std::string> TakePlatform();
+
   // What a step that moves the wheels asks for now: setup/motion while it runs (nothing else), the command to send
   // (nothing: none), and once at its end the step to send setup/motion with active false for.
   std::optional<Motion> MotionNow() const;
@@ -510,6 +519,8 @@ class Program {
   json BladeValues(const Run& run, const Step& step, bool final) const;
   // summary.cpp: the step that opens the lock.
   static bool IsSummary(const Step& step);
+  // The step platform is ok while the OS runs as a mower, open in the stage of the choice.
+  void MarkPlatform();
   // What keeps the step summary from starting; the first of them refuses setup.start.
   std::vector<Refusal> SummaryProblems(double now) const;
   // The safety steps of the list that are not ok, or that a cause in the lock names.
@@ -566,6 +577,11 @@ class Program {
 
   StepList list_;
   std::string platform_;
+  json platforms_ = json::array();
+  // The name of the platform package the OS runs as; empty in the stage of the choice.
+  std::string chosen_;
+  bool fixed_ = false;
+  std::optional<std::string> choice_;
   std::map<std::string, Record> records_;
   int version_ = 1;
   bool writable_ = true;

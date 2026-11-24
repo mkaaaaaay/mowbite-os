@@ -1,10 +1,14 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 7
+catalog: 8
 # inputs_assign, blade and summary restart the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
+  - id: platform
+    stage: device
+    check: platform
+    symbol: board
   - id: variant
     stage: device
     check: choice

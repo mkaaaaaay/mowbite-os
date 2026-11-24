@@ -501,6 +501,10 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     const auto summaries = std::count_if(out.steps.begin(), out.steps.end(),
                                          [](const Step& step) { return step.check == "summary"; });
     if (summaries > 1) throw Wrong("more than one step summary");
+    // A step platform comes first: the app shows which mower this is before anything is checked on it.
+    for (size_t i = 1; i < out.steps.size(); ++i) {
+      if (out.steps[i].check == "platform") throw Wrong(out.steps[i].id + ": platform is only the first step");
+    }
     for (const Step& step : out.steps) {
       if (step.check == "summary") throw Wrong(step.id + " comes after a step silence");
       if (step.check == "silence") break;
