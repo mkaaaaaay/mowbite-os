@@ -19,7 +19,7 @@ from launch.actions import TimerAction
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import TRON_SPEED as SPEED  # noqa: E402
-from sim_common import EXIT_CODES, mosquitto, mqtt_connect, sim_files, sim_stack, wait_until  # noqa: E402
+from sim_common import EXIT_CODES, MqttBroker, mosquitto, sim_files, sim_stack, wheel_speeds  # noqa: E402
 
 MQTT_PORT = 18855
 WORK = tempfile.mkdtemp(prefix="mowbite_os_data_rollback_")
@@ -39,55 +39,10 @@ def generate_test_description():
                                      launch_testing.actions.ReadyToTest()]), {}
 
 
-class Broker:
-    def __init__(self):
-        self.msgs = []
-        self.client = mqtt_connect("os_data_rollback_test", MQTT_PORT, lambda _c, _u, m: self.msgs.append((m.topic, m.payload)),
-                                   "#", timeout=30.0)
-
-    def latest(self, topic):
-        for top, payload in reversed(self.msgs):
-            if top == topic:
-                return payload
-        return None
-
-    def wait(self, pred, timeout=10.0):
-        return wait_until(pred, timeout)
-
-    def events(self, kind, since):
-        return [json.loads(p) for top, p in self.msgs[since:] if top == "events/json" and json.loads(p)["type"] == kind]
-
-    def rpc(self, method, params=None, rid="r"):
-        start = len(self.msgs)
-        self.client.publish("rpc/request", json.dumps({"jsonrpc": "2.0", "method": method, "params": params or {},
-                                                       "id": rid}))
-
-        def answer():
-            for top, p in self.msgs[start:]:
-                if top == "rpc/response" and json.loads(p).get("id") == rid:
-                    return json.loads(p)
-            return None
-        return self.wait(answer, 5)
-
-    def stop(self):
-        self.client.loop_stop()
-        self.client.disconnect()
-
-
-def speeds_moving():
-    out = []
-    with open(LOG) as f:
-        for line in f:
-            entry = json.loads(line)
-            if entry.get("type") == 0 and entry.get("mod") == SPEED and entry["speed"] != [0.0, 0.0]:
-                out.append(entry)
-    return out
-
-
 class TestOsDataRollback(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.broker = Broker()
+        cls.broker = MqttBroker("os_data_rollback_test", MQTT_PORT)
         assert cls.broker.wait(lambda: cls.broker.latest("robot_state/json"), 90), "no robot_state"
 
     @classmethod
@@ -112,7 +67,7 @@ class TestOsDataRollback(unittest.TestCase):
         self.assertTrue(self.broker.wait(lambda: self.schedule() == (False, "data_rollback"), 10), self.schedule())
         r = self.broker.rpc("schedule.set", {"skip_rain": 1}, "set")
         self.assertIn("result", r, r)
-        self.assertEqual(speeds_moving(), [])
+        self.assertEqual(wheel_speeds(LOG, 0, SPEED), [])
 
     def test_3_the_confirmation_frees_it(self):
         mark = len(self.broker.msgs)

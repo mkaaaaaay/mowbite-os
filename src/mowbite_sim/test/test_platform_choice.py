@@ -24,7 +24,7 @@ from launch.actions import ExecuteProcess
 from mowbite_msgs.msg import HardwareStatus, RobotState
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import SimProbe, journal_dir, loopback_group, sim_files  # noqa: E402
+from sim_common import SimProbe, journal_dir, loopback_group, sim_files, stop_process  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_platform_choice_")
 _, _, _, DATA = sim_files(WORK)
@@ -56,8 +56,7 @@ def start(name):
 
 def stop(process):
     if process.poll() is None:
-        os.killpg(process.pid, signal.SIGINT)
-        process.wait(30)
+        stop_process(process, signal.SIGINT, group=True)
 
 
 class Probe(SimProbe):
@@ -69,14 +68,15 @@ class Probe(SimProbe):
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.start()
 
+    def state(self):
+        return (self.rpc("setup.get", {}, 10) or {}).get("result", {})
+
     def setup(self, method, **params):
         """The answer of a method setup.* with the version of the state now."""
-        state = (self.rpc("setup.get", {}, 10) or {}).get("result", {})
-        return self.rpc(method, {**params, "version": state.get("version")}, 10) or {}
+        return self.rpc(method, {**params, "version": self.state().get("version")}, 10) or {}
 
     def step(self, step):
-        state = (self.rpc("setup.get", {}, 10) or {}).get("result", {})
-        return next((entry for entry in state.get("steps", []) if entry["id"] == step), None)
+        return next((entry for entry in self.state().get("steps", []) if entry["id"] == step), None)
 
 
 class TestPlatformChoice(unittest.TestCase):

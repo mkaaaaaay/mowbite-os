@@ -540,6 +540,45 @@ def mqtt_rpc(client, answers, lock, method, params=None, timeout=10.0):
     return None
 
 
+class MqttBroker:
+    """A client on every topic of the broker of the OS that keeps what comes as (topic, payload) in msgs."""
+
+    def __init__(self, name, port):
+        self.msgs = []
+        self.client = mqtt_connect(name, port, lambda _c, _u, m: self.msgs.append((m.topic, m.payload)), "#",
+                                   timeout=30.0)
+
+    def latest(self, topic):
+        for top, payload in reversed(self.msgs):
+            if top == topic:
+                return payload
+        return None
+
+    def wait(self, pred, timeout=10.0):
+        return wait_until(pred, timeout)
+
+    def events(self, kind, since):
+        """The events of that type on events/json from msgs[since] on."""
+        return [json.loads(p) for top, p in self.msgs[since:] if top == "events/json" and json.loads(p)["type"] == kind]
+
+    def rpc(self, method, params=None, rid="r"):
+        """The answer to a request on rpc/request, None after 5 s."""
+        start = len(self.msgs)
+        self.client.publish("rpc/request", json.dumps({"jsonrpc": "2.0", "method": method, "params": params or {},
+                                                       "id": rid}))
+
+        def answer():
+            for top, p in self.msgs[start:]:
+                if top == "rpc/response" and json.loads(p).get("id") == rid:
+                    return json.loads(p)
+            return None
+        return self.wait(answer, 5)
+
+    def stop(self):
+        self.client.loop_stop()
+        self.client.disconnect()
+
+
 # --- the probe node beside the stack
 
 
