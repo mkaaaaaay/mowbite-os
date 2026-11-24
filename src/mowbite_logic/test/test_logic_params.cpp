@@ -26,6 +26,15 @@ TEST(LogicParams, TheSettingsOfTheCatalogWithoutPlanningValues) {
   EXPECT_DOUBLE_EQ(values["gps_timeout"].get<double>(), 10.0);
 }
 
+TEST(LogicParams, OnlyTheCuttingHeightChangesAtAnyTime) {
+  EXPECT_TRUE(LogicParams::OnlyAnyTime({{"params", {{"/mower_logic/mow_height_mm", 40}}}}));
+  EXPECT_FALSE(LogicParams::OnlyAnyTime(
+      {{"params", {{"/mower_logic/mow_height_mm", 40}, {"/mower_logic/dock_at_sunset", 0}}}}));
+  EXPECT_FALSE(LogicParams::OnlyAnyTime({{"params", {{"/mower_logic/dock_at_sunset", 0}}}}));
+  EXPECT_FALSE(LogicParams::OnlyAnyTime({{"params", json::object()}}));
+  EXPECT_FALSE(LogicParams::OnlyAnyTime(json::object()));
+}
+
 TEST(LogicParams, IntsAreIntegersInTheJson) {
   const json values = LogicParams().Values();
   EXPECT_TRUE(values["rain_delay_minutes"].is_number_integer());

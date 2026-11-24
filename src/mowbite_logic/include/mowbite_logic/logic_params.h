@@ -55,6 +55,8 @@ class LogicParams {
   // or an unknown one, a value that is no number, or motor_cold_temperature not below motor_hot_temperature changes
   // nothing.
   ParamsResult Set(const json& request);
+  // Whether request changes only settings that also change outside IDLE (mow_height_mm, at once with the blade on).
+  static bool OnlyAnyTime(const json& request);
 
  private:
   static double Fit(const ParamSpec& spec, double value);

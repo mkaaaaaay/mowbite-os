@@ -1386,7 +1386,7 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
   pending.retry.first = pending.sent;
 }
 
-// Only in IDLE and all or nothing; a change counts once it is saved.
+// Only in IDLE (mow_height_mm alone at any time) and all or nothing; a change counts once it is saved.
 void LogicNode::OnParamsSet(const mowbite_msgs::msg::RpcRequest& request) {
   using mowbite_msgs::msg::RpcError;
   json params;
@@ -1404,7 +1404,7 @@ void LogicNode::OnParamsSet(const mowbite_msgs::msg::RpcRequest& request) {
       PublishHoldRefusal(request.id, "Settings change after it");
       return;
     }
-    if (!core_.View().Idle()) {
+    if (!core_.View().Idle() && !LogicParams::OnlyAnyTime(params)) {
       PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
                       "Settings change only in IDLE, not while recording, driving or mowing");
       return;

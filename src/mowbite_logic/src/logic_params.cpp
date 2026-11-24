@@ -84,6 +84,14 @@ double LogicParams::Get(const std::string& name) const {
   return values_.at(name);
 }
 
+bool LogicParams::OnlyAnyTime(const json& request) {
+  if (!request.is_object() || !request.contains("params") || !request["params"].is_object()) return false;
+  const std::string height = std::string(kLogicParamsNode) + "/mow_height_mm";
+  const json& params = request["params"];
+  return !params.empty() && std::all_of(params.items().begin(), params.items().end(),
+                                        [&height](const auto& item) { return item.key() == height; });
+}
+
 ParamsResult LogicParams::Set(const json& request) {
   ParamsResult result;
   if (!request.is_object() || !request.contains("params") || !request["params"].is_object() ||

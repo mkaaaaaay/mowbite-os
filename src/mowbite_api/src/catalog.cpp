@@ -807,7 +807,8 @@ const std::vector<Method>& Methods() {
                Text("fingerprint", "The planner's fingerprint of the plan")}),
        ""},
       {"params.set", "mowbite_logic",
-       "Changes settings of x-settings in IDLE, all or nothing; a value outside its range is set to the bound",
+       "Changes settings of x-settings in IDLE, mow_height_mm alone at any time; all or nothing, a value outside its "
+       "range is set to the bound",
        Object("params", "The settings by full name",
               {Object("params", "\"/mower_logic/<name>\": number, for names of x-settings")}),
        Object("result", "The values taken by full name, those outside the range at the bound"), ""},

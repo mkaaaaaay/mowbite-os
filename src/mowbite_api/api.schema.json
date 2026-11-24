@@ -17897,7 +17897,7 @@
       "result": "#/$defs/ntrip.set.result"
     },
     "params.set": {
-      "description": "Changes settings of x-settings in IDLE, all or nothing; a value outside its range is set to the bound",
+      "description": "Changes settings of x-settings in IDLE, mow_height_mm alone at any time; all or nothing, a value outside its range is set to the bound",
       "node": "mowbite_logic",
       "offered": "",
       "params": "#/$defs/params.set.params",
