@@ -146,7 +146,7 @@ class LogicNode : public rclcpp::Node {
   void EndDrive(bool arrived, const Reason& why, uint8_t reason, uint32_t index);
   static const char* PurposeName(int purpose);
   void PumpJob();
-  void PlanJobArea(const std::string& area_id);
+  void PlanJobArea(const std::string& area_id, double first = -1);
   void OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response);
   void Approach(const JobPose& goal);
   // Drives to the next piece of a cut plan within its area, around the circles, slowly (kDetour).
@@ -305,11 +305,19 @@ class LogicNode : public rclcpp::Node {
   };
 
   // The plan of the job's area on its way to the planner.
+  // NOT_READY of the planner (no map yet after its start): asked again this often (s), for at most this long (s).
+  static constexpr double kNotReadyRetryS = 2.0;
+  static constexpr double kNotReadyMaxS = 60.0;
   struct JobPlan {
     bool active = false;
     uint64_t seq = 0;
     double sent = 0;
     int64_t request_id = 0;
+    // NOT_READY of the planner: the area is asked again at retry_at (no request on its way meanwhile) until
+    // kNotReadyMaxS after first.
+    std::string area_id;
+    double first = 0;
+    double retry_at = 0;
   };
 
   // A cut of the job's plan on its way to the planner: where each path of it starts in its poses.
@@ -327,7 +335,12 @@ class LogicNode : public rclcpp::Node {
     PlanQuestion question;
     double sent = 0;
     int64_t request_id = 0;
+    // As JobPlan: asked again at retry_at after NOT_READY, until kNotReadyMaxS after first.
+    double first = 0;
+    double retry_at = 0;
   };
+  // Sends the question of a mowing.plan. Called with the mutex held.
+  void SendPlan(uint64_t seq, PendingPlan& pending);
 
   std::mutex mutex_;
   // Null without journal_dir.

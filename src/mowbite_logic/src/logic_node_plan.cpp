@@ -1,5 +1,6 @@
 // Coverage plans at the node: the request to the planner, its answer, and those that wait too long.
 #include <string>
+#include <utility>
 
 #include "logic_node.h"
 
@@ -15,17 +16,37 @@ rcl_interfaces::msg::Parameter Override(const std::string& name, T value) {
 
 }  // namespace
 
+void LogicNode::SendPlan(uint64_t seq, PendingPlan& pending) {
+  pending.sent = MonotonicSeconds();
+  pending.retry_at = 0;
+  auto plan = ToServiceRequest(pending.question.request);
+  // An outline of the request is no area of the map: the planner shows it with the stored settings, nothing mows it.
+  if (pending.question.area_id.empty()) plan->overrides.push_back(Override("preview", true));
+  pending.request_id =
+      plan_client_
+          ->async_send_request(
+              plan, [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedFuture f) {
+                OnPlanAnswer(seq, *f.get());
+              })
+          .request_id;
+}
+
 void LogicNode::OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response) {
   PendingPlan pending;
+  const CoverageAnswer answer = ToAnswer(response);
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = pending_plans_.find(seq);
     // Late: the request has timed out and was answered with an error.
-    if (it == pending_plans_.end()) return;
+    if (it == pending_plans_.end() || it->second.retry_at > 0) return;
+    const double t = MonotonicSeconds();
+    if (!answer.success && answer.code == "NOT_READY" && t + kNotReadyRetryS - it->second.first <= kNotReadyMaxS) {
+      it->second.retry_at = t + kNotReadyRetryS;
+      return;
+    }
     pending = std::move(it->second);
     pending_plans_.erase(it);
   }
-  const CoverageAnswer answer = ToAnswer(response);
   if (!answer.success) {
     RCLCPP_WARN(get_logger(), "mowing.plan: the planner failed: %s", answer.message.c_str());
     PublishRpcError(pending.rpc_id, kPlanInternal, "coverage planning failed: " + answer.message);
@@ -58,7 +79,10 @@ void LogicNode::ExpirePlans() {
       late.message = "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s";
       core_.Call<&LogicCore::OnCutAnswer>(late);
     }
-    if (job_plan_.active && t - job_plan_.sent > plan_timeout_s_) {
+    if (job_plan_.active && job_plan_.retry_at > 0 && t >= job_plan_.retry_at) {
+      const JobPlan waiting = std::exchange(job_plan_, JobPlan());
+      PlanJobArea(waiting.area_id, waiting.first);
+    } else if (job_plan_.active && job_plan_.retry_at == 0 && t - job_plan_.sent > plan_timeout_s_) {
       plan_client_->remove_pending_request(job_plan_.request_id);
       job_plan_ = JobPlan();
       core_.Call<&LogicCore::OnJobPlanFailed>(
@@ -66,7 +90,10 @@ void LogicNode::ExpirePlans() {
                  "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
     }
     for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
-      if (t - it->second.sent > plan_timeout_s_) {
+      if (it->second.retry_at > 0) {
+        if (t >= it->second.retry_at) SendPlan(it->first, it->second);
+        ++it;
+      } else if (t - it->second.sent > plan_timeout_s_) {
         plan_client_->remove_pending_request(it->second.request_id);
         expired.push_back(it->second.rpc_id);
         it = pending_plans_.erase(it);

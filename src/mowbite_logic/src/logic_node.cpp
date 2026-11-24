@@ -6,6 +6,7 @@
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 #include <mowbite_component/node_options.h>
 #include <rclcpp_components/register_node_macro.hpp>
 #include "mowbite_bridge/event_builder.h"
@@ -915,7 +916,8 @@ void LogicNode::PumpJob() {
   }
 }
 
-void LogicNode::PlanJobArea(const std::string& area_id) {
+// first: when the area was first asked for, below 0 for now. Called with the mutex held.
+void LogicNode::PlanJobArea(const std::string& area_id, double first) {
   PlanQuestion question = planner_.Prepare(json{{"area_id", area_id}});
   question.request.angle_offset_deg = core_.View().PlanAngle();
   if (!question.ok) {
@@ -926,11 +928,14 @@ void LogicNode::PlanJobArea(const std::string& area_id) {
     core_.Call<&LogicCore::OnJobPlanFailed>(PlannerMissing());
     return;
   }
-  RCLCPP_INFO(get_logger(), "Mowing: planning area %s", area_id.c_str());
+  if (first < 0) RCLCPP_INFO(get_logger(), "Mowing: planning area %s", area_id.c_str());
   const uint64_t seq = ++plan_seq_;
   job_plan_.active = true;
   job_plan_.seq = seq;
   job_plan_.sent = MonotonicSeconds();
+  job_plan_.area_id = area_id;
+  job_plan_.first = first < 0 ? job_plan_.sent : first;
+  job_plan_.retry_at = 0;
   job_plan_.request_id =
       plan_client_
           ->async_send_request(
@@ -945,8 +950,17 @@ void LogicNode::OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::P
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!job_plan_.active || seq != job_plan_.seq) return;
-    job_plan_ = JobPlan();
     const CoverageAnswer answer = ToAnswer(response);
+    const double t = MonotonicSeconds();
+    if (!answer.success && answer.code == "NOT_READY" && t + kNotReadyRetryS - job_plan_.first <= kNotReadyMaxS) {
+      if (job_plan_.retry_at == 0 && job_plan_.sent == job_plan_.first) {
+        RCLCPP_INFO(get_logger(), "Mowing: the planner is not ready (%s), asking again every %.0f s",
+                    answer.message.c_str(), kNotReadyRetryS);
+      }
+      job_plan_.retry_at = t + kNotReadyRetryS;
+      return;
+    }
+    job_plan_ = JobPlan();
     if (!answer.success) {
       const std::string code = PlannerSkipsArea(answer.code) ? answer.code : "PLANNING_FAILED";
       core_.Call<&LogicCore::OnJobPlanFailed>(Reason(code, answer.message));
@@ -1364,16 +1378,10 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
   auto& pending = pending_plans_[seq];
   pending.rpc_id = request.id;
   pending.question = question;
-  pending.sent = MonotonicSeconds();
-  pending.request_id =
-      plan_client_
-          ->async_send_request(
-              ToServiceRequest(question.request),
-              [this, seq](rclcpp::Client<mowbite_planner_interfaces::srv::PlanCoverage>::SharedFuture f) {
-                OnPlanAnswer(seq, *f.get());
-              })
-          .request_id;
+  pending.first = MonotonicSeconds();
+  SendPlan(seq, pending);
 }
+
 
 // Only in IDLE and all or nothing; a change counts once it is saved.
 void LogicNode::OnParamsSet(const mowbite_msgs::msg::RpcRequest& request) {
