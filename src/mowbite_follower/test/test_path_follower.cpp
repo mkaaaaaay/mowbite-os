@@ -218,8 +218,8 @@ TEST(PathFollower, TurnsOnTheSpotBeforeTheStart) {
   EXPECT_NEAR(robot.pose.x, 0.0, 0.01);
 }
 
-TEST(PathFollower, EachTurnOnTheSpotAsksForItsRoomOnce) {
-  // The start turn and the corner turn, each asked at its beginning with the rad still to turn.
+TEST(PathFollower, TheStartTurnAsksForItsRoomTheCornerDoesNot) {
+  // Asked once at its beginning with the rad still to turn; the corner is the planner's.
   std::vector<Pose2> path = Line(0, 0, M_PI / 2, 1.0);
   path.back().yaw = 0.0;
   Append(path, Line(path.back().x, path.back().y, 0.0, 1.0), true);
@@ -233,9 +233,9 @@ TEST(PathFollower, EachTurnOnTheSpotAsksForItsRoomOnce) {
   Robot robot;
   Drive(follower, robot);
   EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
-  ASSERT_GE(asked.size(), 2u);
+  ASSERT_EQ(asked.size(), 1u);
   EXPECT_NEAR(asked[0], M_PI / 2, 0.05);
-  EXPECT_NEAR(asked[1], -M_PI / 2, 0.1);
+  EXPECT_GE(follower.turns(), 2u);
 }
 
 TEST(PathFollower, ATurnWithoutRoomEndsThePathBeforeItTurns) {

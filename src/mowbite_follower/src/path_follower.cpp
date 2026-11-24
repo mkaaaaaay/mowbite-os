@@ -254,7 +254,8 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
   TrackTurn(heading);
   const double error = NormalizeAngle(target - heading);
   if (std::abs(error) <= config_.turn_tolerance) return std::nullopt;
-  if (!room_checked_) {
+  // A corner of the path is the planner's, checked there; the turns at its start and end and back onto it are not.
+  if (!room_checked_ && phase_ != Phase::kCornerTurn) {
     room_checked_ = true;
     const std::string problem = turn_room_ ? turn_room_(at_, error) : "";
     if (!problem.empty()) return Fail(Failure::kTurnRoom, problem);

@@ -263,7 +263,8 @@ TEST(TurnRoom, TheSweptBodyStaysInTheLawnOrTheTurnIsRefused) {
 TEST(TurnRoom, ABodyOverTheEdgeAlreadyMayTurnAsLongAsItGetsNoFurtherOut) {
   const Geofence fence({kLawn}, {}, 0.5);
   // Its side 0.135 m over the edge, as the planner lets it mow along there.
-  EXPECT_EQ(fence.CheckTurn({5, 5.9, 0}, 5.0 * M_PI / 180.0, kBody, 0.05), "");
+  // 3 degrees towards it add 0.03 m at the front corner.
+  EXPECT_EQ(fence.CheckTurn({5, 5.9, 0}, 3.0 * M_PI / 180.0, kBody, 0.05), "");
   EXPECT_EQ(fence.CheckTurn({5, 5.9, 0}, -M_PI / 2, kBody, 0.05), "");
   // Towards the edge the nose gets 0.41 m further out.
   const std::string left = fence.CheckTurn({5, 5.9, 0}, M_PI / 2, kBody, 0.05);

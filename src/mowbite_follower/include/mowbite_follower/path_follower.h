@@ -125,7 +125,7 @@ class PathFollower {
 
   explicit PathFollower(const FollowerConfig& config) : config_(config) {}
 
-  // Asked once at the start of every turn on the spot; without it no such check.
+  // Asked once at the start of every turn on the spot but those at corners of the path; without it no such check.
   void SetTurnRoom(TurnRoom turn_room) { turn_room_ = std::move(turn_room); }
 
   // Empty if the path can be followed from start_index, else why not.
