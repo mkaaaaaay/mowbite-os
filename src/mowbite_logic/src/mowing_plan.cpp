@@ -3,21 +3,23 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
-#include <cstring>
 
 namespace mowbite_logic {
 
 namespace {
 
-// FNV-1a over the coordinates of a ring, going on from hash.
+// FNV-1a over the number of points and the coordinates of a ring, going on from hash.
 constexpr uint64_t kShapeSeed = 14695981039346656037ull;
+uint64_t HashBytes(const void* data, size_t size, uint64_t hash) {
+  const auto* bytes = static_cast<const unsigned char*>(data);
+  for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * 1099511628211ull;
+  return hash;
+}
 uint64_t ShapeOf(const Ring& ring, uint64_t hash) {
+  const uint64_t points = ring.size();
+  hash = HashBytes(&points, sizeof points, hash);
   for (const auto& p : ring) {
-    for (const double v : {p.x, p.y}) {
-      unsigned char bytes[sizeof v];
-      std::memcpy(bytes, &v, sizeof v);
-      for (const unsigned char b : bytes) hash = (hash ^ b) * 1099511628211ull;
-    }
+    for (const double v : {p.x, p.y}) hash = HashBytes(&v, sizeof v, hash);
   }
   return hash;
 }
@@ -235,13 +237,20 @@ Reason MowingPlanner::TransitAreas(std::vector<Ring>* drivable, std::vector<Ring
 std::vector<JobArea> MowingPlanner::MowAreas() const {
   std::vector<JobArea> areas;
   if (!map_readable_) return areas;
-  uint64_t obstacles = kShapeSeed;
-  for (const auto& area : map_) {
-    if (area.type == "obstacle" && area.active) obstacles = ShapeOf(area.outline, obstacles);
-  }
   for (const auto& area : map_) {
     if (area.type != "mow") continue;
-    areas.push_back({area.id, area.name, area.active && area.mowable, ShapeOf(area.outline, obstacles)});
+    // What a plan of the area is made of (PlanRequest): its outline, the areas to drive on between its parts and the
+    // active obstacles.
+    uint64_t shape = ShapeOf(area.outline, kShapeSeed);
+    for (const auto& other : map_) {
+      if (&other != &area && other.active && (other.type == "mow" || other.type == "nav")) {
+        shape = ShapeOf(other.outline, shape);
+      }
+    }
+    for (const auto& other : map_) {
+      if (other.active && other.type == "obstacle") shape = ShapeOf(other.outline, shape);
+    }
+    areas.push_back({area.id, area.name, area.active && area.mowable, shape});
   }
   return areas;
 }

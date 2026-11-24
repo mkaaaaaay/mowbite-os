@@ -166,8 +166,9 @@ TEST(MowingPlanMap, ANewMapReplacesTheOldOne) {
   EXPECT_EQ(q.message, "Cannot plan from the map: The map is not readable");
 }
 
-// The shape of an area follows its outline and the active obstacles, not other areas or inactive obstacles.
-TEST(MowingPlanMap, TheShapeOfAnAreaFollowsItsOutlineAndTheObstacles) {
+// The shape of an area follows what its plan is made of: its outline, the other active mow and nav areas and the
+// active obstacles; not inactive areas, inactive obstacles or drafts.
+TEST(MowingPlanMap, TheShapeOfAnAreaFollowsWhatItsPlanIsMadeOf) {
   const auto shapes = [](const std::string& map) {
     MowingPlanner planner;
     planner.SetMapStatus(true, Reason());
@@ -186,17 +187,35 @@ TEST(MowingPlanMap, TheShapeOfAnAreaFollowsItsOutlineAndTheObstacles) {
     changed.replace(changed.find(from), from.size(), to);
     return changed;
   };
-  // The lawn's own corner: only the lawn.
+  // The lawn's own corner: the lawn and the areas that drive on it.
   auto other = shapes(replaced(R"({"x": 10, "y": 6})", R"({"x": 11, "y": 6})"));
   EXPECT_NE(other.at("lawn"), base.at("lawn"));
-  EXPECT_EQ(other.at("side"), base.at("side"));
+  EXPECT_NE(other.at("side"), base.at("side"));
+  // An inactive area: only its own.
+  other = shapes(replaced(R"({"x": 31, "y": 1})", R"({"x": 31, "y": 2})"));
+  EXPECT_NE(other.at("bed"), base.at("bed"));
+  other.erase("bed");
+  auto rest = base;
+  rest.erase("bed");
+  EXPECT_EQ(other, rest);
   // An active obstacle moved: every area.
   other = shapes(replaced(R"({"x": 5, "y": 3})", R"({"x": 5, "y": 4})"));
   EXPECT_NE(other.at("lawn"), base.at("lawn"));
   EXPECT_NE(other.at("side"), base.at("side"));
-  // The inactive one and the nav path: none.
+  // The nav path and a neighbour the job passes over: every other area, the planner drives on them.
+  other = shapes(replaced(R"({"x": 14, "y": 3})", R"({"x": 14, "y": 4})"));
+  EXPECT_NE(other.at("lawn"), base.at("lawn"));
+  EXPECT_NE(other.at("side"), base.at("side"));
+  other = shapes(replaced(R"({"x": 20, "y": 6})", R"({"x": 20, "y": 7})"));
+  EXPECT_NE(other.at("lawn"), base.at("lawn"));
+  EXPECT_NE(other.at("side"), base.at("side"));
+  // The lawn's neighbour switched off: no longer a way for the others.
+  other = shapes(
+      replaced(R"("type": "mow", "mowable": false})", R"("type": "mow", "mowable": false, "active": false})"));
+  EXPECT_NE(other.at("side"), base.at("side"));
+  // The inactive obstacle and the draft: none.
   EXPECT_EQ(shapes(replaced(R"({"x": 8, "y": 3})", R"({"x": 8, "y": 4})")), base);
-  EXPECT_EQ(shapes(replaced(R"({"x": 14, "y": 3})", R"({"x": 14, "y": 4})")), base);
+  EXPECT_EQ(shapes(replaced(R"({"x": 41, "y": 1})", R"({"x": 41, "y": 2})")), base);
 }
 
 TEST(MowingPlanMap, AMapWithTheWrongTypeOfAPropertyIsNotPlannedFrom) {
