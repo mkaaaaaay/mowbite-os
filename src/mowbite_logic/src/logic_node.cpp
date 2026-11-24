@@ -1378,8 +1378,8 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
   auto& pending = pending_plans_[seq];
   pending.rpc_id = request.id;
   pending.question = question;
-  pending.first = MonotonicSeconds();
   SendPlan(seq, pending);
+  pending.first = pending.sent;
 }
 
 

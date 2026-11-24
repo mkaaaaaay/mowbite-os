@@ -41,6 +41,10 @@ void LogicNode::OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv
     if (it == pending_plans_.end() || it->second.retry_at > 0) return;
     const double t = MonotonicSeconds();
     if (!answer.success && answer.code == "NOT_READY" && t + kNotReadyRetryS - it->second.first <= kNotReadyMaxS) {
+      if (it->second.sent == it->second.first) {
+        RCLCPP_INFO(get_logger(), "mowing.plan: the planner is not ready (%s), asking again every %.0f s",
+                    answer.message.c_str(), kNotReadyRetryS);
+      }
       it->second.retry_at = t + kNotReadyRetryS;
       return;
     }

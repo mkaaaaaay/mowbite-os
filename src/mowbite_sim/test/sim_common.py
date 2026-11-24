@@ -571,8 +571,8 @@ class MqttBroker:
         """The events of that type on events/json from msgs[since] on."""
         return [json.loads(p) for top, p in self.msgs[since:] if top == "events/json" and json.loads(p)["type"] == kind]
 
-    def rpc(self, method, params=None, rid="r"):
-        """The answer to a request on rpc/request, None after 5 s."""
+    def rpc(self, method, params=None, rid="r", timeout=5.0):
+        """The answer to a request on rpc/request, None after timeout s."""
         start = len(self.msgs)
         self.client.publish("rpc/request", json.dumps({"jsonrpc": "2.0", "method": method, "params": params or {},
                                                        "id": rid}))
@@ -582,7 +582,7 @@ class MqttBroker:
                 if top == "rpc/response" and json.loads(p).get("id") == rid:
                     return json.loads(p)
             return None
-        return self.wait(answer, 5)
+        return self.wait(answer, timeout)
 
     def stop(self):
         self.client.loop_stop()
