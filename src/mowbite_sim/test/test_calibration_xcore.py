@@ -1,6 +1,6 @@
 """The calibration drive on an OpenMower v2 mower (NX60i): xcore_driver against fake_xcore and the nodes of the container
 with geometry.yaml of the NX60i, the board off its configuration on purpose: ticks 3 % more than the
-2025 per m of the driver, 0.37 m between the wheels against 0.3556, the antenna at -0.10/0.02 where the geometry says
+1815.1 per m of the driver, 0.37 m between the wheels against 0.3014, the antenna at -0.10/0.02 where the geometry says
 0/0, the IMU at 2 deg roll and 3 deg pitch (the platform's mounting is 4.5 deg pitch) on ground that rises 3 deg.
 
 Checks that a level-ish mower with the IMU of the NX60i passes the start (the slope counts from the stored mounting),
@@ -179,8 +179,8 @@ class TestCalibrationXcore(unittest.TestCase):
         gps = [m for m in lines if m.get("k") == "gps"]
         self.assertTrue(gps)
         self.assertFalse([m for m in gps if "rt" in m])
-        self.assertEqual(head["basis"], {"ticks_per_m": 2025.0, "wheel_distance_m": 0.3556})
-        self.assertEqual(head["params"]["ticks_per_m"], 2025.0)
+        self.assertEqual(head["basis"], {"ticks_per_m": 1815.1, "wheel_distance_m": 0.3014})
+        self.assertEqual(head["params"]["ticks_per_m"], 1815.1)
         self.assertEqual(head["imu"], {"roll": 0.0, "pitch": 0.079})
         self.assertEqual((lines[-1]["k"], lines[-1]["why"]), ("end", "stop"))
         marks = [(m["name"], m["edge"]) for m in lines if m.get("k") == "phase"]

@@ -111,7 +111,7 @@ class TestXcoreContract(unittest.TestCase):
         self.assertEqual(b["meta_name"], "YardForce")
         self.assertEqual(b["gps"], [[460800], [1], [6]])
         self.assertEqual(b["imu_remap"], [1, -2, -3])
-        self.assertEqual(b["diff_drive"], [[2025.0], [0.3556]])
+        self.assertEqual(b["diff_drive"], [[1815.1], [0.3014]])
         power = {k: round(v[0], 3) for k, v in b["power"].items() if v}
         # No termination current (7) and never the override of the charge current limit (10); the charge voltage at
         # 29.4 V (G29), below the 29.8 V of OpenMower.
@@ -139,8 +139,8 @@ class TestXcoreContract(unittest.TestCase):
         self.assertFalse(caps.host_charge_control)
         self.assertFalse(caps.charge_stop)
         self.assertTrue(caps.wheel_ticks)
-        self.assertAlmostEqual(caps.wheel_ticks_per_m, 2025.0)
-        self.assertAlmostEqual(caps.wheel_distance, 0.3556)
+        self.assertAlmostEqual(caps.wheel_ticks_per_m, 1815.1)
+        self.assertAlmostEqual(caps.wheel_distance, 0.3014)
         self.assertTrue(caps.separate_bumpers)
         self.assertEqual(caps.imu_source, "xcore_driver")
         # max_duty 0.3 reaches 0.58 x (0.3 - 0.019) = 0.163 m/s per wheel; turning on the spot stays at its cap.

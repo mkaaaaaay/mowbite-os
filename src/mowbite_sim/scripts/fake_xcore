@@ -992,7 +992,7 @@ def main():
     parser.add_argument("--duty-slope", type=float, default=0.58,
                         help="m/s of a wheel per unit of duty above the deadband (NX60i in the air, as in nx60i.yaml)")
     parser.add_argument("--duty-deadband", type=float, default=0.019, help="duty up to which a wheel stands")
-    parser.add_argument("--track", type=float, default=0.3556, help="real distance of the wheels in m")
+    parser.add_argument("--track", type=float, default=0.3014, help="real distance of the wheels in m")
     parser.add_argument("--ticks-start", type=int, default=2**32 - 3000, help="start value of both counters")
     parser.add_argument("--ticks-scale", type=float, default=1.0, help="true ticks per metre / configured ones")
     parser.add_argument("--antenna-offset", type=float, nargs=2, default=[0.0, 0.0], metavar=("X", "Y"))

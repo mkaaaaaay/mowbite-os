@@ -11,8 +11,9 @@ xcore_driver:
     robot_firmware: YardForce
     expected_major_version: 1
 
-    ticks_per_meter: 2025.0
-    wheel_distance: 0.3556
+    # From the calibration drives on this mower (04.11.), as OpenMower drives it since.
+    ticks_per_meter: 1815.1
+    wheel_distance: 0.3014
     # From the firmware: the right counter falls going forward. Checked in the air.
     left_ticks_sign: 1
     right_ticks_sign: -1
