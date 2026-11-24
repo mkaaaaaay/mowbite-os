@@ -1,5 +1,7 @@
 #include "mowbite_logic/logic_core.h"
 
+#include <utility>
+
 namespace mowbite_logic {
 
 Reason LogicCore::StorageProblem() const {
@@ -64,6 +66,36 @@ void LogicCore::AbandonStart(const std::string& file) {
       SetState(State::kIdle);
     }
   }
+}
+
+void LogicCore::SetDataRollback(const json& note) {
+  const bool was_open = DataRollbackOpen();
+  const json before = std::exchange(data_rollback_, note.is_object() ? note : json());
+  if (data_rollback_.is_object() && !before.is_object()) {
+    const bool open = DataRollbackOpen();
+    json details = {{"what", "restored"}};
+    for (const char* key : {"from", "to", "backup", "backup_of"}) {
+      if (data_rollback_.contains(key)) details[key] = data_rollback_[key];
+    }
+    details["confirm"] = open;
+    details["severity"] = open ? "warning" : "info";
+    details["resume"] = open ? "user" : "auto";
+    AddEvent("DATA_ROLLBACK", std::move(details));
+  } else if (before.is_object() && !data_rollback_.is_object()) {
+    AddEvent("DATA_ROLLBACK", {{"what", "confirmed"}, {"severity", "info"}, {"resume", "auto"}});
+  }
+  if (was_open != DataRollbackOpen()) SetDue<ActionsChanged>(true);
+}
+
+void LogicCore::SetHold(int64_t until) {
+  if (until == hold_until_) return;
+  hold_until_ = until;
+  SetDue<ActionsChanged>(true);
+  WatchAnnouncement();
+}
+
+bool LogicCore::Held() const {
+  return hold_until_ > 0 || hw_.hold;
 }
 
 void LogicCore::SetRestartHold(bool held) {

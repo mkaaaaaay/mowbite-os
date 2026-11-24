@@ -43,7 +43,7 @@ target_link_libraries(mowbite_logic_core mowbite_api::mowbite_api_core mowbite_t
   nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_logic_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_node_blade.cpp src/logic_node_run.cpp src/logic_node_dock.cpp src/logic_node_obstacles.cpp src/logic_node_hold.cpp src/logic_node_params.cpp src/logic_messages.cpp src/logic_config.cpp)
+add_library(mowbite_logic_component SHARED src/logic_node.cpp src/logic_node_blade.cpp src/logic_node_run.cpp src/logic_node_dock.cpp src/logic_node_obstacles.cpp src/logic_node_hold.cpp src/logic_node_params.cpp src/logic_node_plan.cpp src/logic_messages.cpp src/logic_config.cpp)
 target_link_libraries(mowbite_logic_component mowbite_logic_core mowbite_bridge::mowbite_bridge_core
   mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
 ament_target_dependencies(mowbite_logic_component rclcpp rclcpp_components rclcpp_action geometry_msgs std_msgs
