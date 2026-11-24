@@ -93,8 +93,10 @@ class TestHardwareContract(unittest.TestCase):
         self.assertEqual(caps.safety_measurement_date, "")
 
     def test_b_battery_from_the_bms(self):
-        s = self.probe.status
-        self.assertEqual(s.battery_source, HardwareStatus.BATTERY_SOURCE_BMS)
+        # Ready comes with the first sensor frame, the battery report only once a second.
+        s = self.probe.wait_for(
+            lambda p: p.status if p.status.battery_source == HardwareStatus.BATTERY_SOURCE_BMS else None, 3)
+        self.assertIsNotNone(s, "no battery report from the BMS")
         self.assertAlmostEqual(s.battery_voltage, 24.5, places=3)
 
     def test_c_drive_frames_at_most_every_100ms(self):
