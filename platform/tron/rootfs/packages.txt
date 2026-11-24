@@ -26,6 +26,8 @@ evtest
 # fuser, to see who holds a serial port
 psmisc
 ros-jazzy-ros-core
+# Runtime package of the OS bundle that ros-core does not bring
+ros-jazzy-tf2-ros
 libpaho-mqttpp3-1
 python3-paho-mqtt
 python3-shapely
@@ -33,3 +35,10 @@ python3-shapely
 libturbojpeg
 # Broker of MowBite OS
 mosquitto
+# First start of an installed image: the file system grows to the partition (resize2fs), e2fsck for repairs
+e2fsprogs
+# Setup Wi-Fi of the installer: DHCP and DNS on the access point; iw to see what the radio does
+dnsmasq-base
+iw
+# The installer finds the mower in the home network by mDNS (no nss-mdns: the mower resolves no .local names)
+avahi-daemon
