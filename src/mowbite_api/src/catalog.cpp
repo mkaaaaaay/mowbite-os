@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <map>
@@ -1498,6 +1499,13 @@ const std::vector<SettingEntry>& LogicSettings() {
        "Whether a new entry of the obstacles gets a photo of the whole image, kept on the mower only"},
   };
   return settings;
+}
+
+std::optional<double> FitSetting(const std::string& name, double value) {
+  for (const auto& setting : LogicSettings()) {
+    if (setting.name == name) return std::clamp(setting.integer ? std::round(value) : value, setting.min, setting.max);
+  }
+  return std::nullopt;
 }
 
 const std::vector<GeometryEntry>& GeometryKeys() {

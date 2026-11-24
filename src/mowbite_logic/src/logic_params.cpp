@@ -46,8 +46,7 @@ LogicParams::LogicParams(const json& base) {
 }
 
 double LogicParams::Fit(const ParamSpec& spec, double value) {
-  if (spec.type == ParamType::kInt) value = std::round(value);
-  return std::clamp(value, spec.min, spec.max);
+  return mowbite_api::FitSetting(spec.name, value).value_or(value);
 }
 
 std::string LogicParams::Check(const std::map<std::string, double>& values) {

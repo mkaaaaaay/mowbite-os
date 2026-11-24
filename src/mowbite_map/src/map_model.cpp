@@ -1,6 +1,5 @@
 #include "mowbite_map/map_model.h"
 
-#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <set>
@@ -37,11 +36,9 @@ double ToNumber(const json& value, const std::string& what) {
 
 // As params.set takes /mower_logic/mow_height_mm: a number, rounded and within the range of the setting.
 int ToHeight(const json& value, const std::string& what) {
-  const double height = std::round(ToNumber(value, what));
-  for (const auto& setting : mowbite_api::LogicSettings()) {
-    if (setting.name == "mow_height_mm") return static_cast<int>(std::clamp(height, setting.min, setting.max));
-  }
-  throw MapError(what + ": no such setting");
+  const auto height = mowbite_api::FitSetting("mow_height_mm", ToNumber(value, what));
+  if (!height) throw MapError(what + ": no such setting");
+  return static_cast<int>(*height);
 }
 
 std::string ToText(const json& value, const std::string& what) {

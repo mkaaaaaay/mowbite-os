@@ -18,7 +18,7 @@ rcl_interfaces::msg::Parameter Override(const std::string& name, T value) {
 
 void LogicNode::SendPlan(uint64_t seq, PendingPlan& pending) {
   pending.sent = MonotonicSeconds();
-  pending.retry_at = 0;
+  pending.retry.retry_at = 0;
   auto plan = ToServiceRequest(pending.question.request);
   // An outline of the request is no area of the map: the planner shows it with the stored settings, nothing mows it.
   if (pending.question.area_id.empty()) plan->overrides.push_back(Override("preview", true));
@@ -38,14 +38,12 @@ void LogicNode::OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv
     std::lock_guard<std::mutex> lock(mutex_);
     const auto it = pending_plans_.find(seq);
     // Late: the request has timed out and was answered with an error.
-    if (it == pending_plans_.end() || it->second.retry_at > 0) return;
-    const double t = MonotonicSeconds();
-    if (!answer.success && answer.code == "NOT_READY" && t + kNotReadyRetryS - it->second.first <= kNotReadyMaxS) {
-      if (it->second.sent == it->second.first) {
+    if (it == pending_plans_.end()) return;
+    if (it->second.retry.Wait(answer, MonotonicSeconds())) {
+      if (it->second.sent == it->second.retry.first) {
         RCLCPP_INFO(get_logger(), "mowing.plan: the planner is not ready (%s), asking again every %.0f s",
                     answer.message.c_str(), kNotReadyRetryS);
       }
-      it->second.retry_at = t + kNotReadyRetryS;
       return;
     }
     pending = std::move(it->second);
@@ -83,19 +81,23 @@ void LogicNode::ExpirePlans() {
       late.message = "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s";
       core_.Call<&LogicCore::OnCutAnswer>(late);
     }
-    if (job_plan_.active && job_plan_.retry_at > 0 && t >= job_plan_.retry_at) {
-      const JobPlan waiting = std::exchange(job_plan_, JobPlan());
-      PlanJobArea(waiting.area_id, waiting.first);
-    } else if (job_plan_.active && job_plan_.retry_at == 0 && t - job_plan_.sent > plan_timeout_s_) {
-      plan_client_->remove_pending_request(job_plan_.request_id);
-      job_plan_ = JobPlan();
-      core_.Call<&LogicCore::OnJobPlanFailed>(
-          Reason("PLANNER_TIMEOUT",
-                 "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
+    if (job_plan_.active) {
+      if (job_plan_.retry.retry_at > 0) {
+        if (t >= job_plan_.retry.retry_at) {
+          const JobPlan waiting = std::exchange(job_plan_, JobPlan());
+          PlanJobArea(waiting.area_id, waiting.retry.first);
+        }
+      } else if (t - job_plan_.sent > plan_timeout_s_) {
+        plan_client_->remove_pending_request(job_plan_.request_id);
+        job_plan_ = JobPlan();
+        core_.Call<&LogicCore::OnJobPlanFailed>(
+            Reason("PLANNER_TIMEOUT",
+                   "No answer from the planner in " + std::to_string(static_cast<int>(plan_timeout_s_)) + " s"));
+      }
     }
     for (auto it = pending_plans_.begin(); it != pending_plans_.end();) {
-      if (it->second.retry_at > 0) {
-        if (t >= it->second.retry_at) SendPlan(it->first, it->second);
+      if (it->second.retry.retry_at > 0) {
+        if (t >= it->second.retry.retry_at) SendPlan(it->first, it->second);
         ++it;
       } else if (t - it->second.sent > plan_timeout_s_) {
         plan_client_->remove_pending_request(it->second.request_id);

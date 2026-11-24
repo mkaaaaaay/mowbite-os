@@ -5,11 +5,11 @@ as a preview of the planner, not as an area of the map.
 
 Run in a sourced workspace with mosquitto installed: launch_test /ws/src/mowbite_sim/test/test_plan_not_ready.py
 """
+import itertools
 import os
 import shutil
 import sys
 import tempfile
-import time
 import unittest
 
 import launch
@@ -18,7 +18,7 @@ import launch_testing.asserts
 from launch.actions import TimerAction
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import EXIT_CODES, MqttBroker, mosquitto, sim_files, sim_stack  # noqa: E402
+from sim_common import EXIT_CODES, MqttBroker, mosquitto, sim_files, sim_stack, wait_until  # noqa: E402
 
 MQTT_PORT = 18856
 WORK = tempfile.mkdtemp(prefix="mowbite_plan_not_ready_")
@@ -48,14 +48,13 @@ class TestPlanNotReady(unittest.TestCase):
 
     def test_1_the_first_plan_after_the_start(self):
         # Asked again only while the logic says the planner is not running yet.
-        end = time.time() + 120
-        answer, n = None, 0
-        while time.time() < end:
-            n += 1
-            answer = self.broker.rpc("mowing.plan", OUTLINE, f"early-{n}", PLAN_TIMEOUT)
-            if answer and (answer.get("error") or {}).get("message") != MISSING:
-                break
-            time.sleep(0.2)
+        asked = itertools.count(1)
+
+        def answered():
+            answer = self.broker.rpc("mowing.plan", OUTLINE, f"early-{next(asked)}", PLAN_TIMEOUT)
+            return answer if answer and (answer.get("error") or {}).get("message") != MISSING else None
+
+        answer = wait_until(answered, 120, poll=0.2)
         self.assertTrue(answer, "no answer to mowing.plan")
         self.assertNotIn("error", answer, answer)
         self.assertTrue(answer["result"].get("paths"), answer["result"])

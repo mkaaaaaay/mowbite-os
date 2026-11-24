@@ -85,8 +85,8 @@ void LogicNode::UpdateBladeLocked() {
   }
   // The renewals keep the height of the start: a change of mow_height_mm, also of the area, waits for the next start.
   if (!blade_on_requested_) {
-    double setting = setup ? setup_blade_height_mm_ : logic_params_.Get("mow_height_mm");
-    if (!setup) setting = planner_.MowHeight(core_.View().MowingAreaId()).value_or(setting);
+    const double setting = setup ? setup_blade_height_mm_
+                                 : planner_.MowHeight(view.MowingAreaId()).value_or(logic_params_.Get("mow_height_mm"));
     blade_height_mm_ = BladeHeightMm(setting, blade_height_control_, blade_height_min_mm_, blade_height_max_mm_);
   }
   blade_on_requested_ = true;

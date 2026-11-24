@@ -934,8 +934,7 @@ void LogicNode::PlanJobArea(const std::string& area_id, double first) {
   job_plan_.seq = seq;
   job_plan_.sent = MonotonicSeconds();
   job_plan_.area_id = area_id;
-  job_plan_.first = first < 0 ? job_plan_.sent : first;
-  job_plan_.retry_at = 0;
+  job_plan_.retry = {first < 0 ? job_plan_.sent : first, 0};
   job_plan_.request_id =
       plan_client_
           ->async_send_request(
@@ -951,13 +950,11 @@ void LogicNode::OnJobPlan(uint64_t seq, const mowbite_planner_interfaces::srv::P
     std::lock_guard<std::mutex> lock(mutex_);
     if (!job_plan_.active || seq != job_plan_.seq) return;
     const CoverageAnswer answer = ToAnswer(response);
-    const double t = MonotonicSeconds();
-    if (!answer.success && answer.code == "NOT_READY" && t + kNotReadyRetryS - job_plan_.first <= kNotReadyMaxS) {
-      if (job_plan_.retry_at == 0 && job_plan_.sent == job_plan_.first) {
+    if (job_plan_.retry.Wait(answer, MonotonicSeconds())) {
+      if (job_plan_.sent == job_plan_.retry.first) {
         RCLCPP_INFO(get_logger(), "Mowing: the planner is not ready (%s), asking again every %.0f s",
                     answer.message.c_str(), kNotReadyRetryS);
       }
-      job_plan_.retry_at = t + kNotReadyRetryS;
       return;
     }
     job_plan_ = JobPlan();
@@ -1379,9 +1376,8 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
   pending.rpc_id = request.id;
   pending.question = question;
   SendPlan(seq, pending);
-  pending.first = pending.sent;
+  pending.retry.first = pending.sent;
 }
-
 
 // Only in IDLE and all or nothing; a change counts once it is saved.
 void LogicNode::OnParamsSet(const mowbite_msgs::msg::RpcRequest& request) {

@@ -308,16 +308,26 @@ class LogicNode : public rclcpp::Node {
   // NOT_READY of the planner (no map yet after its start): asked again this often (s), for at most this long (s).
   static constexpr double kNotReadyRetryS = 2.0;
   static constexpr double kNotReadyMaxS = 60.0;
+  // A question of the planner after NOT_READY: asked again at retry_at, no question on its way meanwhile, until
+  // kNotReadyMaxS after the first.
+  struct NotReadyRetry {
+    double first = 0;
+    double retry_at = 0;
+    // Whether the answer at t is a NOT_READY to ask again for; then retry_at is set.
+    bool Wait(const CoverageAnswer& answer, double t) {
+      if (answer.success || answer.code != "NOT_READY" || t + kNotReadyRetryS - first > kNotReadyMaxS) return false;
+      retry_at = t + kNotReadyRetryS;
+      return true;
+    }
+  };
   struct JobPlan {
     bool active = false;
     uint64_t seq = 0;
     double sent = 0;
     int64_t request_id = 0;
-    // NOT_READY of the planner: the area is asked again at retry_at (no request on its way meanwhile) until
-    // kNotReadyMaxS after first.
+    // Asked again after NOT_READY.
     std::string area_id;
-    double first = 0;
-    double retry_at = 0;
+    NotReadyRetry retry;
   };
 
   // A cut of the job's plan on its way to the planner: where each path of it starts in its poses.
@@ -335,9 +345,7 @@ class LogicNode : public rclcpp::Node {
     PlanQuestion question;
     double sent = 0;
     int64_t request_id = 0;
-    // As JobPlan: asked again at retry_at after NOT_READY, until kNotReadyMaxS after first.
-    double first = 0;
-    double retry_at = 0;
+    NotReadyRetry retry;
   };
   // Sends the question of a mowing.plan. Called with the mutex held.
   void SendPlan(uint64_t seq, PendingPlan& pending);

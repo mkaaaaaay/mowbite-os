@@ -219,6 +219,9 @@ const SensorEntry* FindSensor(const std::string& id);
 const SensorEntry* FindOpenMowerSensor(const std::string& openmower_id);
 // The settings of /mower_logic in the order of the app's groups.
 const std::vector<SettingEntry>& LogicSettings();
+// A value of the setting of that name as params.set takes it: rounded for a whole number, then within min..max;
+// none for an unknown name.
+std::optional<double> FitSetting(const std::string& name, double value);
 // The keys of the geometry in the order of the answers; robot_outline is the only list the user sets.
 const std::vector<GeometryEntry>& GeometryKeys();
 // A word of schedule.log: what it means, what its detail and more hold (empty: null).
