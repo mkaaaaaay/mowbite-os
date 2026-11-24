@@ -218,6 +218,43 @@ TEST(PathFollower, TurnsOnTheSpotBeforeTheStart) {
   EXPECT_NEAR(robot.pose.x, 0.0, 0.01);
 }
 
+TEST(PathFollower, EachTurnOnTheSpotAsksForItsRoomOnce) {
+  // The start turn and the corner turn, each asked at its beginning with the rad still to turn.
+  std::vector<Pose2> path = Line(0, 0, M_PI / 2, 1.0);
+  path.back().yaw = 0.0;
+  Append(path, Line(path.back().x, path.back().y, 0.0, 1.0), true);
+  PathFollower follower{FollowerConfig()};
+  std::vector<double> asked;
+  follower.SetTurnRoom([&asked](const Pose2&, double delta) {
+    asked.push_back(delta);
+    return std::string();
+  });
+  ASSERT_EQ(follower.Start(path, {}, 0), "");
+  Robot robot;
+  Drive(follower, robot);
+  EXPECT_EQ(follower.phase(), Phase::kDone) << follower.failure();
+  ASSERT_GE(asked.size(), 2u);
+  EXPECT_NEAR(asked[0], M_PI / 2, 0.05);
+  EXPECT_NEAR(asked[1], -M_PI / 2, 0.1);
+}
+
+TEST(PathFollower, ATurnWithoutRoomEndsThePathBeforeItTurns) {
+  PathFollower follower{FollowerConfig()};
+  Pose2 at{1, 1, 1};
+  follower.SetTurnRoom([&at](const Pose2& pose, double) {
+    at = pose;
+    return std::string("the nose would leave the lawn");
+  });
+  ASSERT_EQ(follower.Start(Line(0, 0, M_PI / 2, 2.0), {}, 0), "");
+  const auto cmd = follower.Step(Pose2{0, 0, 0}, kDt);
+  EXPECT_EQ(cmd.linear, 0.0);
+  EXPECT_EQ(cmd.angular, 0.0);
+  EXPECT_EQ(follower.phase(), Phase::kFailed);
+  EXPECT_EQ(follower.failure_kind(), Failure::kTurnRoom);
+  EXPECT_EQ(follower.failure(), "the nose would leave the lawn");
+  EXPECT_EQ((std::vector<double>{at.x, at.y, at.yaw}), (std::vector<double>{0, 0, 0}));
+}
+
 // F2, F8
 TEST(PathFollower, StraightNeverTurnsOnTheSpotAtTheStart) {
   FollowerConfig config;

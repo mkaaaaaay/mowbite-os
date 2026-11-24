@@ -154,7 +154,7 @@ class World(SimProbe):
             time.sleep(dt)
 
     def follow(self, poses, start_index=0, allowed=None, obstacles=(), wait=True, frame=FollowPath.Goal.FRAME_MAP,
-               reverse=False):
+               reverse=False, body=()):
         goal = FollowPath.Goal()
         goal.frame = frame
         goal.reverse = reverse
@@ -162,6 +162,7 @@ class World(SimProbe):
         goal.start_index = start_index
         goal.allowed_areas = [polygon(allowed or LAWN)]
         goal.obstacles = [polygon(o) for o in obstacles]
+        goal.body = polygon(body)
         assert self.client.wait_for_server(timeout_sec=10.0), "follow_path not offered"
         future = self.client.send_goal_async(goal)
         end = time.time() + 10
@@ -421,3 +422,17 @@ class TestFollower(unittest.TestCase):
         self.assertGreater(y, 0.15)
         self.assertLess(y, 0.25)
         self.assertLess(abs(turned), 2.5)
+
+    def test_16_a_turn_without_room_for_the_body_ends_the_path_before_it(self):
+        w = self.world
+        # The box of the Tron, 0.3 m beside the upper edge of the lawn, facing along it.
+        body = [(0.6, 0.235), (-0.12, 0.235), (-0.12, -0.235), (0.6, -0.235)]
+        w.place(2.0, 3.7, 0.0)
+        result = w.follow(line_poses(2.0, 3.7, math.pi / 2, 1.0), body=body)
+        self.assertEqual(result.reason, Result.REASON_OUTSIDE, result.message)
+        self.assertIn("by 90 deg, the body would get 0.34 m out of the allowed areas", result.message)
+        with w.lock:
+            self.assertEqual(w.yaw, 0.0)
+        # Turning the other way it has the room.
+        result = w.follow(line_poses(2.0, 3.7, -math.pi / 2, 1.0), body=body)
+        self.assertEqual(result.reason, Result.REASON_DONE, result.message)

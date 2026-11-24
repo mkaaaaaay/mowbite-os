@@ -238,3 +238,52 @@ TEST(Gate, SlowKeepsTheCurve) {
   CapLinear(0.3, &linear, &angular);
   EXPECT_EQ(angular, 0.5);
 }
+
+namespace {
+
+// The box of the Tron in base_link: 0.6 m ahead, 0.12 m behind, 0.235 m to each side.
+const Ring kBody = {{0.6, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {0.6, -0.235}};
+
+}  // namespace
+
+TEST(TurnRoom, TheSweptBodyStaysInTheLawnOrTheTurnIsRefused) {
+  const Geofence fence({kLawn}, {}, 0.5);
+  // In the open: any turn.
+  EXPECT_EQ(fence.CheckTurn({5, 3, 0}, M_PI, kBody, 0.05), "");
+  // 0.3 m beside the edge on its left: to the left the front corner (0.644 m) gets 0.34 m over it, to the right the
+  // body stays in.
+  const std::string left = fence.CheckTurn({5, 5.7, 0}, M_PI / 2, kBody, 0.05);
+  EXPECT_NE(left.find("0.34 m out of the allowed areas"), std::string::npos) << left;
+  EXPECT_EQ(fence.CheckTurn({5, 5.7, 0}, -M_PI / 2, kBody, 0.05), "");
+  // Start and end in the lawn, the nose over the edge half way.
+  EXPECT_NE(fence.CheckTurn({5, 5.5, 0}, M_PI, kBody, 0.05), "");
+  EXPECT_EQ(fence.CheckTurn({5, 5.5, 0}, -M_PI, kBody, 0.05), "");
+}
+
+TEST(TurnRoom, TheToleranceCountsForTheCornerOfTheBody) {
+  const Geofence fence({kLawn}, {}, 0.5);
+  // The front corner reaches 0.644 m: 0.024 m over the edge.
+  EXPECT_EQ(fence.CheckTurn({5, 5.38, 0}, M_PI / 2, kBody, 0.05), "");
+  EXPECT_NE(fence.CheckTurn({5, 5.38, 0}, M_PI / 2, kBody, 0.01), "");
+}
+
+TEST(TurnRoom, NeighbouringAreasAreOneRoom) {
+  const Ring west = {{0, 0}, {5, 0}, {5, 6}, {0, 6}};
+  const Ring east = {{5, 0}, {10, 0}, {10, 6}, {5, 6}};
+  EXPECT_EQ(Geofence({west, east}, {}, 0.5).CheckTurn({5, 3, 0}, 2 * M_PI - 0.1, kBody, 0.05), "");
+}
+
+TEST(TurnRoom, ObstaclesLargeAndSmall) {
+  const Ring stone_ahead = {{2.25, 1.98}, {2.29, 1.98}, {2.29, 2.02}, {2.25, 2.02}};
+  const Ring stone_left = {{1.98, 2.48}, {2.02, 2.48}, {2.02, 2.52}, {1.98, 2.52}};
+  // A stone under the body already, smaller than it: no point of its edge reaches it.
+  const std::string under = Geofence({kLawn}, {stone_ahead}, 0.5).CheckTurn({2, 2, 0}, 0.5, kBody, 0.05);
+  EXPECT_NE(under.find("into an obstacle"), std::string::npos) << under;
+  // 0.5 m to the left: the nose sweeps over it turning left, not turning right.
+  const Geofence left({kLawn}, {stone_left}, 0.5);
+  EXPECT_NE(left.CheckTurn({2, 2, 0}, M_PI / 2, kBody, 0.05), "");
+  EXPECT_EQ(left.CheckTurn({2, 2, 0}, -M_PI / 2, kBody, 0.05), "");
+  // The edge of a large obstacle 0.4 m ahead: the nose is in it already.
+  EXPECT_NE(Geofence({kLawn}, {kTree}, 0.5).CheckTurn({3.6, 2.5, 0}, 0.2, kBody, 0.05), "");
+  EXPECT_EQ(Geofence({kLawn}, {kTree}, 0.5).CheckTurn({3.2, 2.5, 0}, M_PI, kBody, 0.05), "");
+}

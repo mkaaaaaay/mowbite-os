@@ -389,13 +389,15 @@ std::vector<std::string> Geometry::BelowDefault() const {
   return Below(factory_, now_);
 }
 
+std::vector<Point> Geometry::BodyOutline() const {
+  if (!now_.outline.empty()) return now_.outline;
+  const Body body = BodyOf(now_.numbers, now_.outline);
+  return {{body.x_max, body.y_max}, {body.x_min, body.y_max}, {body.x_min, -body.y_max}, {body.x_max, -body.y_max}};
+}
+
 double Geometry::TurningRadius() const {
-  if (now_.outline.empty()) {
-    const Body body = BodyOf(now_.numbers, now_.outline);
-    return std::hypot(std::max(body.x_max, -body.x_min), body.y_max);
-  }
   double radius = 0;
-  for (const Point& point : now_.outline) radius = std::max(radius, std::hypot(point[0], point[1]));
+  for (const Point& point : BodyOutline()) radius = std::max(radius, std::hypot(point[0], point[1]));
   return radius;
 }
 

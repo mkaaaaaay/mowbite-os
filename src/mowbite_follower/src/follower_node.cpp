@@ -131,6 +131,7 @@ class FollowerNode : public rclcpp::Node {
       throw std::invalid_argument("mowbite_follower: max_turn_slide from 0 needed");
     }
     geofence_margin_ = declare_parameter("geofence_margin", 0.5);
+    turn_room_tolerance_ = declare_parameter("turn_room_tolerance", turn_room_tolerance_);
     const double rate = declare_parameter("control_rate", 20.0);
     // Every limit a number in its range: one that is no number would switch its check off.
     const auto above = [](std::initializer_list<double> values) {
@@ -140,12 +141,13 @@ class FollowerNode : public rclcpp::Node {
                 c.steering.approach_distance, c.steering.heading_gain, guard_config_.pose_timeout,
                 guard_config_.hw_timeout, guard_config_.max_cross_track, guard_config_.max_position_accuracy,
                 gate_timeout_, rate, c.phase_timeout, c.progress_timeout, c.max_start_distance, c.goal_tolerance}) ||
-        !(geofence_margin_ >= 0) || !std::isfinite(geofence_margin_)) {
+        !(geofence_margin_ >= 0) || !std::isfinite(geofence_margin_) || !(turn_room_tolerance_ >= 0) ||
+        !std::isfinite(turn_room_tolerance_)) {
       throw std::invalid_argument(
           "mowbite_follower: max_angular, max_linear, speed_fast, speed_slow, speed_turn, creep_speed, turn_rate, "
           "approach_distance, heading_gain, pose_timeout, hw_status_timeout, max_cross_track, max_position_accuracy, "
           "gate_timeout, control_rate, phase_timeout, progress_timeout, max_start_distance and goal_tolerance above 0, "
-          "geofence_margin from 0 needed");
+          "geofence_margin and turn_room_tolerance from 0 needed");
     }
     // The lock of the setup program, looked at with every step of a path; empty without data_dir.
     const std::string data_dir = declare_parameter("data_dir", std::string());
@@ -279,6 +281,10 @@ class FollowerNode : public rclcpp::Node {
     std::vector<Ring> obstacles;
     for (const auto& p : goal->allowed_areas) allowed.push_back(ToRing(p));
     for (const auto& p : goal->obstacles) obstacles.push_back(ToRing(p));
+    const Ring body = ToRing(goal->body);
+    if (!goal->body.points.empty() && body.size() < 3) problem = "a body needs at least 3 points";
+    const auto finite = [](const Point2& p) { return std::isfinite(p.x) && std::isfinite(p.y); };
+    if (!std::all_of(body.begin(), body.end(), finite)) problem = "a point of the body is no number";
 
     std::lock_guard<std::mutex> lock(mutex_);
     FollowerConfig config = follower_config_;
@@ -307,6 +313,12 @@ class FollowerNode : public rclcpp::Node {
     follower_ = std::make_unique<PathFollower>(config);
     fence_ = Geofence(std::move(allowed), std::move(obstacles), geofence_margin_);
     if (problem.empty()) problem = fence_.Problem();
+    // In the map only: in the station frame the guides and the marker lead the turns.
+    if (body.size() >= 3 && !dock) {
+      follower_->SetTurnRoom([fence = fence_, body, tolerance = turn_room_tolerance_](const Pose2& at, double delta) {
+        return fence.CheckTurn(at, delta, body, tolerance);
+      });
+    }
     if (problem.empty()) problem = follower_->Start(poses, kinds, goal->start_index);
     active_ = handle;
     gated_ = false;
@@ -385,9 +397,11 @@ class FollowerNode : public rclcpp::Node {
     const PathFollower::Command cmd = follower_->Step(pose.pose, dt, wheel_turn, fresh_fix);
     ReportTurn();
     if (follower_->phase() == Phase::kFailed) {
-      const bool start = follower_->failure_kind() == Failure::kStart;
-      Finish(start ? FollowPath::Result::REASON_INVALID : FollowPath::Result::REASON_TIMEOUT, follower_->failure(),
-             follower_->index());
+      const Failure kind = follower_->failure_kind();
+      Finish(kind == Failure::kStart      ? FollowPath::Result::REASON_INVALID
+             : kind == Failure::kTurnRoom ? FollowPath::Result::REASON_OUTSIDE
+                                          : FollowPath::Result::REASON_TIMEOUT,
+             follower_->failure(), follower_->index());
       return;
     }
     if (follower_->phase() == Phase::kDone) {
@@ -500,6 +514,8 @@ class FollowerNode : public rclcpp::Node {
   // s the last fix behind localization/pose may be old for a turn on the spot.
   double turn_fix_timeout_ = 0.5;
   double geofence_margin_ = 0.5;
+  // m the body may get out of its room turning on the spot (FollowPath body).
+  double turn_room_tolerance_ = 0.05;
   // max_cross_track of the active goal, 0 for none.
   double max_off_path_ = 0;
   // The active goal is in the station frame.

@@ -275,6 +275,9 @@ mowbite_follower:
     # m base_link may get from the place a turn on the spot began at, the path ends with TURN_SLIDE beyond (0: no such
     # limit).
     max_turn_slide: <platform>
+    # m the body may get out of the allowed areas or into an obstacle turning on the spot, checked before each such
+    # turn (FollowPath body); the path ends with OUTSIDE beyond.
+    turn_room_tolerance: 0.05
     phase_timeout: 20.0
     progress_timeout: 10.0
     control_rate: 20.0

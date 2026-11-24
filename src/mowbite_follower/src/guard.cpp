@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <vector>
 
 namespace mowbite_follower {
 
@@ -20,6 +21,42 @@ std::string Format(const char* format, double a, double b) {
   char text[160];
   std::snprintf(text, sizeof(text), format, a, b);
   return text;
+}
+
+// rad between the checked positions of a turning body, and m between the checked points of its edge; far below the
+// tolerance of such a check (5 degrees at 0.7 m: 1 mm between the arcs).
+constexpr double kTurnStep = 5.0 * M_PI / 180.0;
+constexpr double kEdgeStep = 0.03;
+
+// The points along the edges of a ring, at most kEdgeStep apart, its corners among them.
+std::vector<Point2> EdgePoints(const Ring& ring) {
+  const size_t n = OpenSize(ring);
+  std::vector<Point2> points;
+  for (size_t i = 0; i < n; i++) {
+    const Point2& a = ring[i];
+    const Point2& b = ring[(i + 1) % n];
+    const int parts = std::max(1, static_cast<int>(std::ceil(std::hypot(b.x - a.x, b.y - a.y) / kEdgeStep)));
+    for (int k = 0; k < parts; k++) {
+      const double t = static_cast<double>(k) / parts;
+      points.push_back({a.x + t * (b.x - a.x), a.y + t * (b.y - a.y)});
+    }
+  }
+  return points;
+}
+
+// Whether any point of the ring may be within reach m of (x, y), by its bounding box.
+bool InReach(const Ring& ring, double x, double y, double reach) {
+  double x_min = std::numeric_limits<double>::infinity();
+  double y_min = x_min;
+  double x_max = -x_min;
+  double y_max = -x_min;
+  for (const Point2& p : ring) {
+    x_min = std::min(x_min, p.x);
+    x_max = std::max(x_max, p.x);
+    y_min = std::min(y_min, p.y);
+    y_max = std::max(y_max, p.y);
+  }
+  return std::hypot(std::max({x_min - x, x - x_max, 0.0}), std::max({y_min - y, y - y_max, 0.0})) <= reach;
 }
 
 }  // namespace
@@ -87,6 +124,59 @@ std::string Geofence::Check(double x, double y) const {
   char text[160];
   std::snprintf(text, sizeof(text), "the mower is %.2f m outside of the allowed areas at (%.2f, %.2f)", closest, x, y);
   return text;
+}
+
+std::string Geofence::CheckTurn(const Pose2& at, double delta, const Ring& body, double tolerance) const {
+  double radius = 0;
+  for (const Point2& p : body) radius = std::max(radius, std::hypot(p.x, p.y));
+  const double reach = radius + tolerance;
+  std::vector<const Ring*> allowed;
+  std::vector<const Ring*> obstacles;
+  for (const auto& ring : allowed_) {
+    if (InReach(ring, at.x, at.y, reach)) allowed.push_back(&ring);
+  }
+  for (const auto& ring : obstacles_) {
+    if (InReach(ring, at.x, at.y, reach)) obstacles.push_back(&ring);
+  }
+  const std::vector<Point2> edge = EdgePoints(body);
+  // The most the body gets out of the allowed areas and into an obstacle over the whole turn.
+  double out = 0;
+  double into = 0;
+  const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(delta) / kTurnStep)));
+  for (int k = 0; k <= steps; k++) {
+    const double yaw = at.yaw + delta * k / steps;
+    const double c = std::cos(yaw);
+    const double s = std::sin(yaw);
+    const auto place = [&](const Point2& p) { return Point2{at.x + c * p.x - s * p.y, at.y + s * p.x + c * p.y}; };
+    for (const Point2& local : edge) {
+      const Point2 p = place(local);
+      for (const Ring* ring : obstacles) {
+        if (InsideRing(*ring, p.x, p.y)) into = std::max(into, DistanceToRing(*ring, p.x, p.y));
+      }
+      double outside = reach;
+      for (const Ring* ring : allowed) {
+        outside = InsideRing(*ring, p.x, p.y) ? 0.0 : std::min(outside, DistanceToRing(*ring, p.x, p.y));
+        if (outside == 0.0) break;
+      }
+      out = std::max(out, outside);
+    }
+    // An obstacle smaller than the body: its corners inside the body.
+    Ring placed;
+    for (const Point2& p : body) placed.push_back(place(p));
+    for (const Ring* ring : obstacles) {
+      for (const Point2& p : *ring) {
+        if (InsideRing(placed, p.x, p.y)) into = std::max(into, DistanceToRing(placed, p.x, p.y));
+      }
+    }
+  }
+  const double degrees = std::abs(delta) * 180.0 / M_PI;
+  if (into > tolerance) {
+    return Format("turning on the spot by %.0f deg, the body would reach %.2f m into an obstacle", degrees, into);
+  }
+  if (out > tolerance) {
+    return Format("turning on the spot by %.0f deg, the body would get %.2f m out of the allowed areas", degrees, out);
+  }
+  return "";
 }
 
 GuardResult CheckGuard(const GuardConfig& config, const GuardInput& in, const Geofence& fence) {

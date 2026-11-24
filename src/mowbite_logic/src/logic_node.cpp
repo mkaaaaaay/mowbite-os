@@ -800,7 +800,14 @@ void LogicNode::SendFollow(const FollowPath::Goal& goal, const std::string& what
   };
   drive_.follower_sign = MonotonicSeconds();
   drive_.follower_index = goal.start_index;
-  follow_client_->async_send_goal(Gated(goal), options);
+  FollowPath::Goal sent = Gated(goal);
+  // In the map the follower checks every turn on the spot against the body.
+  if (sent.frame == FollowPath::Goal::FRAME_MAP) {
+    Ring body;
+    for (const auto& p : geometry_.BodyOutline()) body.push_back({p[0], p[1]});
+    sent.body = ToPolygon(body);
+  }
+  follow_client_->async_send_goal(sent, options);
 }
 
 // G22: a follower that stops answering ends its path here, without waiting for its result, so that the logic does

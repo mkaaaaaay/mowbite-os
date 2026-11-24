@@ -17,6 +17,10 @@ uint32 start_index
 geometry_msgs/Polygon[] allowed_areas
 # Where base_link must never be.
 geometry_msgs/Polygon[] obstacles
+# The body seen from above in base_link (at least 3 points): before every turn on the spot what it sweeps is checked
+# against allowed_areas and obstacles, by at most the follower's turn_room_tolerance (else REASON_OUTSIDE before it
+# turns). Empty: no such check.
+geometry_msgs/Polygon body
 # m/s at most on this path, below the limits of the follower and the driver; 0: those limits.
 float32 max_speed
 # s the mower may stand while the follower drives it, then the path ends as stuck (REASON_TIMEOUT); 0: no such check.

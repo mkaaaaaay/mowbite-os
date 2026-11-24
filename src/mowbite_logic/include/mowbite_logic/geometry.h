@@ -125,8 +125,11 @@ class Geometry {
   std::vector<ShapeOver> OutsideShape() const;
   // Keys of the body below the platform's value now.
   std::vector<std::string> BelowDefault() const;
-  // m from base_link to the farthest point of the body: the points of robot_outline, without one the corners of the
-  // box of robot_width, robot_front and robot_rear. The body stays within this circle when the mower turns on the spot.
+  // The body seen from above in base_link: robot_outline, without one the box of robot_width, robot_front and
+  // robot_rear.
+  std::vector<Point> BodyOutline() const;
+  // m from base_link to the farthest point of BodyOutline. The body stays within this circle when the mower turns on
+  // the spot.
   double TurningRadius() const;
 
  private:

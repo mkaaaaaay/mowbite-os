@@ -254,6 +254,11 @@ std::optional<PathFollower::Command> PathFollower::TurnTowards(double heading, d
   TrackTurn(heading);
   const double error = NormalizeAngle(target - heading);
   if (std::abs(error) <= config_.turn_tolerance) return std::nullopt;
+  if (!room_checked_) {
+    room_checked_ = true;
+    const std::string problem = turn_room_ ? turn_room_(at_, error) : "";
+    if (!problem.empty()) return Fail(Failure::kTurnRoom, problem);
+  }
   if (!fresh_fix_) {
     phase_start_ += step_dt_;
     progress_since_ += step_dt_;
@@ -337,6 +342,7 @@ void PathFollower::Enter(Phase phase) {
   turn_missing_ = 0;
   hold_sum_ = 0;
   fix_wait_ = 0;
+  room_checked_ = false;
   phase_ = phase;
   phase_start_ = time_;
 }

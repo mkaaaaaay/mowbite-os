@@ -434,6 +434,17 @@ TEST(Geometry, TheTurningRadiusReachesTheFarthestPointOfTheBody) {
   EXPECT_NEAR(geometry.TurningRadius(), 0.7, 1e-9);
 }
 
+TEST(Geometry, TheBodyOutlineIsTheOutlineOrElseTheBox) {
+  Geometry geometry = Tron();
+  EXPECT_EQ(geometry.BodyOutline(),
+            (std::vector<Point>{{0.60, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}, {0.60, -0.235}}));
+  const json nose{{0.6, -0.235}, {0.7, 0.0}, {0.6, 0.235}, {-0.12, 0.235}, {-0.12, -0.235}};
+  GeometryChange change = geometry.Set(Request(geometry, {{"robot_outline", nose}}));
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  ASSERT_EQ(geometry.BodyOutline().size(), 5u);
+  EXPECT_EQ(geometry.BodyOutline()[1], (Point{0.7, 0.0}));
+}
+
 TEST(Geometry, BodyKeysBelowThePlatformsValueAreNamed) {
   Geometry geometry = Tron();
   EXPECT_TRUE(geometry.BelowDefault().empty());

@@ -3,9 +3,11 @@
 
 #include <cmath>
 #include <cstddef>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "mowbite_follower/path.h"
@@ -91,6 +93,7 @@ enum class Failure {
   kNone,
   kStart,    // the path cannot begin where the mower is
   kTimeout,  // stuck, no progress or a turn took too long
+  kTurnRoom,  // a turn on the spot would take the body out of its room
 };
 
 // What a turn on the spot did, by the commands, the wheels and the pose.
@@ -117,7 +120,13 @@ class PathFollower {
     double angular = 0;
   };
 
+  // Empty if the body may turn on the spot at the place of at from its heading by delta rad, else why not.
+  using TurnRoom = std::function<std::string(const Pose2& at, double delta)>;
+
   explicit PathFollower(const FollowerConfig& config) : config_(config) {}
+
+  // Asked once at the start of every turn on the spot; without it no such check.
+  void SetTurnRoom(TurnRoom turn_room) { turn_room_ = std::move(turn_room); }
 
   // Empty if the path can be followed from start_index, else why not.
   std::string Start(const std::vector<Pose2>& poses, const std::vector<Kind>& kinds, size_t start_index);
@@ -184,6 +193,9 @@ class PathFollower {
   double phase_start_ = 0;
   // s a turn on the spot has waited for a fresh fix.
   double fix_wait_ = 0;
+  // The turn on the spot going on was asked about its room.
+  bool room_checked_ = false;
+  TurnRoom turn_room_;
   double speed_ = 0;
   double step_dt_ = 0;
   // Of this step: the pose, the turn of the wheels and a fresh fix behind the pose.
