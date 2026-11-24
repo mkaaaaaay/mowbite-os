@@ -23,11 +23,15 @@ Json ShownSensorValue(const std::string& own_id, Json value, bool openmower);
 // The own id of an id a client sends; an id of OpenMower or an unknown one as it is.
 std::string OwnSensorId(const std::string& id);
 
-// sensors.history: sensor_ids as own ids; params of another shape as they are, the node answers those.
-Json OwnHistoryParams(Json params);
+// The params of a call as its node takes them: the sensor_ids of sensors.history as own ids; other calls and params of
+// another shape as they are, the node answers those.
+Json OwnParams(const std::string& method, Json params);
 
-// The answer of sensors.history with the ids and names shown; an answer of another shape as it is.
-Json ShownHistory(Json result, bool openmower);
+// Whether the answer of a call goes out in other words than its node's: sensors.history with openmower_names.
+bool ShowsAnswer(const std::string& method, bool openmower);
+
+// Such an answer with the ids and names shown; an answer of another shape as it is.
+Json ShownAnswer(Json result);
 
 struct ReasonLine {
   bool warn = false;

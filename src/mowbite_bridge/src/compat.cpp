@@ -8,6 +8,8 @@ namespace mowbite_bridge {
 
 namespace {
 
+constexpr char kSensorsHistory[] = "sensors.history";
+
 const mowbite_api::SensorEntry* Shown(const std::string& own_id, bool openmower) {
   if (!openmower) return nullptr;
   const mowbite_api::SensorEntry* entry = mowbite_api::FindSensor(own_id);
@@ -44,16 +46,23 @@ std::string OwnSensorId(const std::string& id) {
   return entry ? entry->id : id;
 }
 
-Json OwnHistoryParams(Json params) {
-  if (!params.is_object() || !params.contains("sensor_ids") || !params["sensor_ids"].is_array()) return params;
+Json OwnParams(const std::string& method, Json params) {
+  if (method != kSensorsHistory || !params.is_object() || !params.contains("sensor_ids") ||
+      !params["sensor_ids"].is_array()) {
+    return params;
+  }
   for (auto& id : params["sensor_ids"]) {
     if (id.is_string()) id = OwnSensorId(id.get<std::string>());
   }
   return params;
 }
 
-Json ShownHistory(Json result, bool openmower) {
-  if (!openmower || !result.is_object() || !result.contains("sensors") || !result["sensors"].is_array()) return result;
+bool ShowsAnswer(const std::string& method, bool openmower) {
+  return openmower && method == kSensorsHistory;
+}
+
+Json ShownAnswer(Json result) {
+  if (!result.is_object() || !result.contains("sensors") || !result["sensors"].is_array()) return result;
   for (auto& sensor : result["sensors"]) {
     if (!sensor.is_object() || !sensor.contains("sensor_id") || !sensor["sensor_id"].is_string()) continue;
     if (const auto* entry = Shown(sensor["sensor_id"].get<std::string>(), true)) {

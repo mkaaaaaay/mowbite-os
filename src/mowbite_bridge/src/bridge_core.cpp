@@ -27,8 +27,6 @@ constexpr std::size_t kMaxDataDepth = 64;
 constexpr std::size_t kMaxHostMethods = 32;
 constexpr std::size_t kMaxMethodBytes = 64;
 constexpr double kNulLogPeriodS = 60;
-// The method whose sensor ids the bridge shows as compat.h does.
-constexpr char kSensorsHistory[] = "sensors.history";
 
 }  // namespace
 
@@ -267,7 +265,7 @@ void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
       }
       const bool open = !call.id.is_null() || to.topic != kResponseTopic;
       const std::string id = open ? Open(call.id, call.method, to) : "";
-      const Json params = call.method == kSensorsHistory ? OwnHistoryParams(call.params) : call.params;
+      const Json params = OwnParams(call.method, call.params);
       out_.requests.push_back({call.method, params.is_null() ? "" : params.dump(), id});
       return;
     }
@@ -473,10 +471,10 @@ void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
     Reply to;
     std::string method;
     if (!Close(id, &client_id, &to, &method)) return;
-    if (method == kSensorsHistory && config_.openmower_names && NestingDepth(result) <= kMaxDataDepth) {
-      const Json shown = ShownHistory(Json::parse(result.begin(), result.end(), nullptr, false), true);
-      if (!shown.is_discarded()) {
-        SendResult(to, client_id, ResultReply(client_id, shown));
+    if (ShowsAnswer(method, config_.openmower_names) && NestingDepth(result) <= kMaxDataDepth) {
+      const Json answer = Json::parse(result.begin(), result.end(), nullptr, false);
+      if (!answer.is_discarded()) {
+        SendResult(to, client_id, ResultReply(client_id, ShownAnswer(answer)));
         return;
       }
     }

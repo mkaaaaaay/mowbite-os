@@ -7,10 +7,10 @@
 #include "mowbite_bridge/compat.h"
 
 using mowbite_bridge::Json;
-using mowbite_bridge::OwnHistoryParams;
+using mowbite_bridge::OwnParams;
 using mowbite_bridge::OwnSensorId;
 using mowbite_bridge::SensorDescription;
-using mowbite_bridge::ShownHistory;
+using mowbite_bridge::ShownAnswer;
 using mowbite_bridge::ShownSensor;
 using mowbite_bridge::ShownSensorId;
 using mowbite_bridge::ShownSensorValue;
@@ -72,16 +72,19 @@ TEST(Compat, ChargeStateInTheWordsOfOpenMower) {
 
 TEST(Compat, HistoryParamsAndAnswersOfOtherShapesStayAsTheyAre) {
   for (const Json& params : {Json(), Json::array(), Json{{"sensor_ids", "om_v_battery"}}, Json{{"x", 1}}}) {
-    EXPECT_EQ(OwnHistoryParams(params), params) << params.dump();
+    EXPECT_EQ(OwnParams("sensors.history", params), params) << params.dump();
   }
-  EXPECT_EQ(OwnHistoryParams(Json{{"sensor_ids", {"om_gps_accuracy", 3}}}),
-            (Json{{"sensor_ids", {"position_accuracy", 3}}}));
+  const Json ids = {{"sensor_ids", {"om_gps_accuracy", 3}}};
+  EXPECT_EQ(OwnParams("sensors.history", ids), (Json{{"sensor_ids", {"position_accuracy", 3}}}));
+  EXPECT_EQ(OwnParams("sensors.list", ids), ids);
+  EXPECT_TRUE(mowbite_bridge::ShowsAnswer("sensors.history", true));
+  EXPECT_FALSE(mowbite_bridge::ShowsAnswer("sensors.history", false));
+  EXPECT_FALSE(mowbite_bridge::ShowsAnswer("stats.get", true));
   for (const Json& result : {Json(), Json{{"sensors", 1}}, Json{{"sensors", {1, Json{{"sensor_id", 2}}}}}}) {
-    EXPECT_EQ(ShownHistory(result, true), result) << result.dump();
+    EXPECT_EQ(ShownAnswer(result), result) << result.dump();
   }
   const Json answer = {{"sensors", {{{"sensor_id", "blade_temp"}, {"key", "blade_temp"}, {"name", "Blade Motor Temp"}}}}};
-  EXPECT_EQ(ShownHistory(answer, false), answer);
-  EXPECT_EQ(ShownHistory(answer, true)["sensors"][0],
+  EXPECT_EQ(ShownAnswer(answer)["sensors"][0],
             (Json{{"sensor_id", "om_mow_motor_temp"}, {"key", "blade_temp"}, {"name", "Mow Motor Temp"}}));
 }
 
