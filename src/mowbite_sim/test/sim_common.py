@@ -4,6 +4,7 @@ the simulated boards.
 A test imports it after `sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))`.
 """
 import bisect
+import ctypes
 import json
 import math
 import os
@@ -43,6 +44,54 @@ HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durabilit
 ROSOUT = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # A node stopped by launch ends with 0 or by its signal (SIGINT, SIGTERM; negative or 128 + n).
 EXIT_CODES = [0, -2, -15, 130, 143]
+
+LIBC = ctypes.CDLL(None, use_errno=True)
+LIBC.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
+PTRACE_DETACH = 0x11
+PTRACE_SEIZE = 0x4206
+PTRACE_INTERRUPT = 0x4207
+# waitpid: also for threads that are not children (tracees).
+WALL = 0x40000000
+
+
+def stop_thread(pid, name):
+    """Stops the thread of pid with that name (the watch names it after its node) and only it."""
+    for tid in os.listdir(f"/proc/{pid}/task"):
+        with open(f"/proc/{pid}/task/{tid}/comm") as f:
+            if f.read().strip() != name:
+                continue
+        for request in (PTRACE_SEIZE, PTRACE_INTERRUPT):
+            if LIBC.ptrace(request, int(tid), None, None) != 0:
+                raise OSError(ctypes.get_errno(), f"ptrace {request:#x} of {name} ({tid})")
+        return int(tid)
+    raise LookupError(f"no thread {name} in {pid}")
+
+
+def stall_thread(pid, name, seconds):
+    """Holds the thread of pid with that name for seconds, as a long write would, then lets it go on."""
+    tid = stop_thread(pid, name)
+    try:
+        os.waitpid(tid, WALL)
+        time.sleep(seconds)
+    finally:
+        if LIBC.ptrace(PTRACE_DETACH, tid, None, None) != 0:
+            raise OSError(ctypes.get_errno(), f"ptrace detach of {name} ({tid})")
+
+
+def thread_owner(name):
+    """The pid of the component container that has a thread with that name; None without one."""
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                if b"component_container_isolated" not in f.read():
+                    continue
+            for tid in os.listdir(f"/proc/{pid}/task"):
+                with open(f"/proc/{pid}/task/{tid}/comm") as f:
+                    if f.read().strip() == name:
+                        return int(pid)
+        except OSError:
+            continue
+    return None
 # Modules of the Tron MCU as fake_tron numbers them.
 TRON_SPEED, TRON_CUTTER = 4, 11
 # Services and message types of the xCore as fake_xcore numbers them.

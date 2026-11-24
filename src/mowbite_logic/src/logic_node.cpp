@@ -20,8 +20,8 @@ constexpr double kReleaseTimeoutS = 3.0;
 constexpr int kMaxRounds = 4;
 // A write of os-session.json or checkpoint.json longer than this (ms) gets a line with its time.
 constexpr double kSlowWriteMs = 50.0;
-// One write longer than this (s): an error line every 5 s until it ends.
-constexpr double kWriterStuckS = 5.0;
+// One write longer than this: an error line every 5 s until it ends; a start waits no longer for its session.
+constexpr int kWriterStuckMs = 5000;
 
 // s a calibration program has to confirm a stop before its goal no longer blocks the next start.
 constexpr double kCalibrationStopWaitS = 10.0;
@@ -375,6 +375,7 @@ void LogicNode::OnHardwareStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
     std::lock_guard<std::mutex> lock(mutex_);
     core_.Call<&LogicCore::OnHardwareStatus>(hw);
     last_hw_ = hw.time_s;
+    hw_late_ = false;
   }
   Step();
 }
@@ -383,6 +384,7 @@ void LogicNode::OnPose(const mowbite_msgs::msg::RobotPose& msg) {
   std::lock_guard<std::mutex> lock(mutex_);
   core_.Call<&LogicCore::OnPose>(ToPose(msg));
   last_pose_ = MonotonicSeconds();
+  pose_late_ = false;
 }
 
 // What only the node knows against a start, for the core to weigh after its own reasons. Called with the mutex held.
@@ -550,8 +552,10 @@ void LogicNode::ReleaseEmergency(const std::string& rpc_id, uint32_t latch_count
     std::string error;
     // A write of the hold still on its way lands before the removal.
     hold_text_.clear();
-    while (writer_ && writer_->WaitFor(restart_hold_path_, std::chrono::seconds(1)) == Wait::kTimeout) CheckWriter();
-    if (!mowbite_hold::RemoveRecordFile(restart_hold_path_, &error)) {
+    const bool landed = !writer_ || writer_->WaitFor(restart_hold_path_, std::chrono::milliseconds(kWriterStuckMs)) !=
+                                        Wait::kTimeout;
+    if (!landed) error = "the last write of the hold has not ended within " + std::to_string(kWriterStuckMs) + " ms";
+    if (!landed || !mowbite_hold::RemoveRecordFile(restart_hold_path_, &error)) {
       RCLCPP_ERROR(get_logger(), "Restart hold stays: %s", error.c_str());
       RefuseReleaseLocked(Reason("RESTART_HOLD_STAYS", "The restart hold stays: " + error));
       return;
@@ -1096,7 +1100,8 @@ void LogicNode::JudgeRestart(const std::string& crash_record) {
 
 // os-session.json with state, job, emergency and charging now, when they changed, clean is new or the last write
 // failed. Without the writer (start and stop) here; else through it, waited for only when this record begins a
-// restart hold, so it is on disk before what it guards acts (G35). False when that wait failed. Without the mutex.
+// restart hold, so it is on disk before what it guards acts (G35). False when that wait failed or took longer than
+// kWriterStuckMs. Without the mutex.
 bool LogicNode::WriteSession(bool clean) {
   if (session_path_.empty()) return true;
   mowbite_hold::SessionRecord record;
@@ -1128,8 +1133,8 @@ bool LogicNode::WriteSession(bool clean) {
   const bool wait = mowbite_hold::MustWaitForSession(session_holds_, record);
   writer_->Submit(session_path_, text);
   if (!wait) return true;
-  Wait result;
-  while ((result = writer_->WaitFor(session_path_, std::chrono::seconds(1))) == Wait::kTimeout) CheckWriter();
+  const Wait result = writer_->WaitFor(session_path_, std::chrono::milliseconds(kWriterStuckMs));
+  if (result == Wait::kTimeout) RCLCPP_ERROR(get_logger(), "No session written within %d ms", kWriterStuckMs);
   session_holds_ = result == Wait::kWritten;
   return session_holds_;
 }
@@ -1158,11 +1163,11 @@ void LogicNode::OnWritten(const mowbite_hold::FileWriter::Done& done) {
   if (ms > kSlowWriteMs) RCLCPP_INFO(get_logger(), "Wrote %s in %.0f ms", done.path.c_str(), ms);
 }
 
-// An error line while one write has run longer than kWriterStuckS.
+// An error line while one write has run longer than kWriterStuckMs.
 void LogicNode::CheckWriter() {
   if (!writer_) return;
   const double busy = std::chrono::duration<double>(writer_->Busy()).count();
-  if (busy > kWriterStuckS) {
+  if (busy * 1000 > kWriterStuckMs) {
     RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 5000, "Writing in %s has hung for %.0f s", data_dir_.c_str(),
                           busy);
   }
@@ -1243,8 +1248,8 @@ void LogicNode::OnStateTimer() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const double t = MonotonicSeconds();
-    if (!last_hw_ || t - *last_hw_ > hw_timeout_s_) core_.Call<&LogicCore::OnHardwareTimeout>();
-    if (!last_pose_ || t - *last_pose_ > pose_timeout_s_) core_.Call<&LogicCore::OnPoseTimeout>();
+    if (hw_late_) core_.Call<&LogicCore::OnHardwareTimeout>();
+    if (pose_late_) core_.Call<&LogicCore::OnPoseTimeout>();
     core_.Call<&LogicCore::OnTick>(t);
     if (edit_sent_ && t - *edit_sent_ > map_edit_timeout_s_) {
       edit_sent_.reset();

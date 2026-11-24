@@ -8,7 +8,6 @@ mows on without remote control until the limit; with S2 stalled the wheels stop 
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_watch_stall.py
 """
-import ctypes
 import json
 import math
 import os
@@ -26,8 +25,8 @@ from rcl_interfaces.msg import Log
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (EXIT_CODES, LATCHED, ROSOUT, SimProbe, container_pid, restarted, sim_description,  # noqa: E402
-                        sim_files)
+from sim_common import (EXIT_CODES, LATCHED, ROSOUT, WALL, SimProbe, container_pid, restarted,  # noqa: E402
+                        sim_description, sim_files, stop_thread)
 
 WORK = tempfile.mkdtemp(prefix="mowbite_watch_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
@@ -61,13 +60,6 @@ with open(CONFIG, "w") as f:
             "mowbite_logic:\n  ros__parameters:\n    mow_with_blade: true\n    gps_wait_time: 2.0\n"
             "    geometry:\n      antenna_x: 0.098\n      antenna_y: 0.0\n")
 
-LIBC = ctypes.CDLL(None, use_errno=True)
-LIBC.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
-PTRACE_SEIZE = 0x4206
-PTRACE_INTERRUPT = 0x4207
-# waitpid: also for threads that are not children (tracees).
-WALL = 0x40000000
-
 
 def generate_test_description():
     return sim_description(WORK, 18834, extra_config=CONFIG)
@@ -95,19 +87,6 @@ class Probe(SimProbe):
         entries = self.recent()
         speeds = [e for e in entries if "speed" in e and e["t"] > entries[-1]["t"] - 0.2]
         return speeds[-1]["t"] if speeds and speeds[-1]["hex"] != ZERO else None
-
-
-def stop_thread(pid, name):
-    """Stops the thread of pid with that name (the watch names it after its node) and only it."""
-    for tid in os.listdir(f"/proc/{pid}/task"):
-        with open(f"/proc/{pid}/task/{tid}/comm") as f:
-            if f.read().strip() != name:
-                continue
-        for request in (PTRACE_SEIZE, PTRACE_INTERRUPT):
-            if LIBC.ptrace(request, int(tid), None, None) != 0:
-                raise OSError(ctypes.get_errno(), f"ptrace {request:#x} of {name} ({tid})")
-        return int(tid)
-    raise LookupError(f"no thread {name} in {pid}")
 
 
 def reap(tid, timeout):

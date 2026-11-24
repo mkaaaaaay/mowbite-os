@@ -13,22 +13,27 @@ void LogicNode::UpdateBlade() {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const double t = MonotonicSeconds();
-    // Once when the timeout passes, between the ticks of the state timer, which goes on telling it every second.
-    const auto passed = [&](const std::optional<double>& last, double timeout) {
-      return last && t - *last > timeout && fast_tick_s_ - *last <= timeout;
-    };
-    if (passed(last_hw_, hw_timeout_s_)) core_.Call<&LogicCore::OnHardwareTimeout>();
-    if (passed(last_pose_, pose_timeout_s_)) core_.Call<&LogicCore::OnPoseTimeout>();
-    fast_tick_s_ = t;
     // Poses of the dock marker age between the ticks of the state timer too.
     if (core_.View().Docking()) core_.Call<&LogicCore::AgeDockPose>(t);
     // So does the obstacles/status: a stale one frees nothing from then on.
     if (core_.View().ObstacleGoesStale(t)) core_.Call<&LogicCore::AgeObstacles>(t);
-    stalled = CheckFollowerLocked();
-    // The calibration program's sign of life and the battery while it drives.
-    ended = core_.Call<&LogicCore::TickCalibration>(MonotonicSeconds());
-    // The setup program's sign of life, the station and a hold while a step moves the wheels.
-    ended = core_.Call<&LogicCore::TickSetup>(MonotonicSeconds()) || ended;
+    // Signs of life only when this node did not stand still just before (G34): they may wait in the queue.
+    stalled = false;
+    ended = false;
+    if (fast_gap_.Judge(t)) {
+      // Told once when the timeout passes; the state timer goes on telling it every second.
+      const bool hw_late = !last_hw_ || t - *last_hw_ > hw_timeout_s_;
+      const bool pose_late = !last_pose_ || t - *last_pose_ > pose_timeout_s_;
+      if (hw_late && !hw_late_) core_.Call<&LogicCore::OnHardwareTimeout>();
+      if (pose_late && !pose_late_) core_.Call<&LogicCore::OnPoseTimeout>();
+      hw_late_ = hw_late;
+      pose_late_ = pose_late;
+      stalled = CheckFollowerLocked();
+      // The calibration program's sign of life and the battery while it drives.
+      ended = core_.Call<&LogicCore::TickCalibration>(t);
+      // The setup program's sign of life, the station and a hold while a step moves the wheels.
+      ended = core_.Call<&LogicCore::TickSetup>(t) || ended;
+    }
     // A lock the setup program closed ends drives and stops the blade like a missing safety measurement.
     lock_watch_->Poll();
     ended = TellSafetyLocked() || ended;

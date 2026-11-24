@@ -33,13 +33,14 @@ import launch_testing.asserts
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from launch.actions import ExecuteProcess, TimerAction
-from mowbite_msgs.msg import (HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse,
-                              Rtcm, SafetyStatus)
+from mowbite_msgs.msg import (HardwareStatus, MqttPublish, ReasonChange, RobotState, RpcError, RpcMethods, RpcRequest,
+                              RpcResponse, Rtcm, SafetyStatus)
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 from sim_common import (EXIT_CODES, HISTORY, SimProbe, fake_xcore, journal_dir, layers,  # noqa: E402,F401
-                        loopback_group, sim_description, sim_files, station_frame, wait_until, write_json)
+                        loopback_group, sim_description, sim_files, stall_thread, station_frame, thread_owner,
+                        wait_until, write_json)
 
 PLATFORM = os.environ["MOWBITE_PLATFORM"]
 WORK = tempfile.mkdtemp(prefix=f"mowbite_setup_motion_{PLATFORM}_")
@@ -124,6 +125,9 @@ class Probe(SimProbe):
         self.host_requests = []
         self.node.create_subscription(HardwareStatus, "hw/status", self._set("status"), 10)
         self.node.create_subscription(RobotState, "bridge/robot_state", self._robot, 10)
+        self.reason_changes = []
+        self.node.create_subscription(ReasonChange, "bridge/reason_change",
+                                      lambda msg: self.reason_changes.append((msg.before, msg.after)), 50)
         self.node.create_subscription(TwistStamped, "hw/wheel_odom", self._set("wheels"), 10)
         self.safety = None
         self.node.create_subscription(SafetyStatus, "safety/status", self._set("safety"), 10)
@@ -346,6 +350,32 @@ class TestSetupMotion(unittest.TestCase):
         entry = self.ended("wheels", 10)
         self.assertEqual(entry["result"]["reason"], "RELEASED", entry["result"])
         self.assertEqual(p.status.emergency_reason, 0)
+
+    def test_08a_a_node_that_stood_still_reads_its_queue_first(self):
+        """G34: a node held longer than the timeout of an input finds what came meanwhile still in its queue. The logic
+        held 3 s tells no timeout of hw/status; a step goes on when setup.keep came while the setup program stood
+        still and left the last one it read older than its timeout (shorter than the 1 s the logic waits for a sign
+        of the setup program)."""
+        p = self.probe
+        since = len(p.reason_changes)
+        stall_thread(thread_owner("logic"), "logic", 3.0)
+        time.sleep(1.0)
+        self.assertEqual(p.reason_changes[since:], [])
+        self.assertFalse(p.robot.emergency, p.robot)
+        self.start("stop_moving")
+        ready = wait_until(lambda: (lambda e: e if e["state"] != "running" or (
+            e["progress"]["n"] == 1 and p.turning()) else None)(p.step("stop_moving")), 15)
+        self.assertEqual((ready or {}).get("state"), "running", p.step("stop_moving"))
+        p.keeping = None
+        time.sleep(0.5)
+        p._send("setup.keep", {"step": "stop_moving"}, None, None)
+        time.sleep(0.5)
+        p.keeping = "stop_moving"
+        stall_thread(thread_owner("setup"), "setup", 0.6)
+        time.sleep(0.5)
+        self.assertEqual(p.step("stop_moving")["state"], "running", p.step("stop_moving"))
+        p.keeping = None
+        self.assertEqual(self.ended("stop_moving", 10)["result"]["reason"], "RELEASED")
 
     def test_09_an_emergency_of_the_app_ends_the_step(self):
         p = self.probe

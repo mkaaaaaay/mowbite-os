@@ -217,9 +217,16 @@ class Probe(SimProbe):
             return [e for e in self.events[since:] if e["type"] in ("SETUP_STEP", "SETUP")]
 
 
-def saved():
-    with open(FILE) as f:
-        return json.load(f)
+def saved(check=lambda record: True, timeout=3.0):
+    """setup.json once check holds for it: the program writes it in a thread of its own after the answer."""
+    def read():
+        try:
+            with open(FILE) as f:
+                record = json.load(f)
+        except (OSError, ValueError):
+            return None
+        return record if check(record) else None
+    return wait_until(read, timeout) or read() or {}
 
 
 @unittest.skipUnless(STEPS, f"{PLATFORM} has no step list")
@@ -524,13 +531,13 @@ class TestSetup(unittest.TestCase):
         self.assertEqual({k: told[0][k] for k in ("type", "step", "state", "attempt", "reason", "severity")},
                          {"type": "SETUP_STEP", "step": board, "state": "failed", "attempt": 1, "reason": "STOPPED",
                           "severity": "info"})
-        self.assertEqual(saved()["steps"][board]["state"], "open")
+        self.assertEqual(saved(lambda r: r["steps"][board]["state"] == "open")["steps"][board]["state"], "open")
         # Skipped with a reason; the step is done all the same when the user does it later.
         entry = self.probe.do("setup.skip", board, reason="other", note="the board is new")
         self.assertEqual(entry["state"], "skipped")
         self.assertEqual((entry["result"]["skip"], entry["result"]["note"], entry["result"]["reason"]),
                          ("other", "the board is new", None))
-        saved_now = saved()
+        saved_now = saved(lambda r: r["steps"][board]["state"] == "skipped")
         self.assertEqual((saved_now["schema"], saved_now["platform"], saved_now["catalog"]),
                          (1, SETUP["platform"], LIST["catalog"]))
         self.assertEqual(saved_now["steps"][board]["state"], "skipped")
@@ -566,7 +573,7 @@ class TestSetup(unittest.TestCase):
         stages = [e["stage"] for e in told if e.get("what") == "stage_done"]
         self.assertEqual(list(dict.fromkeys(stages)), [stage["id"] for stage in state["stages"]])
         self.assertEqual(sum(e.get("what") == "complete" for e in told), 1)
-        record = saved()
+        record = saved(lambda r: r["version"] == state["version"])
         self.assertEqual(record["version"], state["version"])
         self.assertEqual({entry["state"] for entry in record["steps"].values()}, {"ok"})
         self.assertEqual(list(record["steps"]), list(STEPS))
@@ -592,7 +599,7 @@ class TestSetup(unittest.TestCase):
                 self.assertIn(step["state"], ("open", "locked"), step["id"])
         self.assertEqual(self.probe.wait(lambda: self.probe.setup_events(events))[0],
                          {**self.probe.setup_events(events)[0], "type": "SETUP", "what": "reset"})
-        self.assertEqual(saved()["version"], state["version"])
+        self.assertEqual(saved(lambda r: r["version"] == state["version"])["version"], state["version"])
 
 
 @launch_testing.post_shutdown_test()

@@ -39,6 +39,7 @@
 #include "mowbite_api/setup.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_hold/file_io.h"
+#include "mowbite_hold/file_writer.h"
 #include "mowbite_hold/lock.h"
 #include "mowbite_hold/restart.h"
 #include "mowbite_map/sha256.h"
@@ -47,6 +48,7 @@
 #include "mowbite_setup/program.h"
 #include "mowbite_setup/steps.h"
 #include "mowbite_watch/attach.h"
+#include "mowbite_watch/tick_gap.h"
 
 namespace mowbite_setup {
 
@@ -150,6 +152,13 @@ class SetupNode : public rclcpp::Node {
     methods_pub_->publish(methods);
     watch_ = mowbite_watch::Attach(*this);
     if (!program_) return;
+    writer_ = std::make_unique<mowbite_hold::FileWriter>(
+        [](const std::string& path, const std::string& text, std::string* error) {
+          return mowbite_hold::WriteFileSafely(path, text, error);
+        },
+        [this](const mowbite_hold::FileWriter::Done& done) {
+          if (!done.ok) RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", done.path.c_str(), done.error.c_str());
+        });
 
     hw_sub_ = create_subscription<HardwareStatus>("hw/status", 10, [this](HardwareStatus::ConstSharedPtr msg) {
       Hardware hardware;
@@ -378,16 +387,24 @@ class SetupNode : public rclcpp::Node {
   // Called with the mutex held.
   json State(double now) const { return program_->State(now, image_infos_); }
 
-  // Saves the record; a failure blocks every change until a write goes through again. Called with the mutex held.
+  // Hands the record to the writer thread, so no fsync stops the tick of a motion (G34). Called with the mutex held.
   void Save(double now) {
-    std::string error;
-    const bool written = mowbite_hold::WriteFileSafely(RecordPath(), program_->Text(), &error);
-    const bool before = program_->writable();
-    if (!written && before) RCLCPP_ERROR(get_logger(), "Cannot write %s: %s", RecordPath().c_str(), error.c_str());
-    if (written && !before) RCLCPP_INFO(get_logger(), "%s is written again", RecordPath().c_str());
+    writer_->Submit(RecordPath(), program_->Text());
+    save_pending_ = true;
     write_tried_ = now;
+  }
+
+  // How the last write of the record went, once the writer is through with it; a failure blocks every change until a
+  // write goes through again. Called with the mutex held.
+  void TakeSaved() {
+    if (!save_pending_) return;
+    const auto result = writer_->WaitFor(RecordPath(), std::chrono::steady_clock::duration::zero());
+    if (result == mowbite_hold::FileWriter::Wait::kTimeout) return;
+    save_pending_ = false;
+    const bool written = result == mowbite_hold::FileWriter::Wait::kWritten;
+    if (written && !program_->writable()) RCLCPP_INFO(get_logger(), "%s is written again", RecordPath().c_str());
+    if (written != program_->writable()) state_due_ = true;
     program_->SetWritable(written);
-    state_due_ = true;
   }
 
   // What the program has to tell after a change: the lock first, then the record and the events. Called with the
@@ -439,6 +456,9 @@ class SetupNode : public rclcpp::Node {
   void OnTick() {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
+    // Right after this node stood still, setup.keep and hw/status may still wait in the queue: the next tick judges.
+    if (!tick_gap_.Judge(now)) return;
+    TakeSaved();
     if (now - restarts_read_ >= kRestartsEvery) {
       restarts_read_ = now;
       program_->SetDriverRestarts(RestartsLeft(now));
@@ -447,8 +467,9 @@ class SetupNode : public rclcpp::Node {
     if (const auto release = program_->TakeRelease()) SendRelease(*release);
     Drive(now);
     Flush(now);
-    if (program_->TakeRestart(now)) Restart();
-    if (!program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
+    // A restart waits until the record is on the disk.
+    if (!save_pending_ && program_->TakeRestart(now)) Restart();
+    if (!save_pending_ && !program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
     // What blocks a step changes without a change of the record: the app has to see it as well.
     std::string blocked = program_->BlockedNow(now);
     if (blocked != blocked_) {
@@ -706,6 +727,9 @@ class SetupNode : public rclcpp::Node {
   std::map<std::string, std::pair<std::string, int>> image_infos_;
   World world_;
   double write_tried_ = 0;
+  bool save_pending_ = false;
+  // 50 ms ticks; one after a stall of more than 0.2 s does not judge.
+  mowbite_watch::TickGap tick_gap_{0.2};
   double lock_tried_ = 0;
   bool state_due_ = true;
   std::string blocked_;
@@ -738,6 +762,8 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
+  // Last, so it ends first and writes what is queued while the node is whole.
+  std::unique_ptr<mowbite_hold::FileWriter> writer_;
 };
 
 }  // namespace mowbite_setup

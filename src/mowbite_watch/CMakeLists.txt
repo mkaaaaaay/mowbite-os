@@ -30,7 +30,8 @@ install(TARGETS mowbite_watch
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   # Core and runtime from their sources, without ROS: the test runs exactly this build of them.
-  ament_add_gtest(mowbite_watch_test test/test_watch_core.cpp test/test_watch.cpp src/watch_core.cpp src/watch.cpp)
+  ament_add_gtest(mowbite_watch_test test/test_watch_core.cpp test/test_watch.cpp test/test_tick_gap.cpp
+    src/watch_core.cpp src/watch.cpp)
   target_include_directories(mowbite_watch_test PRIVATE include)
   target_link_libraries(mowbite_watch_test Threads::Threads)
 endif()
