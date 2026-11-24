@@ -228,7 +228,7 @@ TEST_F(Core, LocalMethods) {
                              std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                              R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
                              R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,)"
-                             R"("names":"openmower"})");
+                             R"("names":"openmower","data_rollback":null})");
   core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0), BladeHeight(true, 30, 90, 60));
   const Json tron = Call(core_, "system.info")["result"];
   EXPECT_EQ(tron["platform"], "airseekers_tron");

@@ -208,13 +208,14 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::CheckDockBeforeDrive, &L::OnDockCheck, &L::OnChargeOff, &L::OnUndockEnded, &L::AbortUndocking,
       &L::StartDocking, &L::TakeDockingLeg, &L::OnDockingLegEnded, &L::SetDockingSettings, &L::SetHomeSettings,
       &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered, &L::GeometryChanged, &L::SetHold,
-      &L::SetDataRollback, &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
+      &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
       &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
-      &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose, &L::AgeObstacles);
+      &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose, &L::AgeObstacles,
+      &L::SetDataRollback);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
