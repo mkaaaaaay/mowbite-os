@@ -19,6 +19,15 @@ import logic_params  # noqa: E402
 NODES = ()
 DRIVER = "xcore_driver"
 DRIVER_RESTARTS = 3
+# What setup.platforms tells of this mower, by language.
+ABOUT = {
+    "de": {"name": "YardForce NX60i (OpenMower v2)",
+           "text": "YardForce-Mäher mit der Platine xCore von OpenMower v2.",
+           "board": "xCore über Ethernet: MowBite OS sucht sie im Netz und spricht sie erst an, wenn sie sich meldet."},
+    "en": {"name": "YardForce NX60i (OpenMower v2)",
+           "text": "YardForce mower with the xCore board of OpenMower v2.",
+           "board": "xCore on Ethernet: MowBite OS looks for it on the network and talks to it only once it answers."},
+}
 # A mower that ran OpenMower: its map and values come over on the first start (mowbite_bringup migrate.py).
 OPENMOWER_IMPORT = True
 

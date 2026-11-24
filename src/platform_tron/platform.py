@@ -18,6 +18,17 @@ NODES = ("tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision
          "tron_side", "tron_rear", "mowbite_camera")
 DRIVER = "tron_mcu"
 DRIVER_RESTARTS = 3
+# What setup.platforms tells of this mower, by language.
+ABOUT = {
+    "de": {"name": "Airseekers Tron",
+           "text": "Mähroboter von Airseekers mit Kameras und RTK.",
+           "board": "MCU an /dev/ttyS9, GNSS an /dev/ttyS4, IMU an /dev/ttyS1: MowBite OS sendet erst, wenn die MCU "
+                    "sich meldet."},
+    "en": {"name": "Airseekers Tron",
+           "text": "Robot mower by Airseekers with cameras and RTK.",
+           "board": "MCU on /dev/ttyS9, GNSS on /dev/ttyS4, IMU on /dev/ttyS1: MowBite OS sends only once the MCU "
+                    "answers."},
+}
 # Where the rootfs of the Tron keeps the data of the OS.
 DATA_DIR = "/userdata/mowbite"
 

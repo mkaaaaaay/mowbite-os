@@ -86,6 +86,6 @@ def start(tmp_path, monkeypatch):
             for action in stack.all_arguments(platform, module):
                 if isinstance(action, DeclareLaunchArgument):
                     action.execute(context)
-            built.actions = stack.launch_setup(context, platform, module)
+            built.actions = stack.launch_setup(context, platform, module, True)
         return built
     return started

@@ -37,6 +37,8 @@ WATCH_NOTE = "watch_exit.json"
 RESTART_NOTE = "setup_restart.json"
 # In data_dir: how the driver of the platform ended outside the shutdown, written before it starts again.
 DRIVER_EXIT_NOTE = "driver_exit.json"
+# In data_dir: the platform the setup program chose ({"platform", "t"}), read when MOWBITE_PLATFORM names none.
+PLATFORM_NOTE = "platform.json"
 # The nodes beside the container, in their own processes.
 PLANNER = "mowbite_planner"
 NET = "mowbite_net"
@@ -180,13 +182,20 @@ def arguments(platform, module):
         # Values on top of both, e.g. those of the simulation or a test; by default the platform file once more.
         DeclareLaunchArgument("extra_config", default_value=LaunchConfiguration("platform_config")),
         DeclareLaunchArgument("geometry", default_value=layers.geometry(platform)),
-        # Without it nothing is kept and no update can hold the driver; with it, it is prepared for the data schema of
-        # the image before any node starts.
-        DeclareLaunchArgument("data_dir", default_value=getattr(module, "DATA_DIR", "")),
         # OpenMower's folders ros and params, read only; on a platform with OPENMOWER_IMPORT its map and values come
         # over on the first start with data_dir (migrate.py). Empty: no import.
         DeclareLaunchArgument("import_dir", default_value=EnvironmentVariable("MOWBITE_IMPORT_DIR",
                                                                               default_value="")),
+        *shared_arguments(getattr(module, "DATA_DIR", "")),
+    ]
+
+
+# The arguments of the stage of the choice as well.
+def shared_arguments(data_dir):
+    return [
+        # Without it nothing is kept and no update can hold the driver; with it, it is prepared for the data schema of
+        # the image before any node starts.
+        DeclareLaunchArgument("data_dir", default_value=data_dir),
         # The broker of the OS, the same one mowbite_health asks.
         DeclareLaunchArgument("mqtt_host", default_value=EnvironmentVariable("MOWBITE_MQTT_HOST",
                                                                              default_value="127.0.0.1")),
@@ -217,7 +226,7 @@ def update_path():
 
 # The nodes above the hardware contract, the same on every platform; files are the parameter files of the platform in
 # their order (later ones change single values), geometry its dimensions.
-def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=None):
+def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=None, choice=False):
     journal_dir = {"journal_dir": journal}
     version = {"software_version": migrate.revision()}
     localization = ComposableNode(
@@ -268,14 +277,31 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
     # The setup program of the platform (setup.*): its steps come from layers.setup, layer is the parameter file it
     # writes for this mower, shadowed what the file kept by hand overrules of it, driver_restarts how often the start
     # starts an ended driver again.
+    # platforms: the mowers of the image for the step platform, chosen the one the OS runs as, fixed whether the
+    # installation set it.
     setup = {"platform": "", "steps": "", "image_dir": "", "layer": "", "shadowed": "", "driver_restarts": "0",
-             **(setup or {})}
+             "platforms": json.dumps(about_platforms()), "chosen": "", "fixed": "false", **(setup or {})}
     program = ComposableNode(
         package="mowbite_setup", plugin="mowbite_setup::SetupNode", name="mowbite_setup",
         parameters=[*files, {"data_dir": data_dir},
                     {name: ParameterValue(value, value_type=str) for name, value in setup.items()}])
+    if choice:
+        return [bridge, program]
     return [localization, safety, logic, bridge, map_node, follower, ntrip, calibration, clock, schedule, stats,
             obstacles, program]
+
+
+# What setup.platforms tells of each platform of the image: ABOUT of its platform.py ({language: {name, text,
+# board}}); one without it by its name alone.
+def about_platforms():
+    found = []
+    for name in layers.platforms():
+        try:
+            texts = getattr(platform_module(name), "ABOUT", {})
+        except (LookupError, ValueError, OSError):
+            continue
+        found.append({"name": name, "texts": texts})
+    return found
 
 
 # The names of these composable nodes, as their watch knows them.
@@ -423,9 +449,10 @@ def net_service(files, data_dir, logger):
         "net", data_dir, logger)
 
 
-# The container with these components, started again after a crash, and the planner. The driver of the platform runs
-# beside them in a process of its own and keeps motion and blade blocked until a release; the logic comes back idle.
-def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
+# The container with these components, started again after a crash. The driver of the platform runs beside them in a
+# process of its own and keeps motion and blade blocked until a release; the logic comes back idle. The end of a
+# container the setup program asked for a restart of the OS ends the launch.
+def container(nodes, data_dir, logger, oom_score_adj=""):
     # Every restart is a new container with a name of its own: DDS knows the load service of a crashed one for a while,
     # and launch_ros would wait for its answer for ever. Each node spins in its own thread, so a node that blocks stalls
     # only itself, not S2 or the follower beside it; the watch of the container ends it when one stays silent or one
@@ -438,11 +465,19 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     if watch_note:
         watch_env["MOWBITE_WATCH_NOTE"] = watch_note
 
-    def container(start):
+    def make(start):
         return ComposableNodeContainer(
             name="mowbite" if start == 0 else f"mowbite_{start}", namespace="", package="rclcpp_components",
             executable="component_container_isolated", composable_node_descriptions=nodes, output="screen",
             additional_env=watch_env)
+
+    return restarting(make, os.path.join(data_dir, EXIT_NOTE) if data_dir else None, "The container", logger,
+                      CONTAINER_RESTARTS, oom_score_adj, watch_note,
+                      leave=lambda: bool(restart_note) and os.path.lexists(restart_note))
+
+
+# The container with these components and the planner beside it.
+def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
 
     # Plans the mowing paths for mowing.plan; a crash only costs the plans until it is back. Namespace "/" so that a
     # dict of parameters goes under its full name. calib_root is the folder of mowbite_calibration: only under it
@@ -451,10 +486,8 @@ def container_and_planner(nodes, data_dir, files, logger, oom_score_adj=""):
     planner = Node(package="mowbite_planner_os", executable="mowbite_planner_os_node", name=PLANNER,
                    namespace="/", parameters=[*files, {"data_dir": data_dir, "calib_root": calib_root}],
                    output="screen", respawn=True, respawn_delay=5.0)
-    return [*restarting(container, os.path.join(data_dir, EXIT_NOTE), "The container", logger, CONTAINER_RESTARTS,
-                        oom_score_adj, watch_note,
-                        leave=lambda: bool(restart_note) and os.path.lexists(restart_note)),
-            *oom_score(planner, oom_score_adj, logger), planner, *net_service(files, data_dir, logger)]
+    return [*container(nodes, data_dir, logger, oom_score_adj), *oom_score(planner, oom_score_adj, logger), planner,
+            *net_service(files, data_dir, logger)]
 
 
 # platform.py of this platform as a module (new-mower.md, "Platform package"), from folder instead of the index.
@@ -515,7 +548,7 @@ class Start:
 
 # The nodes with the values of the launch arguments taken now: the components are loaded again after a crash of the
 # container, when the arguments of an including launch may be out of scope (sim.launch.py has them in a TimerAction).
-def launch_setup(context, platform, module):
+def launch_setup(context, platform, module, fixed):
     def arg(name):
         return LaunchConfiguration(name).perform(context)
 
@@ -543,6 +576,8 @@ def launch_setup(context, platform, module):
     setup["layer"] = setup_file
     setup["shadowed"] = ",".join(shadowed_values(found, device, logger))
     setup["driver_restarts"] = str(module.DRIVER_RESTARTS)
+    setup["chosen"] = platform
+    setup["fixed"] = "true" if fixed else "false"
     nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
     halt = check_parameters(files, checked_nodes(nodes, module), logger) or check_setup(setup, logger)
     if halt:
@@ -568,9 +603,58 @@ def all_arguments(platform, module):
     return [*module.arguments(), *arguments(platform, module)]
 
 
+# The platform of <data_dir>/platform.json, None without a file; one the image does not have is None with a warning.
+def chosen_platform(data_dir, logger):
+    path = os.path.join(data_dir, PLATFORM_NOTE)
+    try:
+        with open(path) as f:
+            note = json.load(f)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as error:
+        logger.error(f"Cannot read {path}, the mower is chosen anew: {error}")
+        return None
+    name = note.get("platform") if isinstance(note, dict) else None
+    if not isinstance(name, str) or name not in layers.platforms():
+        logger.warning(f"{path} names {name!r}, which this image does not have ({', '.join(layers.platforms())}): "
+                       "the mower is chosen anew")
+        return None
+    return name
+
+
+# The stage of the choice: no platform and none chosen yet. Only the bridge and the setup program with its one step
+# platform; no driver, no port opened, nothing that moves. Without data_dir no choice can be kept: PLATFORM_CONFIG.
+def choice_setup(context):
+    def arg(name):
+        return LaunchConfiguration(name).perform(context)
+
+    logger = launch.logging.get_logger("mowbite.launch")
+    data_dir = arg("data_dir")
+    if not data_dir:
+        text = ("No platform: neither platform:=<name>, MOWBITE_PLATFORM nor <data_dir>/platform.json names one, and "
+                "without data_dir no choice can be kept.")
+        return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"), logger)
+    halt = prepare_data_dir(data_dir, logger)
+    if halt:
+        return halt
+    logger.info(f"No platform chosen yet: the setup program offers {', '.join(layers.platforms())}")
+    files = [arg("config"), arg("extra_config")]
+    journal = journal_dir(arg("journal_dir"), data_dir, logger)
+    nodes = components(files, "", data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, choice=True)
+    return container(nodes, data_dir, logger, arg("oom_score_adj"))
+
+
 # The start on this platform: its arguments, then the nodes. A name no package of the image entered halts with
-# PLATFORM_CONFIG.
+# PLATFORM_CONFIG. Without a name the one of <data_dir>/platform.json, else the stage of the choice.
 def start(context, platform):
+    fixed = bool(platform)
+    if not platform:
+        data_dir = context.launch_configurations.get("data_dir") or os.environ.get("MOWBITE_DATA_DIR", "")
+        platform = chosen_platform(data_dir, launch.logging.get_logger("mowbite.launch")) if data_dir else None
+        if not platform:
+            return [DeclareLaunchArgument("config", default_value=layers.STACK),
+                    DeclareLaunchArgument("extra_config", default_value=layers.STACK),
+                    *shared_arguments(data_dir), OpaqueFunction(function=choice_setup)]
     try:
         module = platform_module(platform)
         declared = all_arguments(platform, module)
@@ -579,4 +663,4 @@ def start(context, platform):
                 f"{', '.join(layers.platforms()) or 'none'}: {error}.")
         return halt_actions(data_store.Halt("PLATFORM_CONFIG", text).line("-"),
                             launch.logging.get_logger("mowbite.launch"))
-    return [*declared, OpaqueFunction(function=lambda context: launch_setup(context, platform, module))]
+    return [*declared, OpaqueFunction(function=lambda context: launch_setup(context, platform, module, fixed))]

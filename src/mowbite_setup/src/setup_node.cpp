@@ -72,6 +72,9 @@ constexpr double kLockRetry = 1.0;
 constexpr double kFrameAge = 10.0;
 // In data_dir: the setup program asked for a restart of the OS; the launch ends when it sees it (stack.py).
 constexpr const char* kRestartFile = "setup_restart.json";
+// The step list of the stage of the choice: the step platform alone.
+constexpr char kChoiceSteps[] =
+    R"({"catalog": 1, "steps": [{"id": "platform", "stage": "device", "check": "platform", "symbol": "board"}]})";
 // In data_dir: the start noted the last end of the driver there (stack.py), read this often (s).
 constexpr const char* kDriverExitFile = "driver_exit.json";
 constexpr double kRestartsEvery = 1.0;
@@ -119,6 +122,10 @@ class SetupNode : public rclcpp::Node {
     const std::string shadowed = declare_parameter("shadowed", std::string());
     const std::string restarts = declare_parameter("driver_restarts", std::string("0"));
     driver_restarts_ = std::atoi(restarts.c_str());
+    // The mowers of the image, the one the OS runs as (empty: the stage of the choice) and whether it is fixed.
+    const json platforms = json::parse(declare_parameter("platforms", std::string("[]")), nullptr, false);
+    chosen_ = declare_parameter("chosen", std::string());
+    const bool fixed = declare_parameter("fixed", std::string("false")) == "true";
 
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<RpcError>("bridge/rpc/error", 100);
@@ -127,7 +134,15 @@ class SetupNode : public rclcpp::Node {
 
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_setup";
-    if (steps.empty()) {
+    if (chosen_.empty() && !data_dir_.empty()) {
+      // The stage of the choice: the step platform alone, nothing else runs.
+      program_.emplace(*ParseSteps(json::parse(kChoiceSteps), nullptr), "");
+      program_->SetPlatforms(platforms.is_array() ? platforms : json::array(), "", false);
+      LoadLock();
+      for (const auto& method : mowbite_api::Methods()) {
+        if (method.node == methods.node_id) methods.methods.push_back(method.name);
+      }
+    } else if (steps.empty()) {
       RCLCPP_INFO(get_logger(), "The platform has no step list: setup.* is not offered");
     } else if (data_dir_.empty()) {
       // Without a place for the lock a failed safety check could not close it.
@@ -141,6 +156,7 @@ class SetupNode : public rclcpp::Node {
       } else {
         LoadImages(*list, image_dir);
         program_.emplace(*list, platform);
+        program_->SetPlatforms(platforms.is_array() ? platforms : json::array(), chosen_, fixed);
         LoadRecord();
         LoadLock();
         LoadLayer(shadowed);
@@ -276,6 +292,22 @@ class SetupNode : public rclcpp::Node {
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
     tick_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { OnTick(); });
+    if (chosen_.empty()) {
+      // Without the logic in the stage of the choice robot_state comes from here: SETUP, PLATFORM, no hardware.
+      robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
+      choice_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
+        mowbite_msgs::msg::RobotState state;
+        state.current_state = "SETUP";
+        state.current_sub_state = "PLATFORM";
+        state.hardware = false;
+        state.current_area = -1;
+        state.current_path = -1;
+        state.current_path_index = -1;
+        state.task_index = -1;
+        state.task_count = -1;
+        robot_state_pub_->publish(state);
+      });
+    }
   }
 
  private:
@@ -432,10 +464,27 @@ class SetupNode : public rclcpp::Node {
     }
   }
 
+  // A mower chosen with setup.platform.set: platform.json once the lock is on the disk, then the restart as it. Called
+  // with the mutex held.
+  void TakePlatform() {
+    const auto name = program_->TakePlatform();
+    if (!name) return;
+    const std::string path = data_dir_ + "/" + mowbite_hold::kPlatformFile;
+    std::string error = "the lock cannot be written";
+    if (!program_->lock_writable() ||
+        !mowbite_hold::WriteFileSafely(path, json{{"platform", *name}, {"t", std::floor(WallSeconds())}}.dump() + "\n",
+                                       &error)) {
+      RCLCPP_ERROR(get_logger(), "%s is not written, the mower stays as it is: %s", path.c_str(), error.c_str());
+      return;
+    }
+    RCLCPP_INFO(get_logger(), "The mower is chosen as %s", name->c_str());
+    Restart();
+  }
+
   // The restart a step asked for, by the way of the step list: self leaves a note for the launch and ends this
   // process in order, so that whatever runs the OS starts it again; host asks mowbite-host over the broker.
   void Restart() {
-    if (program_->restart_way() == "host") {
+    if (!chosen_.empty() && program_->restart_way() == "host") {
       RCLCPP_INFO(get_logger(), "The setup program asks mowbite-host to restart the OS");
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "rpc/request";
@@ -702,14 +751,21 @@ class SetupNode : public rclcpp::Node {
         refusal = program_->Abort(params, now, wall);
       } else if (request.method == "setup.reset") {
         refusal = program_->Reset(params, WallSeconds());
+      } else if (request.method == "setup.platforms") {
+        state = program_->Platforms();
+      } else if (request.method == "setup.platform.set") {
+        refusal = program_->ChoosePlatform(params, wall, &state);
       } else if (request.method != "setup.get") {
         return;
       }
-      if (!refusal) {
+      if (!refusal && state.is_null()) {
         // A step that moves ends before any file is written.
         EndMotion();
         Flush(now);
         state = State(now);
+      } else if (!refusal && request.method == "setup.platform.set") {
+        Flush(now);
+        TakePlatform();
       }
     }
     if (refusal) {
@@ -723,6 +779,8 @@ class SetupNode : public rclcpp::Node {
   std::string data_dir_;
   std::string layer_path_;
   std::optional<Program> program_;
+  // The platform package the OS runs as; empty in the stage of the choice.
+  std::string chosen_;
   std::map<std::string, Image> images_;
   std::map<std::string, std::pair<std::string, int>> image_infos_;
   World world_;
@@ -761,6 +819,8 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
+  rclcpp::TimerBase::SharedPtr choice_timer_;
+  rclcpp::Publisher<mowbite_msgs::msg::RobotState>::SharedPtr robot_state_pub_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
   // Last, so it ends first and writes what is queued while the node is whole.
   std::unique_ptr<mowbite_hold::FileWriter> writer_;

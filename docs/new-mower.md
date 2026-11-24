@@ -436,6 +436,16 @@ the last word), checks them for the nodes the platform can start, runs the drive
 nodes above the contract, the planner and the net service. A name no package entered halts with `PLATFORM_CONFIG`.
 `tron.launch.py` and `nx60i.launch.py` only name their platform, for start commands that name these files.
 
+Without a name (no `platform:=`, no `MOWBITE_PLATFORM`) the start takes the platform of `<data_dir>/platform.json`
+(`data_dir:=` or `MOWBITE_DATA_DIR`). Without that file it starts the stage of the choice: only the bridge and the
+setup program, no driver, no port opened, `robot_state` SETUP with sub state PLATFORM. The app lists the mowers of the
+image (`setup.platforms`, texts from `ABOUT` of each `platform.py`) and chooses one (`setup.platform.set`); the program
+writes `platform.json`, the launch ends and whatever runs it starts it again as that mower. Every step list begins with
+the step `platform` (check `platform`), which shows the mower and lets the app choose another while the mower is idle:
+every result goes back and the lock closes with a reset until the summary passed again. With `MOWBITE_PLATFORM` the
+choice is fixed (`PLATFORM_FIXED`). Give a new platform an `ABOUT` with `name`, `text` and `board` (what the driver
+expects at which port) in de and en.
+
 Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
 itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a
 callback of the driving chain (pose, safety, follower, logic), no `fsync` or network there; files that must last go
@@ -496,8 +506,8 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,
   `api_break`, `min_app`), beside `platforms`, the mowers it is built for: the host refuses a bundle that names
-  platforms without the one of this mower (`PLATFORM_MISMATCH`), which is `MOWBITE_PLATFORM` of the device or, without
-  it, the only platform of the running OS. An app goes with the OS when its `app.json` names `api.break` equal to
+  platforms without the one of this mower (`PLATFORM_MISMATCH`), which is `MOWBITE_PLATFORM` of the device, else the
+  one of `<data_dir>/platform.json`, else the only platform of the running OS. An app goes with the OS when its `app.json` names `api.break` equal to
   `api_break` and an
   `api.min` not above `api` (`api.max` is shown only); an app without `api.break`, and one beside an OS without
   `api_break` (api 30 and older), needs `api` within `api.min` to `api.max` (`host/mowbite_host/compat.py`, the same

@@ -15,6 +15,8 @@ namespace mowbite_hold {
 // also one kept by hand. Every reader of the date takes it through SafetyMeasured.
 
 constexpr char kSafetyLockFile[] = "safety_lock.json";
+// The mower the setup program chose ({"platform", "t"}), for a start without MOWBITE_PLATFORM (stack.py).
+constexpr char kPlatformFile[] = "platform.json";
 
 // Why the lock is closed: a safety step that failed, or a reset (the program opened it itself and was reset, or the
 // file could not be read), which only a passed summary takes away.
