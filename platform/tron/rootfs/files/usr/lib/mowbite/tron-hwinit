@@ -69,6 +69,12 @@ ln -sf /dev/video11 /dev/videoSimor
 
 mkdir -p "${STATUS%/*}"
 rm -f "$STATUS"
+
+# GPIO levels for tron_buttons: the OS runs without root and debugfs stays closed, only this file is bound read-only.
+# The button lines show up in it once init_test.ko (below) holds them.
+GPIO_COPY=/run/mowbite/gpio
+[ -e "$GPIO_COPY" ] || : > "$GPIO_COPY"
+grep -q " $GPIO_COPY " /proc/self/mountinfo || run mount --bind -o ro /sys/kernel/debug/gpio "$GPIO_COPY"
 if kernel_setup_done; then
     sleep 2
     # After a cold start the first setup leaves the stream without frames, a second one fixes it.
