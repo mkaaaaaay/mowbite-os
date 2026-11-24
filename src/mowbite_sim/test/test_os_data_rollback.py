@@ -67,7 +67,7 @@ class TestOsDataRollback(unittest.TestCase):
         self.assertTrue(refused, "no MOWING_REFUSED")
         self.assertEqual((refused[-1]["reason"], refused[-1]["backup_of"]), ("DATA_ROLLBACK", BACKUP_OF))
         self.assertTrue(self.broker.wait(lambda: self.schedule() == (False, "data_rollback"), 10), self.schedule())
-        r = self.broker.rpc("schedule.set", {"skip_rain": 1}, "set")
+        r = self.broker.rpc("schedule.set", {"schedule": {"skip_rain": 1}}, "set")
         self.assertIn("result", r, r)
         self.assertEqual(wheel_speeds(LOG, 0, SPEED), [])
 
