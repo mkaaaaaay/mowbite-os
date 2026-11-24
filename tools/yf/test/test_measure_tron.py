@@ -128,7 +128,7 @@ class TestBladeArguments(unittest.TestCase):
 
     def test_blade_and_t6_or_t7_go_together(self):
         for argv in (["--steps", "T6"], ["--blade"], ["--steps", "T1,T6"], ["--steps", "T1", "--blade"],
-                     ["--steps", "T7"], ["--steps", "T6,T7"]):
+                     ["--steps", "T7"], ["--steps", "T6,T7"], ["--steps", "T10"]):
             with self.assertRaises(SystemExit) as refused:
                 m.main(["--platform", "tron", *argv])
             self.assertIn("go together", str(refused.exception.code), argv)

@@ -41,6 +41,9 @@ T9 asks how long the MCU keeps a setpoint once the host's frames end, by what ca
 tron_mcu starts again with measurement settings, the wheels turn in the air and hw/silence begins right after the
 chosen frame; the driver stops them when the silence ends. G adds a long silence with heartbeats alone afterwards, B
 (with --blade, the disc off) the blade on frame last: mowbite-measure --steps T9 [--hold V0,V1,V2,V3,G].
+T10 (only with --blade, the disc off) asks what the cutting height does, which the MCU does not report: the deck down
+with the start of the blade motor and up with its off, then new heights while it turns. The person reads the time the
+deck moved off a video; the programme records the motor's rpm and status meanwhile: mowbite-measure --steps T10 --blade.
 """
 import argparse
 import collections
@@ -175,6 +178,13 @@ TILT_SHOCK_MS2 = 1.5
 TILT_MEDIAN = 9
 LIFT_WAIT_S = 60.0
 LIFT_BLADE_PERCENT = 100
+# Cutting height (T10), the disc off: the deck from TRON_BLADE_HEIGHT_MM down to HEIGHT_LOW_MM as the blade motor
+# starts and back up as it goes off, then to each of HEIGHT_WHILE_TURNING while it turns, HEIGHT_RUN_S a height on a
+# renewed lease. The speed has no effect on the Tron (T6.1).
+HEIGHT_LOW_MM = 30
+HEIGHT_WHILE_TURNING = (60, 30, 90)
+HEIGHT_RUN_S = 10.0
+HEIGHT_BLADE_PERCENT = 30
 LIFT_SIDES = {"front": ("the front", {"tilt_pitch": -38.0}), "rear": ("the rear", {"tilt_pitch": 38.0}),
               "left": ("the left side", {"tilt_roll": 38.0}), "right": ("the right side", {"tilt_roll": -38.0})}
 LIFT_SHOWN_SIDE = "front"
@@ -2240,17 +2250,17 @@ class TronMeasurement(Measurement):
         rpm = self.blade_rpm()
         return rpm is not None and rpm >= self.blade_still_rpm
 
-    def blade_run(self, step, percent, seconds, until=None):
+    def blade_run(self, step, percent, seconds, until=None, height_mm=TRON_BLADE_HEIGHT_MM):
         """The blade motor on at `percent` on a renewed lease for `seconds`, or until `until` holds: True then. A
         refused request ends the step. blade_renewed is when the last accepted request went out."""
-        print(f"     sending hw/blade on at {percent} %, {TRON_BLADE_HEIGHT_MM} mm, lease {self.blade_lease_s} s, "
+        print(f"     sending hw/blade on at {percent} %, {height_mm} mm, lease {self.blade_lease_s} s, "
               f"every {self.blade_renew_s} s, for up to {seconds:.0f} s")
         end = time.monotonic() + seconds
         while time.monotonic() < end:
             if until and until():
                 return True
             asked = time.monotonic()
-            answer = self.mower.set_blade(True, self.blade_lease_s, percent, TRON_BLADE_HEIGHT_MM)
+            answer = self.mower.set_blade(True, self.blade_lease_s, percent, height_mm)
             if answer is None or not answer.success:
                 if until and until():
                     return True
@@ -2731,7 +2741,72 @@ class TronMeasurement(Measurement):
         self.wait(max(0.0, since + silence + 0.5 - time.monotonic()))
         return still
 
-    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8, "T9": t9}
+    def t10(self):
+        step = "T10"
+        self.blade_setup()
+        if not self.ask(f"{step} cutting height with the disc OFF (jacked up, you at STOP and battery, hands away from "
+                        "the deck, a mark on it filmed against a ruler): tron_mcu starts again with the blade allowed, "
+                        f"for this step only; the motor turns at {HEIGHT_BLADE_PERCENT} % up to "
+                        f"{HEIGHT_RUN_S * (1 + len(HEIGHT_WHILE_TURNING)) + BLADE_RUN_S:.0f} s a run, the deck goes "
+                        f"between {HEIGHT_LOW_MM} and {TRON_BLADE_HEIGHT_MM} mm, the wheels get no command"):
+            return
+        self.blade_allowed(step, lambda: self.height_runs(step))
+
+    def height_runs(self, step):
+        text = (f"on at {HEIGHT_LOW_MM} mm (the deck at {TRON_BLADE_HEIGHT_MM} mm), then off, which sends "
+                f"{TRON_BLADE_HEIGHT_MM} mm")
+        if self.ask(f"{step}.1 blade motor {text}"):
+            self.ready(step)
+            self.mark(f"{step}.1", text)
+            self.height_change(f"{step}.1", TRON_BLADE_HEIGHT_MM, HEIGHT_LOW_MM)
+            self.height_off(f"{step}.1", HEIGHT_LOW_MM)
+        heights = ", ".join(str(h) for h in HEIGHT_WHILE_TURNING)
+        text = f"on at {TRON_BLADE_HEIGHT_MM} mm, then {heights} mm while it turns, {HEIGHT_RUN_S:.0f} s each, then off"
+        if self.ask(f"{step}.2 blade motor {text}"):
+            self.ready(step)
+            self.mark(f"{step}.2", text)
+            self.blade_turning(f"{step}.2", HEIGHT_BLADE_PERCENT)
+            last = TRON_BLADE_HEIGHT_MM
+            for height in HEIGHT_WHILE_TURNING:
+                self.height_change(f"{step}.2", last, height)
+                last = height
+            self.height_off(f"{step}.2", last)
+
+    def height_change(self, step, from_mm, to_mm):
+        """The blade on at `to_mm` for HEIGHT_RUN_S (a new on frame), the motor's rpm and status meanwhile; the person
+        tells how long the deck moved."""
+        rpms, faults = [], set()
+
+        def sample():
+            s, age, _, _ = self.mower.snapshot()
+            if s is not None and age < 0.5 and s.blade_motor.ok:
+                rpms.append(abs(s.blade_motor.rpm))
+                if s.blade_motor.status < 0:
+                    faults.add(s.blade_motor.status)
+            return False
+        since = time.monotonic()
+        self.blade_run(step, HEIGHT_BLADE_PERCENT, HEIGHT_RUN_S, until=sample, height_mm=to_mm)
+        turning = [i for i, rpm in enumerate(rpms) if rpm >= self.blade_still_rpm]
+        # A motor that turned and then reported standing stopped for the height.
+        stopped = bool(turning) and min(rpms[turning[0]:]) < self.blade_still_rpm
+        print(f"     {from_mm} -> {to_mm} mm: blade motor {min(rpms, default=None)}..{max(rpms, default=None)} rpm"
+              f"{', stopped meanwhile' if stopped else ''}{f', faults {sorted(faults)}' if faults else ''}")
+        moved = self.person.number(f"s the deck took from {from_mm} to {to_mm} mm (0: it did not move)")
+        self.rec.write("height", step=step, way="on", from_mm=from_mm, to_mm=to_mm, since=since,
+                       rpm_min=min(rpms, default=None), rpm_max=max(rpms, default=None), stopped=stopped,
+                       faults=sorted(faults), moved_s=moved)
+
+    def height_off(self, step, from_mm):
+        print("     sending hw/blade off")
+        since = time.monotonic()
+        self.mower.set_blade(False)
+        still = self.blade_stands(step, since, "the off request")
+        moved = self.person.number(f"s the deck took from {from_mm} to {TRON_BLADE_HEIGHT_MM} mm after the off "
+                                   "(0: it did not move)")
+        self.rec.write("height", step=step, way="off", from_mm=from_mm, to_mm=TRON_BLADE_HEIGHT_MM, since=since,
+                       still_s=still, moved_s=moved)
+
+    STEPS = {"T1": t1, "T2": t2, "T3": t3, "T4": t4, "T5": t5, "T6": t6, "T7": t7, "T8": t8, "T9": t9, "T10": t10}
 
     def run(self, steps):
         """The firmware and the first IMU sample first: another firmware than TRON_FIRMWARE ends the run before any
@@ -2767,7 +2842,7 @@ def interrupted(*_):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--platform", choices=["nx60i", "tron"], default="nx60i")
-    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T8 (tron, default "
+    parser.add_argument("--steps", help="comma separated, of M1..M8 (nx60i, default M1-M6) or T1..T10 (tron, default "
                                         "T1-T5)")
     parser.add_argument("--record-dir", default=".", help="directory of the recording")
     parser.add_argument("--max-mb", type=float, default=100.0, help="size limit of the recording")
@@ -2820,9 +2895,9 @@ def main(argv=None):
         args.hold = HOLD_DEFAULT if args.hold is None else hold_cases(args.hold)
     except ValueError as error:
         sys.exit(f"--hold: {error}")
-    blade_steps = tron and bool({"T6", "T7"} & set(steps) or ("T9" in steps and "B" in args.hold))
+    blade_steps = tron and bool({"T6", "T7", "T10"} & set(steps) or ("T9" in steps and "B" in args.hold))
     if tron and args.blade != blade_steps:
-        sys.exit("on the Tron --blade and T6, T7 or T9 with B go together")
+        sys.exit("on the Tron --blade and T6, T7, T10 or T9 with B go together")
     if (args.blade_percent is not None or args.blade_window is not None) and not (tron and "T6" in steps):
         sys.exit("--blade-percent and --blade-window are for T6 on the Tron")
     try:
