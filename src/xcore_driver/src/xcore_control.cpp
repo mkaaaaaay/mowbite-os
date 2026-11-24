@@ -363,6 +363,7 @@ std::optional<WheelTwist> XcoreControl::OnOutput(uint16_t service_id, uint16_t c
       if (channel_id == emergency::kOutReason && value.size() == 2) {
         board_reason_ = Reader(value).U16();
         last_emergency_s_ = now;
+        heard_ = true;
         if (*board_reason_ & reason::kLatch) {
           const uint32_t causes = *board_reason_ & kLatchedCauses;
           latched_causes_ |= clear_remaining_ > 0 ? causes & ~released_causes_ : causes;
@@ -772,7 +773,7 @@ uint32_t XcoreControl::Reason(double now) const {
   if (host_latch_ || latched_causes_) bits |= kReasonLatch;
   bits |= latched_causes_;
   if (config_.learn_inputs) bits |= kReasonInputsLearning | kReasonLatch;
-  if (TelemetryStale(now)) bits |= kReasonTimeoutInputs;
+  if (TelemetryStale(now)) bits |= heard_ ? kReasonTimeoutInputs : kReasonBoardNotHeard;
   if (ImuStale(now)) bits |= kReasonImuTimeout;
   if (!services_ready_) bits |= reason::kServiceNotReady;
   if (!firmware_compatible_) bits |= kReasonFirmwareIncompatible;

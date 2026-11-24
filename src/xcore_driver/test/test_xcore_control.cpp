@@ -103,7 +103,9 @@ TEST(XcoreControl, BlockedUntilServicesAndTelemetry) {
   auto s = control.Status(0);
   EXPECT_TRUE(s.blocked);
   EXPECT_TRUE(s.emergency_reason & reason::kServiceNotReady);
-  EXPECT_TRUE(s.emergency_reason & kReasonTimeoutInputs);
+  // Nothing heard since the start: its own reason, not a timeout of the inputs.
+  EXPECT_TRUE(s.emergency_reason & kReasonBoardNotHeard);
+  EXPECT_FALSE(s.emergency_reason & kReasonTimeoutInputs);
   control.SetServicesReady(true, true);
   control.OnOutput(kEmergencyService, emergency::kOutReason, U16(0), 0, 0);
   EXPECT_FALSE(control.Status(0.5).blocked);

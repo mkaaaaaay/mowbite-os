@@ -76,6 +76,7 @@ static_assert(xcore::kReasonWheelRunaway == HardwareStatus::REASON_WHEEL_RUNAWAY
 static_assert(xcore::kReasonForeignHost == HardwareStatus::REASON_FOREIGN_HOST);
 static_assert(xcore::kReasonDriverStall == HardwareStatus::REASON_DRIVER_STALL);
 static_assert(xcore::kReasonInputsLearning == HardwareStatus::REASON_INPUTS_LEARNING);
+static_assert(xcore::kReasonBoardNotHeard == HardwareStatus::REASON_BOARD_NOT_HEARD);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kLeaseExpired) == HardwareStatus::BLADE_OFF_LEASE_EXPIRED);
 static_assert(static_cast<uint8_t>(xcore::BladeOffReason::kReconnect) == HardwareStatus::BLADE_OFF_RECONNECT);
 static_assert(static_cast<uint8_t>(mowbite_gnss::Solution::kSingle) == GnssFix::SINGLE);

@@ -119,6 +119,8 @@ constexpr uint32_t kReasonForeignHost = 1u << 19;
 constexpr uint32_t kReasonDriverStall = 1u << 20;
 // The driver started with inputs.learn: the board watches the candidate lines and none of them stops anything.
 constexpr uint32_t kReasonInputsLearning = 1u << 22;
+// No status of the board since the start: the driver sends to a service only after its announcement, so nothing went out.
+constexpr uint32_t kReasonBoardNotHeard = 1u << 23;
 // Causes the board latches; the driver keeps them in its reason until the release, also across a restart of the board.
 constexpr uint32_t kLatchedCauses = (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 9) | (1u << 10) | (1u << 11);
 // The bits a node above the driver may latch with over hw/emergency.
@@ -337,6 +339,8 @@ class XcoreControl {
 
   std::optional<uint16_t> board_reason_;
   std::optional<double> last_emergency_s_;
+  // A status of the board came since the start of the driver; a restart of the board does not take it back.
+  bool heard_ = false;
   uint32_t host_latch_ = 0;
   // Causes the board reported with its latch, held until a release.
   uint32_t latched_causes_ = 0;
