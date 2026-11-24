@@ -117,7 +117,8 @@ class TestParams(unittest.TestCase):
         logic = sorted(k[len(P):] for k in self.probe.params if k.startswith(P))
         self.assertEqual(logic, sorted(SETTINGS))
         self.assertEqual(self.probe.params[P + "rain_mode"], 2)
-        self.assertEqual(self.probe.params["/ll/board"], "MowBite")
+        # /ll/board is the bridge's (openmower_names), the logic sends only its own settings.
+        self.assertNotIn("/ll/board", self.probe.params)
         self.assertTrue(self.probe.logged("GPS limits: accuracy 0.100 m, timeout 7.0 s"))
         self.assertTrue(self.probe.logged("Accuracy limit 0.100 m"))
 
