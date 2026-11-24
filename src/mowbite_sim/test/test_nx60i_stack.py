@@ -96,6 +96,16 @@ board = functools.partial(read_json, STATE)
 received = functools.partial(xcore_datagrams, LOG)
 
 
+def saved_record(version):
+    """The text of setup.json once it has the version, else None."""
+    try:
+        with open(os.path.join(DATA, "setup.json")) as f:
+            text = f.read()
+        return text if json.loads(text).get("version", -1) >= version else None
+    except (OSError, ValueError):
+        return None
+
+
 class Probe(SimProbe):
     offer_timeout = 20.0
     call_timeout = 20.0
@@ -288,8 +298,9 @@ class TestNx60iStack(unittest.TestCase):
             version = answer["result"]["version"]
             self.assertTrue(p.wait(lambda: p.setup_states and json.loads(p.setup_states[-1][0])["version"] >= version,
                                    5), "no setup/json after the skip")
-            with open(os.path.join(DATA, "setup.json")) as f:
-                record = f.read()
+            # The record is written on a thread of its own (FileWriter): it may come a moment after the state.
+            record = p.wait(lambda: saved_record(version), 5)
+            self.assertTrue(record, "no setup.json of the version after the skip")
             with p.lock:
                 sent = p.setup_states[-1][0]
             texts = {"setup.get": json.dumps(p.setup_state()), "setup/json": sent, "setup.json": record}
