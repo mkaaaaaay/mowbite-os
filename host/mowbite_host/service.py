@@ -211,6 +211,7 @@ class Host:
                 self._step("look", self.look)
                 self._step("recover", self.updater.recover_due)
                 self._step("net", self.updater.poll)
+                self._step("first", self.updater.first_install)
             try:
                 item = self.requests.get(timeout=max(0.05, min(next_look, next_tick) - time.monotonic()))
             except queue.Empty:

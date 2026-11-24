@@ -373,6 +373,50 @@ class JobTest(ComponentBase):
         self.assertEqual((self.fake.stops, self.fake.holds[-1]), (0, 0))
 
 
+class FirstInstallTest(ComponentBase):
+    """A mower whose OS was never installed takes os, planner and app from the inbox at once."""
+
+    def first(self):
+        self.updater._first_at = 0.0
+        self.updater.state["last"] = None
+        self.updater.first_install()
+        return self.updater.join()
+
+    def test_os_planner_app_in_turn_without_window_or_clock(self):
+        self.assertFalse(self.updater.clock_ok())
+        self.assertFalse(self.updater.state["auto"]["enabled"])
+        self.os_bundle(A, **OS_META)
+        self.planner_bundle(P1)
+        self.app_bundle(X)
+        for component in ("os", "planner", "app"):
+            last = self.first()
+            self.assertEqual((last["result"], last["component"]), ("installed", component), last)
+            self.assertTrue(self.updater.state["first"])
+        self.assertIsNone(self.first())
+        self.assertFalse(self.updater.state["first"])
+
+    def test_an_installed_mower_waits_for_the_night(self):
+        self.installed("os", A, **OS_META)
+        self.os_bundle(B, **OS_META)
+        self.assertIsNone(self.first())
+        self.assertFalse(self.updater.busy())
+
+    def test_a_failed_first_install_is_not_tried_again(self):
+        self.fake.broken.add(A)
+        self.os_bundle(A, **OS_META)
+        self.assertEqual(self.first()["result"], "failed")
+        self.assertIn(A, self.blocked())
+        self.assertIsNone(self.first())
+        self.assertFalse(self.updater.state["first"])
+
+    def test_it_looks_at_most_every_few_seconds(self):
+        self.updater.first_install()
+        self.os_bundle(A, **OS_META)
+        self.updater.first_install()
+        self.assertFalse(self.updater.busy())
+        self.assertIsNone(self.updater.state["last"])
+
+
 class SettleTest(ComponentBase):
     def setUp(self):
         super().setUp()

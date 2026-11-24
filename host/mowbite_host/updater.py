@@ -26,6 +26,9 @@ from mowbite_host.installer import HOLD_SECONDS, AppFiles, HostInstaller, Instal
 COMPONENTS = {"os": "MowBite OS", "planner": "MowBite Planner", "app": "MowBite App", "host": "MowBite Host"}
 # The order the automatic takes them in: a new host may be needed for the bundles after it.
 AUTO_ORDER = ("host", "app", "planner", "os")
+# What a mower without an OS takes from the inbox at once, and how often it looks.
+FIRST_ORDER = ("os", "planner", "app")
+FIRST_EVERY = 30.0
 # The folder of the library this process runs: an installation of the host or its seed.
 RUNNING_HOST = os.path.dirname(os.path.dirname(os.path.realpath(mowbite_host.__file__)))
 # How long an update waits for the gate before it gives up, and how often it looks.
@@ -129,13 +132,14 @@ class Updater:
         # is looked at (monotonic), whether it answered healthy once and the last line.
         self._judged = None
         self._bad_app_logged = False
+        self._first_at = 0.0
         self.gate_wait = GATE_WAIT
         self.state = self._load()
 
     # update.json: {auto, origin {channel, index_serial, last}, app_version, last, components {id: {serial,
     # installed_at, crashes_since_install, last_crash, blocked {revision: {reason, result?, t}}, attempts {revision: n},
-    # auto_tried {revision, t}}}, no_space {free, t} | None}; no_space: room in data_dir when an OS halted for the
-    # want of it in a switch.
+    # auto_tried {revision, t}}}, no_space {free, t} | None, first}; no_space: room in data_dir when an OS halted for
+    # the want of it in a switch; first: a first install from the inbox is under way.
     def _load(self):
         state = files.read_json(self.paths.state) or {}
         state.setdefault("auto", dict(AUTO_DEFAULT))
@@ -144,6 +148,7 @@ class Updater:
             state["app_version"] = None
         state.setdefault("last", None)
         state.setdefault("no_space", None)
+        state.setdefault("first", False)
         components = state.setdefault("components", {})
         for component in COMPONENTS:
             entry = components.setdefault(component, {})
@@ -903,6 +908,36 @@ class Updater:
         no_space = self.state["no_space"]
         return (bool(no_space) and self._stops_os(component) and
                 self._data_free() < no_space.get("free", 0) + NO_SPACE_MORE)
+
+    # From the main loop: a mower whose OS was never installed (a system just written by the installer) takes os,
+    # then planner, then app from the inbox at once, without the window, a sure clock or a known app; the checks of
+    # each bundle stay. A revision that failed is blocked as always; a failed first start is up to the probation of
+    # the system. state first stays set until no first component is left.
+    def first_install(self):
+        if self.busy() or (not self.state.get("first") and self.installer.current()):
+            return
+        now = time.monotonic()
+        if now < self._first_at:
+            return
+        self._first_at = now + FIRST_EVERY
+        self.check()
+        platform = self._platform()
+        for component in FIRST_ORDER:
+            available = self._available(component, platform)
+            if not available or available["blocked"]:
+                continue
+            with self._lock:
+                self.state["first"] = True
+                self._save_or_log()
+            try:
+                self.start(component, available["revision"], by_hand=False)
+            except Refused as why:
+                print(f"first install: {why}", flush=True)
+            return
+        if self.state.get("first"):
+            with self._lock:
+                self.state["first"] = False
+                self._save_or_log()
 
     # Called every few minutes: starts one available update at night when auto is on, the clock is sure and the app
     # the user has is new enough for it; each revision once a night, then the next component has its turn.
