@@ -32,8 +32,8 @@ _, FLAGS, LOG, _ = sim_files(WORK)
 def generate_test_description():
     driver = Node(package="tron_mcu", executable="tron_mcu_node", output="screen",
                   parameters=[{"port": LINKS["mcu"], "send_imu": False, "allow_blade": True, "blade_lease_max": 2.0,
-                               "mow_height_mm": 50, "expected_cutter_version": "0.6.36",
-                               "expected_chassis_version": "0.6.34"}])
+                               "mow_height_mm": 50, "cutter_firmware": ["0.6.36"],
+                               "chassis_firmware": ["0.6.34"]}])
     # The pty has to exist before the driver looks for it.
     return launch.LaunchDescription([
         fake_tron(LINKS, "--flags", FLAGS, "--log", LOG, "--log-max-mb", "5"),

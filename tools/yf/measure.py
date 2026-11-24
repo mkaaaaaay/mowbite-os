@@ -401,11 +401,12 @@ def failsafe_proposal(stands):
 
 
 def tron_values_text(failsafe, firmware, date):
-    """The proposal for the measured values of the Tron, in the form of its parameter file."""
-    return "\n".join(["tron_mcu:", "  ros__parameters:", f"    failsafe_without_host: {failsafe:.1f}",
-                      f'    safety_measurement_date: "{date}"',
-                      f'    expected_cutter_version: "{firmware.get("cutter", "")}"',
-                      f'    expected_chassis_version: "{firmware.get("chassis", "")}"'])
+    """The proposal for the measured values of the Tron, in the form of its parameter file. The firmware lists name only
+    the firmware this measurement ran with; a board that did not report one keeps the list of the platform."""
+    lines = ["tron_mcu:", "  ros__parameters:", f"    failsafe_without_host: {failsafe:.1f}",
+             f'    safety_measurement_date: "{date}"']
+    lines += [f'    {board}_firmware: ["{firmware[board]}"]' for board in ("cutter", "chassis") if firmware.get(board)]
+    return "\n".join(lines)
 
 
 def termios_problem(attrs):

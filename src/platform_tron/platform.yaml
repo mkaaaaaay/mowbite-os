@@ -79,9 +79,10 @@ tron_mcu:
     # MCU stopped the blade within 0.6 s (14.11.), the wheels only in some runs (above), and in 20 s it latched nothing
     # by itself (15.11.).
     silence_max: 3.0
-    # Set after reading the versions of this Tron in phase 4.
-    expected_cutter_version: ""
-    expected_chassis_version: ""
+    # Firmware of the cutter and chassis boards the driver was measured with (since 07.11., vendor stand 1.3.32).
+    # Firmware outside a list blocks motion and blade (FIRMWARE_INCOMPATIBLE); add one only after the measurements.
+    cutter_firmware: ["0.6.36"]
+    chassis_firmware: ["0.6.34"]
     # Set after the safety measurement in phase 6 (hw/capabilities): the time the MCU keeps the last setpoint without
     # a heartbeat in s (-1 unknown), and the date of the measurement. Without the date only remote control.
     failsafe_without_host: -1.0

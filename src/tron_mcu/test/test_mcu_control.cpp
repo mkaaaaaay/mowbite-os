@@ -148,8 +148,8 @@ class FirmwareControlTest : public ControlTest {
   static McuControlConfig FirmwareConfig() {
     McuControlConfig config;
     config.allow_blade = true;
-    config.expected_cutter_version = "0.6.36";
-    config.expected_chassis_version = "0.6.34";
+    config.cutter_firmware = {"0.6.36"};
+    config.chassis_firmware = {"0.6.34"};
     return config;
   }
   FirmwareControlTest() : ControlTest(FirmwareConfig()) {
@@ -643,7 +643,7 @@ TEST_F(ControlTest, ANonLatchingBumperNamesNoEmergency) {
   EXPECT_STREQ(inputs[0].reason, "stop");
 }
 
-TEST_F(ControlTest, WithoutExpectedVersionsTheFirmwareIsNotChecked) {
+TEST_F(ControlTest, WithoutFirmwareListsTheFirmwareIsNotChecked) {
   Run(0.1);
   EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
   EXPECT_TRUE(control_.OnVersions(VersionInfo{}));
@@ -1725,14 +1725,14 @@ class OneVersionTest : public ControlTest {
  protected:
   static McuControlConfig OneVersionConfig() {
     McuControlConfig config;
-    config.expected_chassis_version = "0.6.34";
+    config.chassis_firmware = {"0.6.34"};
     return config;
   }
   OneVersionTest() : ControlTest(OneVersionConfig()) {
   }
 };
 
-TEST_F(OneVersionTest, OneExpectedVersionIsCheckedAsWell) {
+TEST_F(OneVersionTest, OneListIsCheckedAsWell) {
   EXPECT_FALSE(DrivesOrMows(3.5));
   EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
   VersionInfo versions;
@@ -1740,6 +1740,52 @@ TEST_F(OneVersionTest, OneExpectedVersionIsCheckedAsWell) {
   versions.cutter_board = {9, 9, 9};
   EXPECT_TRUE(control_.OnVersions(versions));
   EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+}
+
+class FirmwareListTest : public ControlTest {
+ protected:
+  static McuControlConfig ListConfig() {
+    McuControlConfig config;
+    config.cutter_firmware = {"0.6.34", "0.6.36"};
+    config.chassis_firmware = {"0.6.34"};
+    return config;
+  }
+  FirmwareListTest() : ControlTest(ListConfig()) {
+  }
+  static VersionInfo Versions(Version cutter, Version chassis) {
+    VersionInfo v;
+    v.cutter_board = cutter;
+    v.chassis_board = chassis;
+    return v;
+  }
+};
+
+TEST_F(FirmwareListTest, EachMeasuredStandOfABoardPasses) {
+  Run(0.1);
+  EXPECT_TRUE(control_.OnVersions(Versions({0, 6, 34}, {0, 6, 34})));
+  EXPECT_TRUE(DrivesOrMows(0.3));
+  control_.OnConnected(now_);
+  Run(0.6);
+  EXPECT_TRUE(control_.OnVersions(Versions({0, 6, 36}, {0, 6, 34})));
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  EXPECT_TRUE(DrivesOrMows(0.9));
+}
+
+TEST_F(FirmwareListTest, AStandOutsideTheListBlocksMotionAndBlade) {
+  Run(0.1);
+  // A newer cutter firmware than any measured one, and a chassis firmware measured only for the cutter.
+  EXPECT_FALSE(control_.OnVersions(Versions({0, 6, 37}, {0, 6, 34})));
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonLatch | kReasonFirmwareIncompatible);
+  control_.ReleaseEmergency(now_, 0);
+  Run(0.5);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(1.0));
+  control_.OnConnected(now_);
+  Run(1.1);
+  EXPECT_FALSE(control_.OnVersions(Versions({0, 6, 36}, {0, 6, 36})));
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
+  EXPECT_FALSE(DrivesOrMows(1.5));
 }
 
 TEST_F(FirmwareControlTest, AVersionFrameStillDueBlocksWithoutAnEmergency) {
@@ -2185,6 +2231,22 @@ TEST(McuJournal, ConfigFromBeforeTheStopClearReplays) {
   // Every other field stays required.
   j.erase("release_window_s");
   EXPECT_THROW(j.get<tron::McuControlConfig>(), nlohmann::json::out_of_range);
+}
+
+// Journals from before the firmware lists replay with their one expected version per board.
+TEST(McuJournal, ConfigFromBeforeTheFirmwareListsReplays) {
+  tron::McuControlConfig config;
+  config.cutter_firmware = {"0.6.34", "0.6.36"};
+  config.chassis_firmware = {"0.6.34"};
+  nlohmann::json j = config;
+  EXPECT_EQ(j.get<tron::McuControlConfig>().cutter_firmware, config.cutter_firmware);
+  j.erase("cutter_firmware");
+  j.erase("chassis_firmware");
+  j["expected_cutter_version"] = "0.6.36";
+  j["expected_chassis_version"] = "";
+  const auto old = j.get<tron::McuControlConfig>();
+  EXPECT_EQ(old.cutter_firmware, std::vector<std::string>{"0.6.36"});
+  EXPECT_TRUE(old.chassis_firmware.empty());
 }
 
 class SilenceTest : public ControlTest {

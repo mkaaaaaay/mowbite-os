@@ -59,10 +59,10 @@ struct McuControlConfig {
   // A release waits this long for lift, stop and bumper to drop after the clear frame.
   double release_window_s = 1.0;
   double clear_min_interval_s = 1.0;
-  // Firmware the driver was checked against, "major.minor.patch". Empty skips the check of that board. With a check,
-  // motion and blade stay blocked until a version frame matches; a release does not lift it.
-  std::string expected_cutter_version;
-  std::string expected_chassis_version;
+  // Firmware the driver was measured with, "major.minor.patch" per entry. Empty skips the check of that board. With a
+  // check, motion and blade stay blocked until a version frame names a listed firmware; a release does not lift it.
+  std::vector<std::string> cutter_firmware;
+  std::vector<std::string> chassis_firmware;
   // The STOP gesture (G37) is recognised and reported in Status; the release is up to the logic.
   bool stop_release = false;
   // With stop_release: the MCU keeps stop after a press until a clear frame, so while the emergency is latched and the
@@ -227,7 +227,7 @@ class McuControl {
   void OnWheelSpeed(float linear, float angular, double now);
   // setup/motion of the setup program: a step that moves the wheels or the blade runs while it is active.
   void OnSetupMotion(bool active, double now);
-  // Version frame of the MCU, about once a second. Returns false if it does not match the expected firmware.
+  // Version frame of the MCU, about once a second. Returns false if a board runs firmware outside its list.
   bool OnVersions(const VersionInfo& versions);
 
   // Lift, stop and bumper latch the emergency as well; all of it stays until released, with its reason bits.

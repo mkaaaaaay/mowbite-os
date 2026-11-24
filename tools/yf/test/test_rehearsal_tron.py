@@ -190,7 +190,7 @@ class TestRehearsalTron(unittest.TestCase):
         self.assertEqual(len([r for r in rec if r["kind"] == "emergency_stop"]), 1 + 4 * 2)
         proposal = end["proposal"]
         self.assertIn(f"failsafe_without_host: {m.failsafe_proposal([r['stand_s'] for r in runs]):.1f}", proposal)
-        self.assertIn('expected_chassis_version: "0.6.34"', proposal)
+        self.assertIn('chassis_firmware: ["0.6.34"]', proposal)
         self.assertIn("nothing written", output)
         self.assertFalse(os.path.exists(os.path.join(self.work, "data", "tron.yaml")))
 

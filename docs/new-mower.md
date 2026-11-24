@@ -107,6 +107,10 @@ Duties:
   drive and blade without an emergency, for a fixed start time at most (`tron_mcu`: `imu_start_timeout`, 3 s for the
   version). After it the driver accepts or reports an emergency; a version that does not match is reported at once.
   Whoever starts a driver waits that long before the first request.
+- Firmware: the platform file lists the firmware of each board the driver was measured with (`tron_mcu`:
+  `cutter_firmware`, `chassis_firmware`); firmware outside a list blocks drive and blade (`FIRMWARE_INCOMPATIBLE`), so
+  a mower on a newer vendor stand stays still until that stand is measured. The safety measurement narrows the list in
+  the file of the mower to the firmware it ran with.
 - Hear first: after opening its port a driver sends nothing there, no heartbeat either, until a valid frame of its
   board came. Past its telemetry timeout without one it reports `BOARD_NOT_HEARD` (not latched, the first frame ends
   it); a reopened port starts it anew. The contract test checks it with the fake board started quiet

@@ -184,3 +184,12 @@ def test_a_heartbeat_follows_each_setpoint_as_measured():
         mcu = yaml.safe_load(f)["tron_mcu"]["ros__parameters"]
     assert mcu["speed_heartbeat"] == "later"
     assert "heartbeat_after_speed" not in mcu
+
+
+# N7 (2026-11-24): a Tron whose motor boards run firmware outside the measured stands does not move.
+def test_the_driver_checks_the_firmware_against_the_measured_stands():
+    with open(PLATFORM_FILE) as f:
+        mcu = yaml.safe_load(f)["tron_mcu"]["ros__parameters"]
+    assert mcu["cutter_firmware"] == ["0.6.36"]
+    assert mcu["chassis_firmware"] == ["0.6.34"]
+    assert "expected_cutter_version" not in mcu and "expected_chassis_version" not in mcu

@@ -11,6 +11,13 @@
 
 namespace tron {
 
+// Journals before the list hold one expected version per board, empty for none.
+inline std::vector<std::string> FirmwareList(const nlohmann::json& j, const std::string& board) {
+  if (j.contains(board + "_firmware")) return j.at(board + "_firmware").get<std::vector<std::string>>();
+  const std::string one = j.value("expected_" + board + "_version", std::string());
+  return one.empty() ? std::vector<std::string>{} : std::vector<std::string>{one};
+}
+
 inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j = nlohmann::json::object();
   j["heartbeat_period_s"] = c.heartbeat_period_s;
@@ -35,8 +42,8 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["bumper_latches_emergency"] = c.bumper_latches_emergency;
   j["release_window_s"] = c.release_window_s;
   j["clear_min_interval_s"] = c.clear_min_interval_s;
-  j["expected_cutter_version"] = c.expected_cutter_version;
-  j["expected_chassis_version"] = c.expected_chassis_version;
+  j["cutter_firmware"] = c.cutter_firmware;
+  j["chassis_firmware"] = c.chassis_firmware;
   j["stop_release"] = c.stop_release;
   j["stop_clear_period_s"] = c.stop_clear_period_s;
   j["stop_clear_delay_s"] = c.stop_clear_delay_s;
@@ -73,8 +80,8 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   j.at("bumper_latches_emergency").get_to(c.bumper_latches_emergency);
   j.at("release_window_s").get_to(c.release_window_s);
   j.at("clear_min_interval_s").get_to(c.clear_min_interval_s);
-  j.at("expected_cutter_version").get_to(c.expected_cutter_version);
-  j.at("expected_chassis_version").get_to(c.expected_chassis_version);
+  c.cutter_firmware = FirmwareList(j, "cutter");
+  c.chassis_firmware = FirmwareList(j, "chassis");
   j.at("stop_release").get_to(c.stop_release);
   c.stop_clear_period_s = j.value("stop_clear_period_s", McuControlConfig{}.stop_clear_period_s);
   c.stop_clear_delay_s = j.value("stop_clear_delay_s", McuControlConfig{}.stop_clear_delay_s);
@@ -96,7 +103,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 304);
+static_assert(sizeof(McuControlConfig) == 288);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);

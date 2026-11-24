@@ -67,7 +67,7 @@ TEST_F(CoreReplay, McuControl) {
   config.allow_blade = true;
   config.imu_timeout_s = 0.5;
   config.imu_start_timeout_s = 2.0;
-  config.expected_cutter_version = "1.2.3";
+  config.cutter_firmware = {"1.2.3", "1.2.4"};
   {
     Journaled<C> mcu(journal_.get(), config);
     tron::WallClock wall;

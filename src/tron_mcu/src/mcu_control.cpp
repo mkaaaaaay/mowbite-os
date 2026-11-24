@@ -10,8 +10,8 @@ namespace tron {
 
 namespace {
 
-bool VersionMatches(const std::string& expected, const Version& version) {
-  return expected.empty() || expected == VersionString(version);
+bool VersionListed(const std::vector<std::string>& listed, const Version& version) {
+  return listed.empty() || std::find(listed.begin(), listed.end(), VersionString(version)) != listed.end();
 }
 
 }  // namespace
@@ -142,8 +142,8 @@ void McuControl::OnSetupMotion(bool active, double now) {
 }
 
 bool McuControl::OnVersions(const VersionInfo& versions) {
-  const bool ok = VersionMatches(config_.expected_cutter_version, versions.cutter_board) &&
-                  VersionMatches(config_.expected_chassis_version, versions.chassis_board);
+  const bool ok = VersionListed(config_.cutter_firmware, versions.cutter_board) &&
+                  VersionListed(config_.chassis_firmware, versions.chassis_board);
   // A mismatch also latches, so motion after a later matching frame still needs a release.
   if (!ok && firmware_ok_ != false) LatchEmergency(kReasonFirmwareIncompatible);
   firmware_ok_ = ok;
@@ -413,7 +413,7 @@ bool McuControl::BoardNotHeard(double now) const {
 }
 
 bool McuControl::FirmwareUnconfirmed() const {
-  const bool checked = !config_.expected_cutter_version.empty() || !config_.expected_chassis_version.empty();
+  const bool checked = !config_.cutter_firmware.empty() || !config_.chassis_firmware.empty();
   return checked && firmware_ok_ != true;
 }
 

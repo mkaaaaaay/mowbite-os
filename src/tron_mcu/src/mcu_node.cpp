@@ -150,6 +150,13 @@ tron::WallClock LocalWallClock() {
   return wall;
 }
 
+// "0.6.34 0.6.36", "any" for an empty list.
+std::string FirmwareText(const std::vector<std::string>& listed) {
+  std::string text;
+  for (const std::string& version : listed) text += (text.empty() ? "" : " ") + version;
+  return text.empty() ? "any" : text;
+}
+
 }  // namespace
 
 // Driver of the Tron behind the hardware contract hw/* of MowBite OS.
@@ -174,6 +181,8 @@ class McuNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "read_only: %s is only read, no byte goes to the MCU: no motion, blade or charging",
                   port_name_.c_str());
     }
+    measured_firmware_ = "cutter " + FirmwareText(get_parameter("cutter_firmware").as_string_array()) + ", chassis " +
+                         FirmwareText(get_parameter("chassis_firmware").as_string_array());
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     mow_height_mm_ = static_cast<uint16_t>(std::clamp<int64_t>(get_parameter("mow_height_mm").as_int(),
                                                                tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
@@ -289,8 +298,8 @@ class McuNode : public rclcpp::Node {
     // Read only another program commands the wheels: the stops of this core never go out.
     config.wheel_stop_time_s = read_only ? 0.0 : declare_parameter("wheel_stop_time", config.wheel_stop_time_s);
     config.wheel_still_mps = declare_parameter("wheel_still_speed", config.wheel_still_mps);
-    config.expected_cutter_version = declare_parameter("expected_cutter_version", "");
-    config.expected_chassis_version = declare_parameter("expected_chassis_version", "");
+    config.cutter_firmware = declare_parameter("cutter_firmware", std::vector<std::string>{});
+    config.chassis_firmware = declare_parameter("chassis_firmware", std::vector<std::string>{});
     config.stop_release = declare_parameter("stop_release", false) && !read_only;
     config.stop_clear_period_s = declare_parameter("stop_clear_period", config.stop_clear_period_s);
     config.stop_clear_delay_s = declare_parameter("stop_clear_delay", config.stop_clear_delay_s);
@@ -343,11 +352,11 @@ class McuNode : public rclcpp::Node {
     }
     RCLCPP_INFO(get_logger(), "allow_blade: %d, cmd_vel_timeout: %.2f s, speed_repeat_window: %.2f s, mow_height: %u "
                 "mm", config.allow_blade, config.cmd_vel_timeout_s, config.speed_repeat_window_s, config.mow_height_mm);
-    if (config.expected_cutter_version.empty() && config.expected_chassis_version.empty()) {
-      RCLCPP_WARN(get_logger(), "Firmware check is off: expected_cutter_version and expected_chassis_version are empty");
+    if (config.cutter_firmware.empty() && config.chassis_firmware.empty()) {
+      RCLCPP_WARN(get_logger(), "Firmware check is off: cutter_firmware and chassis_firmware are empty");
     } else {
-      RCLCPP_INFO(get_logger(), "Expecting MCU firmware cutter '%s', chassis '%s'; blocked until the MCU reports it",
-                  config.expected_cutter_version.c_str(), config.expected_chassis_version.c_str());
+      RCLCPP_INFO(get_logger(), "Measured MCU firmware: cutter %s, chassis %s; blocked until the MCU reports one",
+                  FirmwareText(config.cutter_firmware).c_str(), FirmwareText(config.chassis_firmware).c_str());
     }
     // Measurement only (T2 of mowbite-measure, heartbeat alone): cmd_vel_timeout up to 10 s.
     const bool heartbeat_only = declare_parameter("heartbeat_only_measurement", false);
@@ -735,8 +744,8 @@ class McuNode : public rclcpp::Node {
     }
     if (!control_.Call<&C::OnVersions>(versions)) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000,
-                            "Unexpected MCU firmware: cutter %s, chassis %s; motion and blade stay blocked",
-                            cutter.c_str(), chassis.c_str());
+                            "MCU firmware not measured: cutter %s, chassis %s (measured: %s); motion and blade stay "
+                            "blocked", cutter.c_str(), chassis.c_str(), measured_firmware_.c_str());
     }
   }
 
@@ -1117,6 +1126,8 @@ class McuNode : public rclcpp::Node {
   std::optional<double> motors_s_;
   std::string cutter_version_;
   std::string chassis_version_;
+  // The firmware lists of the configuration as text, for the log.
+  std::string measured_firmware_;
   std::string bms_version_;
 
   std::optional<mowbite_hold::HoldWatch> hold_watch_;

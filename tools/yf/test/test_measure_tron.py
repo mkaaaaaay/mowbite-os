@@ -503,8 +503,10 @@ class TestLimits(unittest.TestCase):
         text = m.tron_values_text(1.6, {"cutter": "0.6.36", "chassis": "0.6.34", "bms": "1.17.0"}, "2026-11-08")
         self.assertEqual(text.splitlines(), ["tron_mcu:", "  ros__parameters:", "    failsafe_without_host: 1.6",
                                              '    safety_measurement_date: "2026-11-08"',
-                                             '    expected_cutter_version: "0.6.36"',
-                                             '    expected_chassis_version: "0.6.34"'])
+                                             '    cutter_firmware: ["0.6.36"]',
+                                             '    chassis_firmware: ["0.6.34"]'])
+        self.assertEqual(m.tron_values_text(1.6, {"chassis": "0.6.34"}, "2026-11-08").splitlines()[-1],
+                         '    chassis_firmware: ["0.6.34"]')
 
 
 class TestPort(unittest.TestCase):
