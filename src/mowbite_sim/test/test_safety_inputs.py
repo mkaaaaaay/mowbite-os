@@ -17,7 +17,7 @@ import launch_testing.actions
 import rclpy
 from launch.actions import TimerAction
 from launch_ros.actions import Node
-from mowbite_msgs.msg import GnssFix, HardwareStatus
+from mowbite_msgs.msg import GnssFix, HardwareStatus, ReasonChange
 from mowbite_msgs.srv import SetBlade, SetEmergency
 from rcl_interfaces.msg import Log
 from rclpy.qos import qos_profile_sensor_data
@@ -79,6 +79,10 @@ class Probe(DriverProbe):
         self.node.create_subscription(GnssFix, "gps/absolute_pose", self._set("pose"), 10)
         self.node.create_subscription(Imu, "imu/data", self._imu, qos_profile_sensor_data)
         self.node.create_subscription(Log, "/rosout", self._log, ROSOUT)
+        # The changes of the reason the logic tells; the bridge writes the line of the app from them.
+        self.reasons = []
+        self.node.create_subscription(ReasonChange, "bridge/reason_change",
+                                      lambda msg: self.reasons.append((msg.before, msg.after)), 50)
         self.blade = self.node.create_client(SetBlade, "hw/blade")
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         self.start()
@@ -129,8 +133,7 @@ class TestSafetyInputs(unittest.TestCase):
         self.probe.release()
         self.assertTrue(self.probe.wait_for(lambda p: not p.status.emergency, 3), "release failed")
         self.assertEqual(self.probe.status.emergency_reason, 0)
-        self.assertTrue(self.probe.logged("Emergency reason changed from: '' to: 'LATCH, IMU_TIMEOUT'"),
-                        [line for line in self.probe.logs if "Emergency" in line])
+        self.assertTrue(self.probe.wait_for(lambda p: (0, IMU_GAP) in p.reasons, 5), self.probe.reasons)
 
     def test_2_blade_still_turning_latches_and_is_sent_off_again(self):
         set_flags(cutter_ignores_off=1)
@@ -157,8 +160,8 @@ class TestSafetyInputs(unittest.TestCase):
         time.sleep(1.2)
         self.probe.release()
         self.assertTrue(self.probe.wait_for(lambda p: not p.status.emergency, 3), "release failed")
-        self.assertTrue(self.probe.logged("to: 'LATCH, MOWER_NOT_STOPPED'"),
-                        [line for line in self.probe.logs if "Emergency" in line])
+        self.assertTrue(self.probe.wait_for(lambda p: any(after == NOT_STOPPED for _, after in p.reasons), 5),
+                        self.probe.reasons)
 
     def test_3_old_or_missing_corrections_count_as_float(self):
         self.assertTrue(self.probe.wait_for(lambda p: p.pose is not None and p.pose.solution == FIXED, 5),
