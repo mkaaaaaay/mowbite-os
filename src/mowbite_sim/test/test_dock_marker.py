@@ -338,17 +338,18 @@ class TestDockMarker(unittest.TestCase):
         self.assertTrue(p.wait(lambda: any(good(m) for m in p.poses_since(since)), 8), "the marker does not return")
         p.flags(dock_hollow_speed=0.0, marker_hidden=1)
         hidden = time.time()
-        time.sleep(2.0)
+        time.sleep(2.6)
         p.stop_driving(0.5)
         p.flags(dock_hollow_speed=0.0)
         with p.lock:
             after = [(t, m) for t, m in p.poses if t >= hidden]
         lost = next((t for t, m in after if not good(m)), None)
         self.assertIsNotNone(lost)
-        # From the contacts: the blind distance and 0.05 m past it at 0.1 m/s, the delay of the camera and a message
+        # The contacts hold to the edge of the hollows (0.05 m) and count once a second. From the last count: the blind
+        # distance and 0.05 m past it, all at 0.1 m/s, the start of the wheels, the delay of the camera and a message
         # on its way.
-        self.assertLess(lost - hidden, 1.6)
-        self.assertFalse([m for t, m in after if t > lost and t < hidden + 2.0 and good(m)])
+        self.assertLess(lost - hidden, 2.3)
+        self.assertFalse([m for t, m in after if t > lost and t < hidden + 2.6 and good(m)])
 
     def test_07_faults_of_the_camera(self):
         p = self.probe
