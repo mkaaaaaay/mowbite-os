@@ -187,7 +187,8 @@ TEST(Logic, ReasonNamesAsOpenMowerLogsThem) {
   EXPECT_EQ(EmergencyReasonNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
   EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | kEmergencyUnexpectedRestart), "LATCH, UNEXPECTED_RESTART");
   EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | (1 << 22)), "LATCH, INPUTS_LEARNING");
-  EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | (1 << 23) | (1 << 28)), "LATCH, UNKNOWN");
+  EXPECT_EQ(EmergencyReasonNames(1 << 23), "BOARD_NOT_HEARD");
+  EXPECT_EQ(EmergencyReasonNames(kEmergencyLatch | (1 << 24) | (1 << 28)), "LATCH, UNKNOWN");
 }
 
 TEST(Logic, OwnReasonBitsReachTheRobotState) {
