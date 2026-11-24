@@ -839,12 +839,14 @@ const std::vector<SetupCheck>& SetupChecks() {
              "Der Mäher fährt etwa 2 m geradeaus und bleibt von selbst stehen, dreht sich nach links und zurück, fährt "
              "zurück, bis du STOP drückst, und zum Schluss langsam gegen ein weiches Hindernis, das du hältst.",
              "Bleibt der Mäher nicht rechtzeitig stehen: nicht mähen lassen. Die Werte zeigen, wo es hakt; Räder, "
-             "Bremsweg und Platine prüfen."},
+             "Bremsweg und Platine prüfen. Weicht nur die Drehung ab, rutschen meist die Räder: auf festem Boden oder "
+             "trockenem, kurzem Rasen wiederholen."},
             {"Driving on the ground",
              "The mower drives about 2 m straight on and stops by itself, turns to the left and back, drives back "
              "until you press STOP, and at the end slowly against a soft obstacle you hold.",
              "If the mower does not stop in time, don't let it mow. The values show where it fails; check wheels, "
-             "braking distance and board."})},
+             "braking distance and board. If only the turn differs, the wheels mostly slip: repeat on firm ground "
+             "or dry, short grass."})},
       {"blade", "blade", true, false,
        "The parts of blade_parts in one run, the blade taken off and the wheels without a command. Where "
        "hw/capabilities has blade_allowed false, setup.start writes allow_blade for node into the parameter file of "
@@ -1070,15 +1072,18 @@ Field Closed() {
 
 }  // namespace
 
+Field SetupImage(std::string text) {
+  return Object("image", std::move(text),
+                {Text("name", "Its name for setup.image"), Text("sha256", "sha256 of the file, to keep it by"),
+                 Integer("bytes", "Its size"), Text("type", "Always image/svg+xml")});
+}
+
 Field SetupState() {
-  const Field image_fields = Object(
-      "image", "The image of the step, null for none: the app draws symbol then",
-      {Text("name", "Its name for setup.image"), Text("sha256", "sha256 of the file, to keep it by"),
-       Integer("bytes", "Its size"), Text("type", "Always image/svg+xml"),
-       Nullable(Object("accent", "A second image of the same size to lay over it, for the spot to press; null for "
-                                 "none",
-                       {Text("name", "Its name for setup.image"), Text("sha256", "sha256 of the file"),
-                        Integer("bytes", "Its size")}))});
+  Field image_fields = SetupImage("The image of the step, null for none: the app draws symbol then");
+  image_fields.fields.push_back(
+      Nullable(Object("accent", "A second image of the same size to lay over it, for the spot to press; null for none",
+                      {Text("name", "Its name for setup.image"), Text("sha256", "sha256 of the file"),
+                       Integer("bytes", "Its size")})));
   const Field step = Rows(
       "steps", "The steps in the order of the step list",
       {Text("id", "Name of the step in setup.*"),

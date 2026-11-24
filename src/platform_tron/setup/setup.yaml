@@ -1,7 +1,7 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 8
+catalog: 9
 # blade and summary restart the OS: mowbite-host restarts the service (host.restart_os).
 restart: host
 steps:
@@ -13,7 +13,7 @@ steps:
     stage: device
     check: board
     params: {time: 5}
-    image: board.svg
+    image: mower.svg
     symbol: board
   - id: stop
     stage: inputs
@@ -21,7 +21,7 @@ steps:
     params: {role: stop, time: 90}
     parts:
       - id: top
-    image: stop.svg
+    image: mower.svg
     accent: stop-accent.svg
     symbol: stop
     mark: [stop_top]

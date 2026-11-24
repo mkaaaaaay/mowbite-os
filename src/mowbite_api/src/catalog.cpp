@@ -985,7 +985,7 @@ const std::vector<Method>& Methods() {
                     {Text("name", "Name for setup.platform.set"),
                      Object("texts", "name, text (what it is) and board (what the driver expects at which port) by "
                                      "language (de, en)"),
-                     Text("image", "name for setup.image, empty without", false)}),
+                     Nullable(SetupImage("Its drawing from above, null without one"))}),
                Text("current", "The platform the OS runs as, empty in the stage of the choice"),
                Bool("fixed", "The installation fixed it (MOWBITE_PLATFORM): setup.platform.set takes no other")}),
        ""},

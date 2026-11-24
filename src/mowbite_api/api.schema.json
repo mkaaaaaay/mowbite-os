@@ -11649,8 +11649,36 @@
             "description": "One item",
             "properties": {
               "image": {
-                "description": "name for setup.image, empty without",
-                "type": "string"
+                "additionalProperties": false,
+                "description": "Its drawing from above, null without one",
+                "properties": {
+                  "bytes": {
+                    "description": "Its size",
+                    "type": "integer"
+                  },
+                  "name": {
+                    "description": "Its name for setup.image",
+                    "type": "string"
+                  },
+                  "sha256": {
+                    "description": "sha256 of the file, to keep it by",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Always image/svg+xml",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "sha256",
+                  "bytes",
+                  "type"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
               },
               "name": {
                 "description": "Name for setup.platform.set",
@@ -11663,7 +11691,8 @@
             },
             "required": [
               "name",
-              "texts"
+              "texts",
+              "image"
             ],
             "type": "object"
           },
@@ -16915,11 +16944,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:59",
+  "$id": "urn:mowbite-os:api:60",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 59,
+  "x-api": 60,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -24607,12 +24636,12 @@
         "start": true,
         "texts": {
           "de": {
-            "fix": "Bleibt der Mäher nicht rechtzeitig stehen: nicht mähen lassen. Die Werte zeigen, wo es hakt; Räder, Bremsweg und Platine prüfen.",
+            "fix": "Bleibt der Mäher nicht rechtzeitig stehen: nicht mähen lassen. Die Werte zeigen, wo es hakt; Räder, Bremsweg und Platine prüfen. Weicht nur die Drehung ab, rutschen meist die Räder: auf festem Boden oder trockenem, kurzem Rasen wiederholen.",
             "help": "Der Mäher fährt etwa 2 m geradeaus und bleibt von selbst stehen, dreht sich nach links und zurück, fährt zurück, bis du STOP drückst, und zum Schluss langsam gegen ein weiches Hindernis, das du hältst.",
             "name": "Fahren am Boden"
           },
           "en": {
-            "fix": "If the mower does not stop in time, don't let it mow. The values show where it fails; check wheels, braking distance and board.",
+            "fix": "If the mower does not stop in time, don't let it mow. The values show where it fails; check wheels, braking distance and board. If only the turn differs, the wheels mostly slip: repeat on firm ground or dry, short grass.",
             "help": "The mower drives about 2 m straight on and stops by itself, turns to the left and back, drives back until you press STOP, and at the end slowly against a soft obstacle you hold.",
             "name": "Driving on the ground"
           }

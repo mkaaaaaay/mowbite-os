@@ -447,8 +447,9 @@ nodes above the contract, the planner and the net service. A name no package ent
 Without a name (no `platform:=`, no `MOWBITE_PLATFORM`) the start takes the platform of `<data_dir>/platform.json`
 (`data_dir:=` or `MOWBITE_DATA_DIR`). Without that file it starts the stage of the choice: only the bridge and the
 setup program, no driver, no port opened, `robot_state` SETUP with sub state PLATFORM. The app lists the mowers of the
-image (`setup.platforms`, texts from `ABOUT` of each `platform.py`) and chooses one (`setup.platform.set`); the program
-writes `platform.json`, the launch ends and whatever runs it starts it again as that mower. Every step list begins with
+image (`setup.platforms`, texts from `ABOUT` of each `platform.py`, the drawing from above `setup/images/mower.svg`)
+and chooses one (`setup.platform.set`); the program writes `platform.json`, the launch ends and whatever runs it
+starts it again as that mower. Every step list begins with
 the step `platform` (check `platform`), which shows the mower and lets the app choose another while the mower is idle:
 every result goes back and the lock closes with a reset until the summary passed again. With `MOWBITE_PLATFORM` the
 choice is fixed (`PLATFORM_FIXED`). Give a new platform an `ABOUT` with `name`, `text` and `board` (what the driver

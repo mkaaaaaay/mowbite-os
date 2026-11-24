@@ -55,10 +55,24 @@ struct Bench {
   Program program;
 };
 
+TEST(PlatformChoice, AMowerShowsItsDrawingWhereTheNodeHasIt) {
+  json mowers = Mowers();
+  mowers[0]["image"] = "mower-tron.svg";
+  mowers[1]["image"] = "mower-nx60i.svg";
+  Program program(*ParseSteps(json::parse(kChoice), nullptr), "");
+  program.SetPlatforms(mowers, "", false);
+  const json shown = program.Platforms({{"mower-tron.svg", {"abc", 120}}})["platforms"];
+  EXPECT_EQ(shown[0]["image"],
+            json({{"name", "mower-tron.svg"}, {"sha256", "abc"}, {"bytes", 120}, {"type", "image/svg+xml"}}));
+  EXPECT_TRUE(shown[1]["image"].is_null());
+}
+
 TEST(PlatformChoice, TheStageOfTheChoiceOffersTheMowers) {
   Bench bench(kChoice, "");
   EXPECT_EQ(bench.StepState("platform"), "open");
-  EXPECT_EQ(bench.program.Platforms(), json({{"platforms", Mowers()}, {"current", ""}, {"fixed", false}}));
+  json shown = Mowers();
+  for (json& mower : shown) mower["image"] = nullptr;
+  EXPECT_EQ(bench.program.Platforms({}), json({{"platforms", shown}, {"current", ""}, {"fixed", false}}));
   EXPECT_EQ(bench.Choose("yf500"), "UNKNOWN_PLATFORM");
   EXPECT_FALSE(bench.program.TakePlatform());
   json result;

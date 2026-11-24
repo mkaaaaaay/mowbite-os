@@ -190,10 +190,12 @@ class Program {
   // setup.keep: keeps a step that moves the wheels going; result tells whether the step runs.
   std::optional<Refusal> Keep(const json& params, double now, json* result);
 
-  // platform_choice.cpp. The mowers of the image as setup.platforms lists them ([{name, texts, image}]), the one the
+  // platform_choice.cpp. The mowers of the image as setup.platforms lists them ([{name, texts, image}], image
+  // the name of its drawing), the one the
   // OS runs as (empty in the stage of the choice) and whether the installation fixed it.
   void SetPlatforms(json platforms, std::string chosen, bool fixed);
-  json Platforms() const;
+  // setup.platforms; images: name to {sha256, bytes} of the images that are there, as for State.
+  json Platforms(const std::map<std::string, std::pair<std::string, int>>& images) const;
   // setup.platform.set; result {restart}. Another mower than the one chosen takes every result back and closes the
   // lock with a reset; TakePlatform then names it once, for platform.json and the restart.
   std::optional<Refusal> ChoosePlatform(const json& params, double wall, json* result);

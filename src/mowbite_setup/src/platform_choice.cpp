@@ -16,8 +16,17 @@ void Program::SetPlatforms(json platforms, std::string chosen, bool fixed) {
   MarkPlatform();
 }
 
-json Program::Platforms() const {
-  return {{"platforms", platforms_}, {"current", chosen_}, {"fixed", fixed_}};
+json Program::Platforms(const std::map<std::string, std::pair<std::string, int>>& images) const {
+  json platforms = platforms_;
+  for (json& platform : platforms) {
+    const std::string name = platform.value("image", "");
+    const auto found = images.find(name);
+    platform["image"] = found == images.end() ? json() : json({{"name", name},
+                                                               {"sha256", found->second.first},
+                                                               {"bytes", found->second.second},
+                                                               {"type", "image/svg+xml"}});
+  }
+  return {{"platforms", std::move(platforms)}, {"current", chosen_}, {"fixed", fixed_}};
 }
 
 void Program::MarkPlatform() {

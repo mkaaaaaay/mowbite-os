@@ -191,6 +191,8 @@ const std::vector<std::string>& ShapeKinds();
 
 // x-setup of the schema.
 Json SetupCatalog();
+// An image of the setup program as setup.image gives it: name, sha256, bytes, type.
+Field SetupImage(std::string text);
 // The state of the program as setup.get and setup/json give it.
 Field SetupState();
 

@@ -7,6 +7,8 @@ every result back, closes the lock with a reset and ends the launch again.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_platform_choice.py
 """
+import base64
+import hashlib
 import json
 import os
 import random
@@ -121,6 +123,7 @@ class TestPlatformChoice(unittest.TestCase):
         names = [entry["name"] for entry in mowers["platforms"]]
         self.assertIn("nx60i", names)
         self.assertIn("tron", names)
+        self.drawings_are_served(mowers)
         self.assertEqual(p.step("platform")["state"], "open")
         # No driver: nothing reports hw/status.
         self.assertIsNone(p.status)
@@ -132,6 +135,15 @@ class TestPlatformChoice(unittest.TestCase):
         self.assertTrue(event, p.events[since:])
         self.assertEqual((event["platform"], event["from"]), ("nx60i", ""))
         self.assertEqual(first.wait(60), 0)
+
+    # Each mower has its drawing, and setup.image gives the bytes its sha256 and size promise.
+    def drawings_are_served(self, mowers):
+        for mower in mowers["platforms"]:
+            image = mower["image"]
+            self.assertEqual((image["name"], image["type"]), (f"mower-{mower['name']}.svg", "image/svg+xml"), mower)
+            piece = self.probe.rpc("setup.image", {"name": image["name"]}, 10)["result"]
+            data = base64.b64decode(piece["data"])
+            self.assertEqual((len(data), hashlib.sha256(data).hexdigest()), (image["bytes"], image["sha256"]), mower)
 
     def test_02_started_again_as_the_mower_chosen(self):
         p = self.probe
@@ -146,6 +158,7 @@ class TestPlatformChoice(unittest.TestCase):
             self.assertFalse(p.robot.hardware)
             mowers = p.rpc("setup.platforms", {}, 10)["result"]
             self.assertEqual((mowers["current"], mowers["fixed"]), ("nx60i", False), mowers)
+            self.drawings_are_served(mowers)
             self.assertEqual(p.step("platform")["state"], "ok")
             # The wrong mower: another one, chosen while it stands, closes the lock until its summary passed.
             since = len(p.events)

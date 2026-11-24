@@ -123,7 +123,9 @@ class SetupNode : public rclcpp::Node {
     const std::string restarts = declare_parameter("driver_restarts", std::string("0"));
     driver_restarts_ = std::atoi(restarts.c_str());
     // The mowers of the image, the one the OS runs as (empty: the stage of the choice) and whether it is fixed.
-    const json platforms = json::parse(declare_parameter("platforms", std::string("[]")), nullptr, false);
+    json platforms = json::parse(declare_parameter("platforms", std::string("[]")), nullptr, false);
+    if (!platforms.is_array()) platforms = json::array();
+    LoadPlatformImages(&platforms);
     chosen_ = declare_parameter("chosen", std::string());
     const bool fixed = declare_parameter("fixed", std::string("false")) == "true";
 
@@ -138,7 +140,7 @@ class SetupNode : public rclcpp::Node {
     if (choice_) {
       // The stage of the choice: the step platform alone, nothing else runs.
       program_.emplace(*ParseSteps(json::parse(kChoiceSteps), nullptr), "");
-      program_->SetPlatforms(platforms.is_array() ? platforms : json::array(), "", false);
+      program_->SetPlatforms(platforms, "", false);
       LoadLock();
       for (const auto& method : mowbite_api::Methods()) {
         if (method.node == methods.node_id) methods.methods.push_back(method.name);
@@ -157,7 +159,7 @@ class SetupNode : public rclcpp::Node {
       } else {
         LoadImages(*list, image_dir);
         program_.emplace(*list, platform);
-        program_->SetPlatforms(platforms.is_array() ? platforms : json::array(), chosen_, fixed);
+        program_->SetPlatforms(platforms, chosen_, fixed);
         LoadRecord();
         LoadLock();
         LoadLayer(shadowed);
@@ -316,15 +318,34 @@ class SetupNode : public rclcpp::Node {
 
   // The images the steps name, from the folder of the platform; one that is missing or breaks the rules is left out.
   void LoadImages(const StepList& list, const std::string& folder) {
-    for (const std::string& name : list.Images()) {
-      std::string bytes;
-      const std::string wrong = LoadImage(folder, name, &bytes);
-      if (!wrong.empty()) {
-        RCLCPP_ERROR(get_logger(), "The image %s is not used: %s", name.c_str(), wrong.c_str());
-        continue;
+    for (const std::string& name : list.Images()) AddImage(folder, name, name);
+  }
+
+  // Reads file of folder as the image name; false and a log line when it is missing or breaks the rules.
+  bool AddImage(const std::string& folder, const std::string& file, const std::string& name) {
+    std::string bytes;
+    const std::string wrong = LoadImage(folder, file, &bytes);
+    if (!wrong.empty()) {
+      RCLCPP_ERROR(get_logger(), "The image %s/%s is not used: %s", folder.c_str(), file.c_str(), wrong.c_str());
+      return false;
+    }
+    images_[name] = {bytes, mowbite_map::Sha256Hex(bytes)};
+    image_infos_[name] = {images_[name].sha256, static_cast<int>(bytes.size())};
+    return true;
+  }
+
+  // The drawing of each mower (image_file, a path) as image mower-<name>.svg; one that breaks the rules is left out.
+  void LoadPlatformImages(json* platforms) {
+    for (json& platform : *platforms) {
+      if (!platform.is_object()) continue;
+      const std::string file = platform.value("image_file", "");
+      platform.erase("image_file");
+      if (file.empty()) continue;
+      const std::string name = "mower-" + platform.value("name", "") + ".svg";
+      const size_t slash = file.rfind('/');
+      if (slash != std::string::npos && AddImage(file.substr(0, slash), file.substr(slash + 1), name)) {
+        platform["image"] = name;
       }
-      images_[name] = {bytes, mowbite_map::Sha256Hex(bytes)};
-      image_infos_[name] = {images_[name].sha256, static_cast<int>(bytes.size())};
     }
   }
 
@@ -754,7 +775,7 @@ class SetupNode : public rclcpp::Node {
       } else if (request.method == "setup.reset") {
         refusal = program_->Reset(params, WallSeconds());
       } else if (request.method == "setup.platforms") {
-        state = program_->Platforms();
+        state = program_->Platforms(image_infos_);
       } else if (request.method == "setup.platform.set") {
         refusal = program_->ChoosePlatform(params, wall, &state);
       } else if (request.method != "setup.get") {

@@ -1,7 +1,7 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 8
+catalog: 9
 # inputs_assign, blade and summary restart the OS: the launch ends and whatever runs it starts it again.
 restart: self
 steps:
@@ -35,7 +35,7 @@ steps:
     stage: device
     check: board
     params: {time: 5}
-    image: board.svg
+    image: mower.svg
     symbol: board
   # The delays are those of the table in nx60i.yaml of the driver: a lift sensor stops after 2.5 s, the bumper after
   # 0.5 s.
@@ -117,7 +117,7 @@ steps:
         texts:
           de: {name: STOP hinten}
           en: {name: STOP at the rear}
-    image: stop.svg
+    image: mower.svg
     accent: stop-accent.svg
     symbol: stop
     note:

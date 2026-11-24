@@ -513,6 +513,7 @@ constexpr Correction kCorrections[] = {
     {"setup.image.result.size: minimum wider", 54, "the whole image was held to the size of a piece"},
     {"setup.image.result.size: maximum wider", 54, "the whole image was held to the size of a piece"},
     {"event.DOCKING_FAILED.limit: unit changed", 5, "api 4 fixed A, the limit has the unit of its value"},
+    {"setup.platforms.result.platforms[].image: type string gone", 60, "never filled before"},
 };
 
 bool Corrected(const std::string& problem, int older_api) {
