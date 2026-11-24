@@ -2,7 +2,9 @@
 """The pack the installer wrote into the reserved file: check it, unpack it over /, then overwrite the whole file
 with zeros and the empty mark, so the Wi-Fi keys in it do not stay. A pack that fails a check is left as it is and
 nothing is unpacked; the installer can write the system again.
-  unpack [pack file] [root]
+  unpack system|all [pack file] [root]
+system runs before udev and module loading and unpacks all but userdata/ (kernel modules, firmware, Wi-Fi profiles);
+all runs once /userdata is mounted, unpacks everything again and clears the file.
 Layout: a 512-byte header ("MOWBITE-PACK 1", "len <bytes>", "sha256 <hex>"), a ustar archive, zeros.
 """
 import hashlib
@@ -26,10 +28,18 @@ def header(block):
     return int(fields["len"]), fields["sha256"]
 
 
-def check(archive):
-    """Names outside ALLOWED, or None when the archive may be unpacked."""
+def check(archive, root):
+    """Entries that may not be unpacked (outside ALLOWED or refused by the data filter), or None."""
+    bad = []
     with tarfile.open(fileobj=io.BytesIO(archive)) as t:
-        bad = [m.name for m in t.getmembers() if not m.name.startswith(ALLOWED) or ".." in m.name.split("/")]
+        for m in t.getmembers():
+            if not m.name.startswith(ALLOWED) or ".." in m.name.split("/"):
+                bad.append(m.name)
+                continue
+            try:
+                tarfile.data_filter(m, root)
+            except tarfile.FilterError as e:
+                bad.append(f"{m.name} ({e})")
     return bad or None
 
 
@@ -45,7 +55,10 @@ def clear(f, size):
     os.fsync(f.fileno())
 
 
-def main(path="/var/lib/mowbite/pack", root="/"):
+def main(stage, path="/var/lib/mowbite/pack", root="/"):
+    if stage not in ("system", "all"):
+        print(f"unknown stage {stage}")
+        return 2
     with open(path, "r+b") as f:
         first = f.read(BLOCK)
         if first.startswith(EMPTY):
@@ -66,20 +79,30 @@ def main(path="/var/lib/mowbite/pack", root="/"):
         if hashlib.sha256(archive).hexdigest() != want:
             print(f"{path}: pack does not match its sha256, left as it is")
             return 0
-        bad = check(archive)
+        bad = check(archive, root)
         if bad:
-            print(f"{path}: pack has entries outside the allowed places: {bad[:5]}, left as it is")
+            print(f"{path}: pack has entries that may not be unpacked: {bad[:5]}, left as it is")
+            return 0
+        if stage == "all" and root == "/" and not os.path.ismount("/userdata"):
+            print(f"{path}: /userdata is not mounted, left as it is")
             return 0
         with tarfile.open(fileobj=io.BytesIO(archive)) as t:
-            t.extractall(root, filter="data")
+            members = [m for m in t.getmembers() if stage == "all" or not m.name.startswith("userdata/")]
+            t.extractall(root, members=members, filter="data")
         os.sync()
         if root == "/":
             with open("/etc/hostname") as h, open("/proc/sys/kernel/hostname", "w") as k:
                 k.write(h.read().strip())
+        if stage == "system":
+            print(f"{path}: unpacked {len(members)} entries without userdata/")
+            return 0
         clear(f, size)
         print(f"{path}: unpacked {length} bytes and cleared")
     return 0
 
 
 if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(2)
     sys.exit(main(*sys.argv[1:]))

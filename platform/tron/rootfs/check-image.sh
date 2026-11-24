@@ -57,7 +57,19 @@ if [ -e "$IMG.json" ]; then
     ! "$DEBUGFS" -c -R "stat /root/.ssh/authorized_keys" "$IMG" 2>&1 | grep -q '^Inode:'
     result "no authorized_keys" $?
     test "$(stat_of /var/lib/mowbite/pack)" = "0600 0:0"; result "pack 0600 root" $?
-    python3 -I - "$IMG" "$IMG.json" "$HERE/files/usr/lib/mowbite/unpack" <<'PY'
+    # System parts of the pack (modules, firmware) before module loading and udev; nothing in it may wait for mounts.
+    unit=$("$DEBUGFS" -c -R "cat /etc/systemd/system/mowbite-unpack.service" "$IMG" 2>/dev/null)
+    (grep -qx 'DefaultDependencies=no' <<< "$unit" && grep -qx 'ExecStart=/usr/lib/mowbite/unpack system' <<< "$unit" \
+        && ! grep -q '^After=.*\(local-fs\|udev\|modules-load\)' <<< "$unit" \
+        && for u in sysinit.target systemd-modules-load.service systemd-udevd.service systemd-udev-trigger.service \
+            mowbite-tron-hwinit.service; do grep -q "^Before=.*\b$u\b" <<< "$unit" || exit 1; done)
+    result "unpack system before modules-load, udev and hwinit" $?
+    "$DEBUGFS" -c -R "stat /etc/systemd/system/sysinit.target.wants/mowbite-unpack.service" "$IMG" 2>/dev/null \
+        | grep -q '^Inode:' && "$DEBUGFS" -c -R \
+        "stat /etc/systemd/system/multi-user.target.wants/mowbite-unpack-inbox.service" "$IMG" 2>/dev/null \
+        | grep -q '^Inode:'
+    result "unpack units enabled" $?
+    python3 -I -B - "$IMG" "$IMG.json" "$HERE/files/usr/lib/mowbite/unpack" <<'PY'
 import hashlib, importlib.machinery, importlib.util, json, os, sys
 img, meta, script = sys.argv[1:4]
 loader = importlib.machinery.SourceFileLoader("unpack", script)

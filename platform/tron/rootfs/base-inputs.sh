@@ -5,4 +5,4 @@ set -euo pipefail
 export LC_ALL=C
 cd "$(dirname "$0")"
 sha256sum packages.txt build-base.sh
-(cd files && find . ! -type d | sort | sed 's/^/file /')
+(cd files && find . -name __pycache__ -prune -o ! -type d -print | sort | sed 's/^/file /')

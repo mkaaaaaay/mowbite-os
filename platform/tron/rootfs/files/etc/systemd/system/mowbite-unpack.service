@@ -1,12 +1,17 @@
 [Unit]
-Description=Pack of this Tron from the installer, on the first boot
+Description=Pack of this Tron from the installer, system parts on the first boot
+# Kernel modules and firmware come from the pack: before module loading, udev and the hardware setup.
+DefaultDependencies=no
 ConditionPathExists=/var/lib/mowbite/pack
-RequiresMountsFor=/userdata /var/lib/mowbite
-Before=NetworkManager.service ssh.service avahi-daemon.service mowbite-host.service mowbite-os.service
+After=systemd-remount-fs.service
+Before=sysinit.target systemd-modules-load.service systemd-udevd.service systemd-udev-trigger.service
+Before=mowbite-tron-hwinit.service shutdown.target
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/lib/mowbite/unpack
+RemainAfterExit=yes
+ExecStart=/usr/lib/mowbite/unpack system
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=sysinit.target

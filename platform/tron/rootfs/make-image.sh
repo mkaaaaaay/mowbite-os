@@ -63,7 +63,7 @@ fi
 tar -xOf "$BASE" ./var/lib/dpkg/status > "$work/status"
 python3 -I "$HERE/base_packages.py" same "$work/status" "$HERE/base-packages.txt" \
     || { echo "base-packages.txt is not the list of $BASE: commit the one build-base.sh wrote with it" >&2; exit 1; }
-tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w .
+tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w --exclude=__pycache__ .
 # The broker of MowBite OS with the configuration the Compose stack of the other platforms uses.
 tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \
     --transform 's|^mosquitto.conf$|./etc/mosquitto/mosquitto.conf|' mosquitto.conf
@@ -159,7 +159,7 @@ PACK_LEN=268435456
 if [ -n "$INSTALLER" ]; then
     # Filled with the empty mark instead of zeros: mke2fs leaves zero blocks out, the pack needs them all.
     mkdir -p "$work/k/var/lib/mowbite"
-    python3 -I - "$HERE/files/usr/lib/mowbite/unpack" "$work/k/$PACK" "$PACK_LEN" <<'PY'
+    python3 -I -B - "$HERE/files/usr/lib/mowbite/unpack" "$work/k/$PACK" "$PACK_LEN" <<'PY'
 import importlib.machinery, importlib.util, sys
 loader = importlib.machinery.SourceFileLoader("unpack", sys.argv[1])
 unpack = importlib.util.module_from_spec(importlib.util.spec_from_loader("unpack", loader))
