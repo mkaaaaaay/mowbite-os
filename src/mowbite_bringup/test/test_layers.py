@@ -8,8 +8,10 @@ Run in a sourced workspace (the platforms are found by their entries in the amen
 import logging
 import os
 import sys
+import types
 
 import pytest
+from launch.actions import OpaqueFunction
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LAUNCH = os.path.normpath(os.path.join(HERE, "..", "launch"))
@@ -185,13 +187,20 @@ def test_the_parameter_check_knows_every_node_of_a_platform(start, platform):  #
     assert built.names() and built.names() <= built.checked, built.names() - built.checked
 
 
-@pytest.mark.parametrize("platform", ["", "no_mower", "../tron"])
+@pytest.mark.parametrize("platform", ["no_mower", "../tron"])
 def test_a_platform_the_image_does_not_have_halts(halt_file, platform):
     assert len(stack.start(None, platform)) == 1
     line = halt_file.read_text()
     assert line.startswith("MOWBITE_OS_HALT reason=PLATFORM_CONFIG data_schema=- image_schema=- The image has no "
                            f"platform '{platform}'")
     assert ", ".join(PLATFORMS) in line
+
+
+def test_no_platform_and_no_choice_is_the_stage_of_the_choice(monkeypatch):
+    monkeypatch.delenv("MOWBITE_DATA_DIR", raising=False)
+    actions = stack.start(types.SimpleNamespace(launch_configurations={}), "")
+    assert {"config", "extra_config", "data_dir"} <= {a.name for a in actions if hasattr(a, "default_value")}
+    assert isinstance(actions[-1], OpaqueFunction)
 
 
 @pytest.mark.parametrize("platform", PLATFORMS)
