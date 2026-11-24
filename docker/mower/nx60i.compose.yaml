@@ -45,8 +45,8 @@ services:
     environment:
       - TZ=${TZ:-Europe/Berlin}
       - MOWBITE_OS_IMAGE=ghcr.io/mkaaaaaay/mowbite-os:${MOWBITE_OS_TAG}
-      # The platform of this mower, a value of the device: an update leaves it as it is.
-      - MOWBITE_PLATFORM=nx60i
+      # The platform of this mower, a value of the device from .env: an update leaves it as it is.
+      - MOWBITE_PLATFORM=${MOWBITE_PLATFORM:-nx60i}
       - MOWBITE_IMPORT_DIR=/import/openmower
       # For mowbite-migrate export.
       - MOWBITE_DATA_DIR=${MOWBITE_DATA_DIR}
