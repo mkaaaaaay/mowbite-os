@@ -444,7 +444,7 @@ TEST_F(CoreReplay, AnonymizedCopyHasNoPlace) {
   const auto report = mowbite_journal::CheckRuns(copy, mowbite_replay::Cores());
   EXPECT_NE(report.outcome, CheckOutcome::kError) << Text(report);
   EXPECT_EQ(Text(report).find("cannot"), std::string::npos) << Text(report);
-  EXPECT_NE(Text(report).find("mcu: bit-identical, 2 calls"), std::string::npos) << Text(report);
+  EXPECT_NE(Text(report).find("mcu: bit-identical, 3 calls"), std::string::npos) << Text(report);
   error.clear();
   const std::string timeline = mowbite_journal::Timeline({copy}, INT64_MIN, INT64_MAX, 1 << 20, &error);
   EXPECT_TRUE(error.empty()) << error;

@@ -56,7 +56,10 @@ class GestureTest : public ::testing::Test {
         sample.stop = kept_stop_;
         sample.lift = kept_lift_;
       }
-      if (feed_sensor_) control_.OnSensorInfo(sample, now_);
+      if (feed_sensor_) {
+        control_.OnFrame();
+        control_.OnSensorInfo(sample, now_);
+      }
       if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
       const std::vector<SubPacket> packets = control_.Tick(now_, kWall);
       for (const auto& packet : packets) {
@@ -590,6 +593,7 @@ TEST_F(StopClearTest, NoClearFrameWithoutTheGesture) {
   McuControlConfig config = StopClearConfig();
   config.stop_release = false;
   McuControl control(config);
+  control.OnFrame();
   control.SetStopClearMark(true);
   SensorInfo sensor;
   sensor.stop = 1;
@@ -634,6 +638,7 @@ TEST_F(LatchCountTest, EveryNewReasonCountsTheSameBitAgainDoesNot) {
 
 TEST_F(LatchCountTest, AnImuGapCountsOnce) {
   McuControl control(GestureConfig(true));
+  control.OnFrame();
   control.OnSensorInfo(SensorInfo{}, 0.01);
   control.OnImu(ImuCounts{}, 0.01);
   for (int i = 1; i <= 200; i++) {
@@ -694,6 +699,7 @@ TEST_F(LatchCountTest, NeverZeroOnceLatched) {
                           [](McuControl& control, SensorInfo&) { control.LatchEmergency(kReasonHighLevel); }};
   for (size_t i = 0; i < std::size(causes); i++) {
     McuControl control(GestureConfig());
+    control.OnFrame();
     SensorInfo sensor;
     causes[i](control, sensor);
     // From the first sample on, as after a start with STOP kept by the board.
