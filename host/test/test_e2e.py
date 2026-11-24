@@ -563,8 +563,10 @@ class EndToEnd(unittest.TestCase):
             json.dump({"format": 2, "component": "host", "revision": "5eed000", "serial": 1}, f)
         self.bundle(A)
         self.start_host(seed=True)
-        self.check()
-        self.assertEqual(self.run_update()["result"], "installed")
+        # A mower without an OS takes the os bundle of its inbox by itself.
+        self.app.wait(lambda: self.app.update().get("phase") == "idle" and
+                      (self.app.update().get("last") or {}).get("revision") == A, "first install")
+        self.assertEqual(self.app.update()["last"]["result"], "installed")
         os_pids = set(self.fake_pids())
         self.assertEqual(self.component("host")["running"]["revision"], "5eed000")
 
