@@ -133,6 +133,13 @@ def test_no_camera_without_the_own_driver(executables, hardware):
         & set(started)
 
 
+# The buttons on top start only with the own driver: with hardware:=read another host owns the mower.
+def test_the_buttons_start_with_the_own_driver_only(executables):
+    assert "tron_buttons_node" in executables()
+    assert "tron_buttons_node" not in executables(hardware="read")
+    assert "tron_buttons_node" not in executables(hardware="false")
+
+
 def test_another_value_starts_nothing(executables):
     assert not {"tron_stereo_node", "mowbite_camera_node"} & set(executables(stereo="yes"))
     assert not {"tron_side_node", "mowbite_camera_node"} & set(executables(right="yes"))

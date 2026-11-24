@@ -1,6 +1,6 @@
 """The Airseekers Tron for mowbite.launch.py: tron_mcu in a process of its own, so that a crash of any other node
 leaves its watchdogs running (G25), tron_gnss, tron_imu, the LEDs and the speaker in the container, and in processes
-of their own the camera AI on the left and on the right side camera, the live picture of the stereo camera, the dock
+of their own the buttons on top, the camera AI on the left and on the right side camera, the live picture of the stereo camera, the dock
 marker of the rear camera with its live picture, and with any of these the camera service. A driver that ends outside
 the shutdown starts again at most DRIVER_RESTARTS times, each new one latched from its first frame (start_latched):
 the MCU does not latch by itself when its host is gone.
@@ -15,7 +15,7 @@ from launch_ros.descriptions import ComposableNode
 
 # The nodes of the Tron beside its driver and those of the stack, as the parameter files name them.
 NODES = ("tron_gnss", "tron_imu", "mowbite_light", "mowbite_sound", "tron_vision", "right/tron_vision", "tron_stereo",
-         "tron_side", "tron_rear", "mowbite_camera")
+         "tron_side", "tron_rear", "mowbite_camera", "tron_buttons")
 DRIVER = "tron_mcu"
 DRIVER_RESTARTS = 3
 # What setup.platforms tells of this mower, by language.
@@ -125,7 +125,12 @@ def parts(start):
     # The camera service of the OS shows their pictures in the app; without a camera process it has none to show.
     if cameras:
         cameras += start.camera_service(**CAMERA_LIMITS)
-    return start.Parts(driver=mcu, before=[gnss, imu], after=[light, sound], processes=cameras)
+    # Only here: with hardware:=read another host owns the mower, a press must not start the logic.
+    buttons = start.own_process(
+        lambda prefix: Node(package="tron_buttons", executable="tron_buttons_node", name="tron_buttons", namespace="/",
+                            parameters=[*files], output="screen", prefix=prefix, exec_name="tron_buttons"),
+        "buttons")
+    return start.Parts(driver=mcu, before=[gnss, imu], after=[light, sound], processes=[*buttons, *cameras])
 
 
 # A camera process of tron_vision with <process>:=on, each of its own, so that a crash of the NPU runtime, of the

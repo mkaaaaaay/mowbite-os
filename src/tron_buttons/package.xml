@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>tron_buttons</name>
+  <version>0.0.0</version>
+  <description>Start, home and on buttons on top of the Airseekers Tron</description>
+  <maintainer email="274135729+mkaaaaaay@users.noreply.github.com">mkay</maintainer>
+  <license>PolyForm-Strict-1.0.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>mowbite_component</build_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
+  <depend>mowbite_msgs</depend>
+  <depend>mowbite_watch</depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
