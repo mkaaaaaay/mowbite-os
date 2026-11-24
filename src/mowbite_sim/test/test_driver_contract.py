@@ -355,8 +355,11 @@ class TestDriverContract(unittest.TestCase):
         self.assertTrue(all(i.assigned and not i.active for i in p.inputs.inputs), p.inputs.inputs)
         CASE.inputs(stop=True)
         switched = p.wait_for(lambda p: [i.name for i in p.inputs.inputs if i.active], 2)
+        # hw/inputs comes with the frame, the latch with the next tick: a release before it would end without effect.
+        latched = p.wait_for(lambda p: p.status.emergency and p.status.stop, 2)
         CASE.inputs()
         self.assertTrue(switched, "no input shows the stop button")
+        self.assertTrue(latched, "stop gave no emergency")
         by_name = {i.name: i for i in p.inputs.inputs}
         self.assertTrue(all(by_name[name].role == "stop" for name in switched), switched)
         self.assertTrue(p.wait_for(lambda p: not p.status.stop, 2), "stop stays shown")
