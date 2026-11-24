@@ -188,6 +188,9 @@ class TestDriverContract(unittest.TestCase):
         free, hold, max_hold = caps.stop_release_free_s, caps.stop_release_hold_s, caps.stop_release_max_hold_s
         self.assertTrue((free, hold, max_hold) == (0, 0, 0) or (free > 0 and 0 < hold < max_hold),
                         (free, hold, max_hold))
+        # HELD of the buttons other than STOP: the one value for all nodes of the platform files, 0 without it.
+        shared = layers.parameters(layers.files(PLATFORM), "any_node")
+        self.assertAlmostEqual(caps.button_hold_s, shared.get("button_hold_s", 0.0), places=5)
         # Without a safety measurement neither its date nor its time.
         self.assertEqual(caps.failsafe_without_host_s > 0, caps.safety_measurement_date != "")
 

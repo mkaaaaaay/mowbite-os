@@ -4,6 +4,9 @@
 /**:
   ros__parameters:
     journal_platform: tron
+    # Start, home and on held this long give HELD (tron_buttons), hw/capabilities reports it (tron_mcu); the vendor
+    # also took 3 s.
+    button_hold_s: 3.0
     # The vendor's NPU runtime, model and class list for tron_vision and the obstacles of tron_stereo, copied by hand
     # from its update; never in repo, bundle or image.
     library_path: /userdata/mowbite-vision/librknnrt.so

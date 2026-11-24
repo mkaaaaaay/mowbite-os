@@ -196,6 +196,8 @@ class McuNode : public rclcpp::Node {
     imu_roll_offset_deg_ = declare_parameter("imu_roll_offset_deg", 0.0);
     imu_pitch_offset_deg_ = declare_parameter("imu_pitch_offset_deg", 0.0);
     failsafe_without_host_s_ = declare_parameter("failsafe_without_host", -1.0);
+    // HELD of the other buttons on top, read by tron_buttons from the same value; 0: none, and none in read_only.
+    button_hold_s_ = read_only_ ? 0.0 : std::max(0.0, declare_parameter("button_hold_s", 0.0));
     // The sensors that send hw/obstacles, as their ids there; empty while none does.
     obstacle_sources_ = declare_parameter("obstacle_sources", std::vector<std::string>{});
     // The highest obstacle_mode they are proven for here (1 show, 2 stop, 3 avoid).
@@ -820,6 +822,7 @@ class McuNode : public rclcpp::Node {
       msg.stop_release_hold_s = static_cast<float>(tron::kStopReleaseHoldS);
       msg.stop_release_max_hold_s = static_cast<float>(tron::kStopReleaseMaxHoldS);
     }
+    msg.button_hold_s = static_cast<float>(button_hold_s_);
     msg.blade_allowed = blade_allowed_;
     msg.silence_max_s = static_cast<float>(silence_max_s_);
     msg.driver_end = !read_only_;
@@ -1165,6 +1168,7 @@ class McuNode : public rclcpp::Node {
   uint16_t mow_height_mm_;
   double failsafe_without_host_s_;
   double silence_max_s_;
+  double button_hold_s_;
   bool blade_allowed_;
   // When the process ends after hw/end, under mutex_.
   std::optional<double> end_at_s_;
