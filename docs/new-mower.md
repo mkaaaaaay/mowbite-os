@@ -91,6 +91,13 @@ Duties:
   Before the first such clear it writes a mark in `data_dir` and removes it on the release; a start with the mark
   latches, so a crash in that time never unlocks unseen. Measure first how the board keeps stop, bumper and lift
   (Tron: `mowbite-measure --steps T8`).
+- Buttons for home, start and power (optional): the node that reads them publishes SHORT and HELD on `hw/button`
+  (`ButtonEvent`, HELD once at `button_hold_s`), and `button_hold_s` of `hw/capabilities` names that time; the same
+  value feeds both, from one place of the platform. `hw/button` may have several publishers, e.g. the driver for STOP
+  and a node of its own for the other buttons. The logic ignores them in SETUP, while the emergency is latched and
+  while charging; a start by button passes the same checks as one from the app. Where holding POWER cuts the power
+  in hardware (the Tron, after about 3 s), HELD of POWER comes just before: switching the blade off and stopping then
+  is only an attempt, what is written has to be written before.
 - Capabilities: `platform` is the same name as in the geometry file; set `gnss_receiver_time` only where
   `receiver_time_ms` of `gps/absolute_pose` is the UTC time of day of the receiver (Tron), not a clock of the board
   (xCore). `mowbite_clock` compares it with the wall clock: off by more than 60 s, date and sun count as unknown

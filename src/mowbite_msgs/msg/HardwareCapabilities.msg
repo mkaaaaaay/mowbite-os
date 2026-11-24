@@ -51,6 +51,8 @@ float32 max_angular_speed
 float32 stop_release_free_s
 float32 stop_release_hold_s
 float32 stop_release_max_hold_s
+# How long a button other than STOP is held for HELD on hw/button (s); 0 without such buttons.
+float32 button_hold_s
 
 # How long the hardware keeps the last setpoint without the host, measured on the device; negative while unknown.
 float32 failsafe_without_host_s
