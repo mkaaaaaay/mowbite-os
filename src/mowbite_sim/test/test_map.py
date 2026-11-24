@@ -284,21 +284,21 @@ class TestMap(unittest.TestCase):
         def stored():
             return self.probe.rpc("map.area_properties")["result"]
 
-        self.assertEqual(len(stored()), 8)
+        self.assertEqual(len(stored()), 9)
         offer = RpcMethods()
         offer.node_id = "mowbite_planner"
         offer.methods = ["planner.settings", "planner.plan"]
         self.probe.methods_pub.publish(offer)
         end = time.time() + 10
-        while time.time() < end and len(stored()) != 11:
+        while time.time() < end and len(stored()) != 12:
             time.sleep(0.2)
-        self.assertEqual(stored()[8:], ["mow_around", "angle_min", "angle_max"])
+        self.assertEqual(stored()[9:], ["mow_around", "angle_min", "angle_max"])
         offer.methods = []
         self.probe.methods_pub.publish(offer)
         end = time.time() + 10
-        while time.time() < end and len(stored()) != 8:
+        while time.time() < end and len(stored()) != 9:
             time.sleep(0.2)
-        self.assertEqual(len(stored()), 8)
+        self.assertEqual(len(stored()), 9)
 
     def test_08_the_planner_replaces_the_map_through_map_replace_with_a_version_check(self):
         read = self.probe.ros["map"].data

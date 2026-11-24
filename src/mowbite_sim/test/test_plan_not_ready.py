@@ -25,6 +25,10 @@ WORK = tempfile.mkdtemp(prefix="mowbite_plan_not_ready_")
 _, _, _, DATA = sim_files(WORK)
 OUTLINE = {"outline": [{"x": 0, "y": 0}, {"x": 4, "y": 0}, {"x": 4, "y": 3}, {"x": 0, "y": 3}], "obstacles": [],
            "outline_count": 1, "angle": 0.0}
+# The planner on OS plans only with a map, also an outline: the app stores one right after the start.
+LAWN = {"areas": [{"id": "lawn", "properties": {"type": "mow"},
+                   "outline": [{"x": -1, "y": -1}, {"x": 6, "y": -1}, {"x": 6, "y": 5}, {"x": -1, "y": 5}]}],
+        "docking_stations": []}
 # The answer of the logic before the planner offers its service.
 MISSING = "The planner is not running"
 # The planner's 30 s and the retries' 60 s.
@@ -41,6 +45,10 @@ class TestPlanNotReady(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.broker = MqttBroker("plan_not_ready_test", MQTT_PORT)
+        tries = itertools.count(1)
+        stored = wait_until(lambda: (cls.broker.rpc("map.replace", [LAWN], f"map-{next(tries)}") or {}).get("result"),
+                            60, poll=0.2)
+        assert stored, "map.replace never answered"
 
     @classmethod
     def tearDownClass(cls):
