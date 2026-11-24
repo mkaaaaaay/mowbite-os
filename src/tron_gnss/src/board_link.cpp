@@ -4,6 +4,7 @@ namespace tron {
 
 void BoardLink::OnPortOpened() {
   state_ = BoardState::kUnknown;
+  heard_ = false;
   active_ = false;
   pending_reset_ = false;
 }
@@ -13,6 +14,7 @@ void BoardLink::OnBoardReport(bool on, double now) {
   if (state_ == BoardState::kOn && !on && config_.reset_on_off && wanted(now)) pending_reset_ = true;
   if (on) pending_reset_ = false;
   state_ = on ? BoardState::kOn : BoardState::kOff;
+  heard_ = true;
 }
 
 bool BoardLink::wanted(double now) const {
@@ -21,7 +23,7 @@ bool BoardLink::wanted(double now) const {
 
 bool BoardLink::OnRtcm(size_t bytes, double now) {
   last_rtcm_ = now;
-  if (config_.gate && state_ != BoardState::kOn) {
+  if (!heard_ || (config_.gate && state_ != BoardState::kOn)) {
     dropped_bytes_ += bytes;
     return false;
   }
@@ -30,7 +32,7 @@ bool BoardLink::OnRtcm(size_t bytes, double now) {
 }
 
 std::string BoardLink::Poll(double now) {
-  if (!wanted(now)) {
+  if (!heard_ || !wanted(now)) {
     active_ = false;
     pending_reset_ = false;
     return {};

@@ -277,7 +277,13 @@ class GnssNode : public rclcpp::Node {
 
   void HandleBytes(const uint8_t* data, size_t size, double now) {
     std::vector<tron::NmeaMessage> messages;
+    const uint64_t valid_before = parser_.decoded() + parser_.ignored();
     parser_.Feed(data, size, messages);
+    if (parser_.decoded() + parser_.ignored() != valid_before) {
+      std::lock_guard<std::mutex> lock(board_mutex_);
+      if (!board_.heard()) RCLCPP_INFO(get_logger(), "First valid line on %s: writing allowed", port_name_.c_str());
+      board_.OnHeard();
+    }
     for (; reported_kinds_ < parser_.ignored_kinds().size(); ++reported_kinds_) {
       RCLCPP_INFO(get_logger(), "Not decoded: %s", parser_.ignored_kinds()[reported_kinds_].c_str());
     }

@@ -29,13 +29,22 @@ enum class BoardState { kUnknown, kOn, kOff };
 
 // The handshake with the RTK board in front of the UM960, without port and clock. On activation only $GNRTK,ON (a reset
 // would cost ~25 s of float), the keep-alive while RTCM comes, RTKRESET + ON after the board fell back on its own.
+// Nothing goes to a port before a valid line came from it since it opened.
 class BoardLink {
  public:
   explicit BoardLink(const BoardConfig& config) : config_(config) {
   }
 
-  // The port was opened (again): the board's state is unknown, ON goes out with the next RTCM.
+  // The port was opened (again): the board's state is unknown, ON goes out with the next RTCM once it was heard.
   void OnPortOpened();
+  // A valid line from the port.
+  void OnHeard() {
+    heard_ = true;
+  }
+  bool heard() const {
+    return heard_;
+  }
+  // Also a valid line.
   void OnBoardReport(bool on, double now);
   // RTCM of this size came from the NTRIP client. True if it may be written now, otherwise it is dropped and counted.
   bool OnRtcm(size_t bytes, double now);
@@ -65,6 +74,7 @@ class BoardLink {
  private:
   BoardConfig config_;
   BoardState state_ = BoardState::kUnknown;
+  bool heard_ = false;
   bool active_ = false;
   bool pending_reset_ = false;
   double next_on_ = 0;

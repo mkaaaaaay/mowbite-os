@@ -22,6 +22,7 @@ TEST_F(BoardTest, SilentWithoutRtcm) {
 
 TEST_F(BoardTest, FirstRtcmGivesOnWithoutResetAndIsHeldUntilOn) {
   board.OnPortOpened();
+  board.OnHeard();
   EXPECT_FALSE(board.OnRtcm(100, 1.0));
   EXPECT_EQ(board.dropped_bytes(), 100u);
   EXPECT_EQ(board.Poll(1.0), kOn);
@@ -146,6 +147,8 @@ TEST_F(BoardTest, ReopenedPortMakesTheStateUnknownAndOnGoesOutAgain) {
   board.OnPortOpened();
   EXPECT_EQ(board.state(), BoardState::kUnknown);
   EXPECT_FALSE(board.OnRtcm(50, 1));
+  EXPECT_EQ(board.Poll(1), "");
+  board.OnHeard();
   EXPECT_EQ(board.Poll(1), kOn);
 }
 
@@ -153,8 +156,29 @@ TEST_F(BoardTest, WithoutGateEverythingIsForwarded) {
   BoardConfig config;
   config.gate = false;
   BoardLink link(config);
+  link.OnHeard();
   EXPECT_TRUE(link.OnRtcm(50, 0));
   EXPECT_EQ(link.Poll(0), kOn);
+}
+
+TEST_F(BoardTest, NothingGoesToABoardNotHeard) {
+  BoardConfig config;
+  config.gate = false;
+  BoardLink link(config);
+  link.OnPortOpened();
+  EXPECT_FALSE(link.OnRtcm(50, 0));
+  EXPECT_EQ(link.dropped_bytes(), 50u);
+  EXPECT_EQ(link.Poll(0), "");
+  EXPECT_EQ(link.Poll(5), "");
+  link.OnHeard();
+  EXPECT_TRUE(link.OnRtcm(50, 6));
+  EXPECT_EQ(link.Poll(6), kOn);
+  // A reopened port is unheard again; a board report counts as heard.
+  link.OnPortOpened();
+  EXPECT_FALSE(link.OnRtcm(50, 7));
+  EXPECT_EQ(link.Poll(7), "");
+  link.OnBoardReport(false, 7.5);
+  EXPECT_EQ(link.Poll(7.5), kOn);
 }
 
 }  // namespace
