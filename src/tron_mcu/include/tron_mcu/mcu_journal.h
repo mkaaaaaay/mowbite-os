@@ -141,7 +141,7 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::SetHold, &tron::McuControl::Tick, &tron::McuControl::SetStopClearMark,
                           &tron::McuControl::Silence, &tron::McuControl::End,
                           &tron::McuControl::SilenceWithBlade, &tron::McuControl::OnWheelSpeed,
-                          &tron::McuControl::OnSetupMotion);
+                          &tron::McuControl::OnSetupMotion, &tron::McuControl::OnFrame);
 
   // Every call with the wall clock, for a copy of a journal without its place (mowbite_replay anonymize): the date of
   // a tick and of the heartbeat it sends.

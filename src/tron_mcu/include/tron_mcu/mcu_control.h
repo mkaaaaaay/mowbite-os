@@ -102,6 +102,7 @@ constexpr uint32_t kReasonFence = 1u << 14;
 constexpr uint32_t kReasonStuck = 1u << 15;
 constexpr uint32_t kReasonImuTimeout = 1u << 16;
 constexpr uint32_t kReasonMowerNotStopped = 1u << 17;
+constexpr uint32_t kReasonBoardNotHeard = 1u << 23;
 // The bits a node above the driver may latch with over hw/emergency.
 using mowbite_hold::kHostLatchReasons;
 
@@ -236,8 +237,12 @@ class McuControl {
   // Not allowed: Charge 0 at once, repeat_count times, and no Charge 1 until allowed again or the contact ends, so
   // that the mower leaves the station without charging. Allowed: Charge 1 at the next tick while there is contact.
   void SetCharging(bool allowed, double now);
-  // The MCU state is unknown after the port (re)opens: the blade goes off and the wheels get the stop frames.
+  // The MCU state is unknown after the port (re)opens: the blade goes off and the wheels get the stop frames, but only
+  // after OnFrame. Until then nothing goes out and the driver blocks, reported as BOARD_NOT_HEARD after
+  // telemetry_timeout.
   void OnConnected(double now);
+  // A valid frame from the MCU.
+  void OnFrame();
   // The hold of an update (hold.json): motion and blade blocked like before the first IMU sample, without an
   // emergency; a moving mower gets a stop, the blade goes off. Charging goes on.
   void SetHold(bool held);
@@ -306,6 +311,7 @@ class McuControl {
   bool ImuStale(double now) const;
   bool NoImuYet() const;
   bool ImuStarting(double now) const;
+  bool BoardNotHeard(double now) const;
   bool FirmwareUnconfirmed() const;
   bool FirmwareIncompatible(double now) const;
   bool Lift(double now) const;
@@ -387,6 +393,8 @@ class McuControl {
   std::optional<bool> firmware_ok_;
   // When the port opened; before that the first tick counts.
   std::optional<double> connected_s_;
+  // A valid frame came since the port opened.
+  bool heard_ = false;
 
   bool held_ = false;
 

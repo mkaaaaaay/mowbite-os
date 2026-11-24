@@ -232,9 +232,14 @@ void McuControl::OnConnected(double now) {
   // After the port reopens the MCU might run another firmware, e.g. after an update.
   firmware_ok_.reset();
   connected_s_ = now;
+  heard_ = false;
   moving_ = false;
   StartStop(now);
   stop_release_.Interrupt();
+}
+
+void McuControl::OnFrame() {
+  heard_ = true;
 }
 
 void McuControl::SetHold(bool held) {
@@ -345,11 +350,14 @@ bool McuControl::StopClearReady(double now) const {
 }
 
 bool McuControl::Blocked(double now) const {
-  return silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareUnconfirmed();
+  return !heard_ || silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() ||
+         FirmwareUnconfirmed();
 }
 
-// As hw/status shows it: an IMU or a version frame still due after the start blocks without an emergency.
+// As hw/status shows it: a first frame, an IMU or a version frame still due after the start blocks without an
+// emergency.
 bool McuControl::Reported(double now) const {
+  if (!heard_) return latched_ || BoardNotHeard(now);
   return latched_ || TelemetryStale(now) || (NoImuYet() && !ImuStarting(now)) || FirmwareIncompatible(now);
 }
 
@@ -357,7 +365,8 @@ uint32_t McuControl::EmergencyReason(double now) const {
   if (!Reported(now)) return 0;
   uint32_t reason = latch_reason_;
   if (latched_) reason |= kReasonLatch;
-  if (TelemetryStale(now)) reason |= kReasonTimeoutInputs;
+  if (BoardNotHeard(now)) reason |= kReasonBoardNotHeard;
+  if (heard_ && TelemetryStale(now)) reason |= kReasonTimeoutInputs;
   if (Stop(now)) reason |= kReasonStop;
   if (Lift(now)) reason |= kReasonLift;
   if (config_.bumper_latches_emergency && Bumper(now)) reason |= kReasonCollision;
@@ -389,13 +398,17 @@ bool McuControl::ImuStarting(double now) const {
   return NoImuYet() && (!start_s_ || now - *start_s_ <= start_time + kDeadlineSlackS);
 }
 
+bool McuControl::BoardNotHeard(double now) const {
+  return !heard_ && (!connected_s_ || now - *connected_s_ > config_.telemetry_timeout_s + kDeadlineSlackS);
+}
+
 bool McuControl::FirmwareUnconfirmed() const {
   const bool checked = !config_.expected_cutter_version.empty() || !config_.expected_chassis_version.empty();
   return checked && firmware_ok_ != true;
 }
 
 bool McuControl::FirmwareIncompatible(double now) const {
-  if (!FirmwareUnconfirmed()) return false;
+  if (!heard_ || !FirmwareUnconfirmed()) return false;
   if (firmware_ok_.has_value()) return true;
   const std::optional<double> since = connected_s_ ? connected_s_ : start_s_;
   return since && now - *since > kVersionStartS + kDeadlineSlackS;
@@ -440,6 +453,7 @@ double McuControl::StopAfter() const {
 
 std::vector<SubPacket> McuControl::Farewell() const {
   std::vector<SubPacket> out;
+  if (!heard_) return out;
   if (moving_ || !DockContact()) out.push_back(ZeroSpeedPacket());
   out.push_back(BladeOff());
   return out;
@@ -468,6 +482,15 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
       return out;
     }
     EndSilence(now);
+  }
+  // Not a byte to a port whose board was not heard: it might be another board than the one configured.
+  if (!heard_) {
+    pending_cmd_.reset();
+    pending_imu_.reset();
+    release_requested_ = false;
+    release_until_s_.reset();
+    DropBlade(BladeOffReason::kBlocked);
+    return out;
   }
 
   // The state of the MCU is unknown when the driver takes over: the blade goes off and the wheels get the stop.

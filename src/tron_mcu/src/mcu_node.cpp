@@ -61,6 +61,7 @@ static_assert(tron::kReasonStuck == HardwareStatus::REASON_STUCK);
 static_assert(mowbite_hold::kReasonUnexpectedRestart == HardwareStatus::REASON_UNEXPECTED_RESTART);
 static_assert(tron::kReasonImuTimeout == HardwareStatus::REASON_IMU_TIMEOUT);
 static_assert(tron::kReasonMowerNotStopped == HardwareStatus::REASON_MOWER_NOT_STOPPED);
+static_assert(tron::kReasonBoardNotHeard == HardwareStatus::REASON_BOARD_NOT_HEARD);
 static_assert(static_cast<uint8_t>(tron::StopPress::kHeld) == mowbite_msgs::msg::ButtonEvent::PRESS_HELD);
 static_assert(static_cast<uint8_t>(tron::StopPress::kLong) == mowbite_msgs::msg::ButtonEvent::PRESS_LONG);
 static_assert(static_cast<uint8_t>(tron::StopPress::kCanceled) == mowbite_msgs::msg::ButtonEvent::PRESS_CANCELED);
@@ -634,6 +635,7 @@ class McuNode : public rclcpp::Node {
       std::lock_guard<std::mutex> lock(mutex_);
       double now = MonotonicSeconds();
       for (const auto& frame : parser_.Push(data, length)) {
+        control_.Call<&C::OnFrame>();
         for (const auto& packet : frame) {
           if (packet.type != static_cast<uint8_t>(tron::PacketType::kMcuToHost)) continue;
           if (packet.module == static_cast<uint8_t>(Module::kSpeed)) {
@@ -853,6 +855,10 @@ class McuNode : public rclcpp::Node {
       // Before its first sample the IMU only blocks, that is no gap.
       if ((added & tron::kReasonImuTimeout) && imu_seen_) {
         RCLCPP_ERROR(get_logger(), "No IMU sample for %.1f s: motion and blade blocked until released", imu_timeout_s_);
+      }
+      if (added & tron::kReasonBoardNotHeard) {
+        RCLCPP_ERROR(get_logger(), "No valid frame on %s since it opened: nothing sent, motion and blade blocked",
+                     port_name_.c_str());
       }
       if (added & tron::kReasonMowerNotStopped) {
         RCLCPP_ERROR(get_logger(), "Blade still at %d rpm after it was switched off: blocked, off sent again",

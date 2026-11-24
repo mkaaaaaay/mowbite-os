@@ -72,6 +72,7 @@ TEST_F(CoreReplay, McuControl) {
     Journaled<C> mcu(journal_.get(), config);
     tron::WallClock wall;
     mcu.Call<&C::OnConnected>(0.0);
+    mcu.Call<&C::OnFrame>();
     mcu.Call<&C::OnVersions>(tron::VersionInfo{{1, 2, 3}, {4, 5, 6}, {0, 0, 0}});
     for (int i = 0; i < 300; ++i) {
       const double now = 0.01 * i;
@@ -383,6 +384,7 @@ TEST_F(CoreReplay, AnonymizedCopyHasNoPlace) {
 
     Journaled<C> mcu(journal_.get(), tron::McuControlConfig{});
     mcu.Call<&C::OnConnected>(0.0);
+    mcu.Call<&C::OnFrame>();
     mcu.Call<&C::Tick>(0.0, tron::WallClock{2026, 6, 15, 8, 0, 0, 0});
     const uint16_t port = journal_->Define({{"name", "port.tx"}, {"kind", "raw"}});
     const uint8_t frame[4] = {0xA5, 26, 6, 15};

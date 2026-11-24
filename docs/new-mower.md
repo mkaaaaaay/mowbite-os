@@ -103,6 +103,10 @@ Duties:
   drive and blade without an emergency, for a fixed start time at most (`tron_mcu`: `imu_start_timeout`, 3 s for the
   version). After it the driver accepts or reports an emergency; a version that does not match is reported at once.
   Whoever starts a driver waits that long before the first request.
+- Hear first: after opening its port a driver sends nothing there, no heartbeat either, until a valid frame of its
+  board came. Past its telemetry timeout without one it reports `BOARD_NOT_HEARD` (not latched, the first frame ends
+  it); a reopened port starts it anew. The contract test checks it with the fake board started quiet
+  (`board_quiet`). A passive receiver, as the GNSS of the Tron, only waits for a valid line before it writes.
 - Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
   image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in
   `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is

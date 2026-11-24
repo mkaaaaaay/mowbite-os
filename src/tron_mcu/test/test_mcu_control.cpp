@@ -72,7 +72,10 @@ class ControlTest : public ::testing::Test {
   void Run(double until, bool feed_sensor = true) {
     while (now_ < until - 1e-9) {
       now_ = ++step_ * 0.01;
-      if (feed_sensor) control_.OnSensorInfo(sensor_, now_);
+      if (feed_sensor) {
+        control_.OnFrame();
+        control_.OnSensorInfo(sensor_, now_);
+      }
       if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
       if (feed_setup_) control_.OnSetupMotion(true, now_);
       if (feed_wheels_) control_.OnWheelSpeed(wheel_linear_, wheel_angular_, now_);
@@ -554,6 +557,8 @@ TEST_F(ControlTest, ReasonsAddUpUntilRelease) {
 }
 
 TEST_F(ControlTest, StaleTelemetryBlocksWithoutLatch) {
+  // A frame without sensor info: heard, but no telemetry.
+  control_.OnFrame();
   Run(0.5, false);
   EXPECT_TRUE(control_.Status(now_).blocked);
   EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonTimeoutInputs);
@@ -568,6 +573,7 @@ TEST_F(ControlTest, NonLatchingBumperGivesNoReason) {
   McuControl control(config);
   SensorInfo sensor;
   sensor.bumper_left = true;
+  control.OnFrame();
   control.OnSensorInfo(sensor, 0.01);
   control.Tick(0.01, kWall);
   EXPECT_TRUE(control.Status(0.01).bumper);
@@ -820,9 +826,9 @@ TEST_F(BladeControlTest, RenewalWhileBlockedEndsTheLease) {
 
 TEST_F(BladeControlTest, ARefusalForAnEmergencyCarriesItsReasonBits) {
   uint32_t reason = 1;
-  // No telemetry yet: blocked by the input timeout, which is no latch.
+  // No frame yet, the port never opened: blocked, which is no latch.
   EXPECT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kBlocked);
-  EXPECT_EQ(reason, kReasonTimeoutInputs);
+  EXPECT_EQ(reason, kReasonBoardNotHeard);
   Run(0.5);
   ASSERT_EQ(control_.SetBlade(BladeOn(), now_, &reason), BladeResult::kOk);
   EXPECT_EQ(reason, 0u);
@@ -1421,6 +1427,7 @@ TEST_F(ControlTest, AReconnectSendsAHeartbeatAtOnce) {
 TEST_F(ControlTest, HeartbeatKeepsTenHertzOnLateTicks) {
   // Ticks every 70 ms: a heartbeat is due every 100 ms of the schedule, not 100 ms after the last late one.
   for (int i = 1; i <= 100; i++) {
+    control_.OnFrame();
     control_.OnSensorInfo(sensor_, i * 0.07);
     for (auto& packet : control_.Tick(i * 0.07, kWall)) sent_.push_back({i * 0.07, packet});
   }
@@ -2031,6 +2038,7 @@ TEST_F(StartLatchedTest, ALatchWithTheSameBitCountsOnce) {
 }
 
 TEST_F(StartLatchedTest, AReleaseWithoutTelemetryHasNoEffect) {
+  control_.OnFrame();
   Run(0.5, false);
   EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
   Run(2.0, false);
@@ -2038,6 +2046,66 @@ TEST_F(StartLatchedTest, AReleaseWithoutTelemetryHasNoEffect) {
   Run(2.5);
   EXPECT_TRUE(control_.Status(now_).latched);
   EXPECT_FALSE(DrivesOrMows(now_ + 0.5));
+}
+
+TEST_F(StartLatchedTest, AReleaseBeforeTheBoardWasHeardHasNoEffect) {
+  control_.OnConnected(0.0);
+  EXPECT_TRUE(control_.ReleaseEmergency(now_, 1));
+  Run(0.5, false);
+  Run(1.0);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  EXPECT_FALSE(DrivesOrMows(now_ + 0.5));
+}
+
+TEST_F(BladeControlTest, NotAByteBeforeTheFirstFrame) {
+  control_.OnConnected(0.0);
+  control_.OnCmdVel(0.2f, 0.0f, now_);
+  control_.SetBlade(BladeOn(), now_, nullptr);
+  control_.ReleaseEmergency(now_, 0);
+  control_.SetCharging(false, now_);
+  Run(2.0, false);
+  EXPECT_TRUE(sent_.empty());
+  EXPECT_TRUE(control_.GuardFrames().empty());
+  EXPECT_TRUE(control_.Farewell().empty());
+  // The first frame starts the takeover: the stop and the blade off, then the heartbeat, nothing that moves.
+  control_.OnFrame();
+  Run(2.05, false);
+  EXPECT_FALSE(Times(IsHeartbeat).empty());
+  EXPECT_FALSE(Times(IsBladeOff).empty());
+  for (const auto& s : sent_) {
+    EXPECT_FALSE(IsMovingSpeed(s.packet));
+    EXPECT_FALSE(IsBladeOn(s.packet));
+  }
+  EXPECT_FALSE(control_.GuardFrames().empty());
+}
+
+TEST_F(ControlTest, BoardNotHeardIsReportedAfterTheTelemetryTimeout) {
+  control_.OnConnected(0.0);
+  Run(1.0, false);
+  auto status = control_.Status(now_);
+  EXPECT_FALSE(status.blocked);
+  EXPECT_EQ(status.emergency_reason, 0u);
+  EXPECT_FALSE(DrivesOrMows(1.0));
+  Run(1.05, false);
+  status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_FALSE(status.latched);
+  EXPECT_TRUE(status.telemetry_stale);
+  EXPECT_EQ(status.emergency_reason, kReasonBoardNotHeard);
+  // The first frame ends it without a release; then all is as at a normal start.
+  Run(1.2);
+  status = control_.Status(now_);
+  EXPECT_FALSE(status.blocked);
+  EXPECT_EQ(status.emergency_reason, 0u);
+  EXPECT_TRUE(DrivesOrMows(1.4));
+  // Silence later is the input timeout, a reopen is unheard again.
+  Run(2.6, false);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonTimeoutInputs);
+  control_.OnConnected(now_);
+  Run(3.0, false);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  Run(3.7, false);
+  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonBoardNotHeard);
 }
 
 TEST_F(StartLatchedImuTest, TheImuStillDueIsNoReasonAndAReleaseBeforeItHasNoEffect) {
