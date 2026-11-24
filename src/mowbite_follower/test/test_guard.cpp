@@ -253,11 +253,21 @@ TEST(TurnRoom, TheSweptBodyStaysInTheLawnOrTheTurnIsRefused) {
   // 0.3 m beside the edge on its left: to the left the front corner (0.644 m) gets 0.34 m over it, to the right the
   // body stays in.
   const std::string left = fence.CheckTurn({5, 5.7, 0}, M_PI / 2, kBody, 0.05);
-  EXPECT_NE(left.find("0.34 m out of the allowed areas"), std::string::npos) << left;
+  EXPECT_NE(left.find("0.34 m further out of the allowed areas"), std::string::npos) << left;
   EXPECT_EQ(fence.CheckTurn({5, 5.7, 0}, -M_PI / 2, kBody, 0.05), "");
   // Start and end in the lawn, the nose over the edge half way.
   EXPECT_NE(fence.CheckTurn({5, 5.5, 0}, M_PI, kBody, 0.05), "");
   EXPECT_EQ(fence.CheckTurn({5, 5.5, 0}, -M_PI, kBody, 0.05), "");
+}
+
+TEST(TurnRoom, ABodyOverTheEdgeAlreadyMayTurnAsLongAsItGetsNoFurtherOut) {
+  const Geofence fence({kLawn}, {}, 0.5);
+  // Its side 0.135 m over the edge, as the planner lets it mow along there.
+  EXPECT_EQ(fence.CheckTurn({5, 5.9, 0}, 5.0 * M_PI / 180.0, kBody, 0.05), "");
+  EXPECT_EQ(fence.CheckTurn({5, 5.9, 0}, -M_PI / 2, kBody, 0.05), "");
+  // Towards the edge the nose gets 0.41 m further out.
+  const std::string left = fence.CheckTurn({5, 5.9, 0}, M_PI / 2, kBody, 0.05);
+  EXPECT_NE(left.find("0.41 m further out of the allowed areas"), std::string::npos) << left;
 }
 
 TEST(TurnRoom, TheToleranceCountsForTheCornerOfTheBody) {

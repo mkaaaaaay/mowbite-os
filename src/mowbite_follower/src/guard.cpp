@@ -139,7 +139,8 @@ std::string Geofence::CheckTurn(const Pose2& at, double delta, const Ring& body,
     if (InReach(ring, at.x, at.y, reach)) obstacles.push_back(&ring);
   }
   const std::vector<Point2> edge = EdgePoints(body);
-  // The most the body gets out of the allowed areas and into an obstacle over the whole turn.
+  // The most the body gets out of the allowed areas, at the start and over the whole turn, and into an obstacle.
+  double out_at_start = 0;
   double out = 0;
   double into = 0;
   const int steps = std::max(1, static_cast<int>(std::ceil(std::abs(delta) / kTurnStep)));
@@ -159,6 +160,7 @@ std::string Geofence::CheckTurn(const Pose2& at, double delta, const Ring& body,
         if (outside == 0.0) break;
       }
       out = std::max(out, outside);
+      if (k == 0) out_at_start = out;
     }
     // An obstacle smaller than the body: its corners inside the body.
     Ring placed;
@@ -173,8 +175,10 @@ std::string Geofence::CheckTurn(const Pose2& at, double delta, const Ring& body,
   if (into > tolerance) {
     return Format("turning on the spot by %.0f deg, the body would reach %.2f m into an obstacle", degrees, into);
   }
-  if (out > tolerance) {
-    return Format("turning on the spot by %.0f deg, the body would get %.2f m out of the allowed areas", degrees, out);
+  // Beside an edge the planner may let the body reach over it: only what the turn adds counts.
+  if (out - out_at_start > tolerance) {
+    return Format("turning on the spot by %.0f deg, the body would get %.2f m further out of the allowed areas",
+                  degrees, out - out_at_start);
   }
   return "";
 }

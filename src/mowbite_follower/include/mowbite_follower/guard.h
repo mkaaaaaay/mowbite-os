@@ -29,8 +29,9 @@ class Geofence {
 
   // Empty if the point may be there, else why not.
   std::string Check(double x, double y) const;
-  // Empty if the body (base_link), turned on the spot at the place of at from its heading by delta rad, stays in the
-  // allowed areas and out of the obstacles all the way, by at most tolerance m; else by how much not.
+  // Empty if the body (base_link), turned on the spot at the place of at from its heading by delta rad, gets at most
+  // tolerance m further out of the allowed areas than it is before the turn and at most tolerance m into an obstacle
+  // all the way; else by how much more.
   std::string CheckTurn(const Pose2& at, double delta, const Ring& body, double tolerance) const;
   // Why the areas cannot be a geofence, empty if they can.
   std::string Problem() const;

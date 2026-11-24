@@ -430,7 +430,7 @@ class TestFollower(unittest.TestCase):
         w.place(2.0, 3.7, 0.0)
         result = w.follow(line_poses(2.0, 3.7, math.pi / 2, 1.0), body=body)
         self.assertEqual(result.reason, Result.REASON_OUTSIDE, result.message)
-        self.assertIn("by 90 deg, the body would get 0.34 m out of the allowed areas", result.message)
+        self.assertIn("by 90 deg, the body would get 0.34 m further out of the allowed areas", result.message)
         with w.lock:
             self.assertEqual(w.yaw, 0.0)
         # Turning the other way it has the room.
