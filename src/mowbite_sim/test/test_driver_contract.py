@@ -93,21 +93,23 @@ class Probe(HwProbe):
 
 
 class TestDriverContract(unittest.TestCase):
+    # The driver answered healthy once; launch_testing runs the tests on a copy of this class, so only type(self).
+    ready = False
+
     @classmethod
     def setUpClass(cls):
         rclpy.init()
         cls.probe = Probe()
-        cls.ready = False
 
     def setUp(self):
-        if TestDriverContract.ready or self._testMethodName == "test_0_board_not_heard":
+        if type(self).ready or self._testMethodName == "test_0_board_not_heard":
             return
         if getattr(CASE, "quiet", False):
             CASE.board_quiet(False)
         ready = self.probe.wait_for(
             lambda p: p.status is not None and p.status.telemetry_ok and not p.status.emergency, 20)
         assert ready, "driver never ready"
-        TestDriverContract.ready = True
+        type(self).ready = True
 
     @classmethod
     def tearDownClass(cls):
@@ -161,7 +163,7 @@ class TestDriverContract(unittest.TestCase):
         CASE.board_quiet(False)
         ready = p.wait_for(lambda p: p.status.telemetry_ok and not p.status.emergency, 20)
         self.assertTrue(ready, "the first frames did not end BOARD_NOT_HEARD")
-        TestDriverContract.ready = True
+        type(self).ready = True
 
     def test_a_capabilities_latched_and_complete(self):
         # The driver publishes them again once a board named its firmware; one that did not keeps an empty value.
