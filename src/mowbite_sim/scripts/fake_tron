@@ -1088,6 +1088,8 @@ def main():
                         if on or not flags.get("cutter_ignores_off", 0):
                             cutter_percent = min(100, struct.unpack("<H", payload[2:4])[0]) if on and not blocked else 0
                         entry["cutter"] = cutter_percent
+                        if len(payload) >= 12:
+                            entry["height"] = struct.unpack("<H", payload[10:12])[0]
                     log.write(entry)
     finally:
         remove_links((args.link, args.gnss_link, args.imu_link))

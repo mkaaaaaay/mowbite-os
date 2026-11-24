@@ -70,6 +70,15 @@ void LogicNode::UpdateBladeLocked() {
     SendBlade(false, 0, 0, blade_lease_s_);
     return;
   }
+  // Mowing: the height of the area or of mow_height_mm, a change sent at once with the blade running (T10: the board
+  // takes it and the blade turns on). A setup step keeps the height of its start.
+  uint16_t height = blade_height_mm_;
+  if (!setup || !blade_on_requested_) {
+    const double setting = setup ? setup_blade_height_mm_
+                                 : planner_.MowHeight(view.MowingAreaId()).value_or(logic_params_.Get("mow_height_mm"));
+    height = BladeHeightMm(setting, blade_height_control_, blade_height_min_mm_, blade_height_max_mm_);
+  }
+  const bool new_height = blade_on_requested_ && height != blade_height_mm_;
   // A setup step: its lease, renewed at the latest after half of it, or once and never again (BLADE_ONCE).
   const double lease = setup && setup_blade_lease_s_ > 0 ? setup_blade_lease_s_ : blade_lease_s_;
   if (once) {
@@ -77,18 +86,14 @@ void LogicNode::UpdateBladeLocked() {
   } else {
     blade_once_sent_ = false;
     const double renew = setup ? std::min(blade_renew_s_, lease / 2) : blade_renew_s_;
-    if (blade_on_requested_ && t - blade_sent_s_ < renew) return;
+    if (blade_on_requested_ && !new_height && t - blade_sent_s_ < renew) return;
   }
   if (!blade_client_->service_is_ready()) {
     core_.Call<&LogicCore::OnBladeRefused>("hw/blade is not available", 0);
     return;
   }
-  // The renewals keep the height of the start: a change of mow_height_mm, also of the area, waits for the next start.
-  if (!blade_on_requested_) {
-    const double setting = setup ? setup_blade_height_mm_
-                                 : planner_.MowHeight(view.MowingAreaId()).value_or(logic_params_.Get("mow_height_mm"));
-    blade_height_mm_ = BladeHeightMm(setting, blade_height_control_, blade_height_min_mm_, blade_height_max_mm_);
-  }
+  if (new_height) RCLCPP_INFO(get_logger(), "Cutting height %u mm, was %u mm", height, blade_height_mm_);
+  blade_height_mm_ = height;
   blade_on_requested_ = true;
   blade_once_sent_ = once;
   blade_sent_s_ = t;

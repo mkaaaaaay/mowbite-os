@@ -17757,7 +17757,7 @@
       "result": "#/$defs/logs.recent.result"
     },
     "map.area_properties": {
-      "description": "The properties an area of the map may have. mow_height_mm: the cutting height of a mowing area in mm instead of /mower_logic/mow_height_mm from the next start of the blade in it; map.replace takes it as params.set takes that setting, rounded and within its range; no effect where system.info.blade_height is null",
+      "description": "The properties an area of the map may have. mow_height_mm: the cutting height of a mowing area in mm instead of /mower_logic/mow_height_mm while the blade cuts in it, a change at once; map.replace takes it as params.set takes that setting, rounded and within its range; no effect where system.info.blade_height is null",
       "node": "mowbite_map",
       "offered": "",
       "params": "#/$defs/map.area_properties.params",
@@ -23685,7 +23685,7 @@
     },
     "mow_height_mm": {
       "default": 0.0,
-      "description": "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform",
+      "description": "Cutting height, a change at once also while the blade runs, within blade_height of system.info; 0 = that of the platform",
       "max": 150.0,
       "min": 0.0,
       "type": "integer",

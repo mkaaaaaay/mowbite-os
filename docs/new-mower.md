@@ -46,7 +46,8 @@ Duties:
 - Blade: on only with a lease (`lease_s`), off when it runs out, told to the board at least three times; heights
   outside the limits of `hw/capabilities` are refused; never on while an emergency is latched. With
   `blade_height_control` the driver gives its limits and the height it cuts at for `height_mm` 0
-  (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic sends at each start of the blade.
+  (`blade_height_default_mm`); the app then offers `mow_height_mm`, which the logic sends at each start of the blade
+  and again at once when it changes while the blade runs: the board has to take a new height with the blade on.
   Without it the logic always sends 0.
 - Blade motor fault: when your board reports a fault of the blade motor (stall, overload, over-current, ...), the
   driver switches the blade off with `BLADE_OFF_MOTOR_FAULT` and refuses it, naming the fault, until a report

@@ -1257,7 +1257,7 @@ const std::vector<Method>& Methods() {
        Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map",
        "The properties an area of the map may have. mow_height_mm: the cutting height of a mowing area in mm instead of "
-       "/mower_logic/mow_height_mm from the next start of the blade in it; map.replace takes it as params.set takes "
+       "/mower_logic/mow_height_mm while the blade cuts in it, a change at once; map.replace takes it as params.set takes "
        "that setting, rounded and within its range; no effect where system.info.blade_height is null",
        NoParams(),
        List("result", "Property names", Type::kString), ""},
@@ -1486,7 +1486,8 @@ const std::vector<SettingEntry>& LogicSettings() {
        "The blade motor may run again below this; below motor_hot_temperature"},
       {"dock_at_sunset", true, 0, 1, 1, "", "Whether a run started by hand goes home at sunset"},
       {"mow_height_mm", true, 0, 150, 0, "mm",
-       "Cutting height from the next start of the blade, within blade_height of system.info; 0 = that of the platform"},
+       "Cutting height, a change at once also while the blade runs, within blade_height of system.info; 0 = that of "
+       "the platform"},
       {"journal_enabled", true, 0, 1, 1, "",
        "Whether the OS keeps a journal of its processes for incidents; a change counts from the next start"},
       {"obstacle_mode", true, 0, 3, 0, "",

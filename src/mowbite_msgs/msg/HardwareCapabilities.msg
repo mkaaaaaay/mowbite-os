@@ -6,6 +6,7 @@ string platform
 diagnostic_msgs/KeyValue[] firmware
 
 bool blade_speed_control
+# The board takes a new height in hw/blade while the blade runs, without stopping it.
 bool blade_height_control
 uint16 blade_height_min_mm
 uint16 blade_height_max_mm

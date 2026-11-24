@@ -174,6 +174,16 @@ class TestMowing(unittest.TestCase):
         self.assertEqual(blades["job_id"], self.job)
         self.assertTrue(any(f["cutter"] > 0 for f in p.cutter_frames()))
 
+    def test_03a_a_new_cutting_height_reaches_the_board_while_the_blade_runs(self):
+        p = self.probe
+        frames = len(p.cutter_frames())
+        try:
+            self.assertIn("result", p.rpc("params.set", {"params": {"/mower_logic/mow_height_mm": 40}}, 10))
+            self.assertTrue(p.wait(lambda: any(f["cutter"] > 0 and f.get("height") == 40
+                                               for f in p.cutter_frames()[frames:]), 20), p.cutter_frames()[frames:])
+        finally:
+            p.rpc("params.set", {"params": {"/mower_logic/mow_height_mm": 60}}, 10)
+
     def test_04_pause_stops_wheels_and_blade_and_continue_goes_on(self):
         p = self.probe
         time.sleep(3.0)
