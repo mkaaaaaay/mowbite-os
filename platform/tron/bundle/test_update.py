@@ -967,6 +967,11 @@ class PublishTest(Base):
         self.assertEqual(sorted(e["url"] for e in index["bundles"]),
                          [f"app-{B}/mowbite-app-{B}.tar.gz", f"os-{A}/mowbite-os-{A}.tar.gz"])
         self.assertEqual({e["channel"] for e in index["bundles"]}, {"preview"})
+        self.assertEqual(sorted(e["release"] for e in index["bundles"]), [f"app-{B}", f"os-{A}"])
+        # One bundle per line, each line whole JSON once its comma is gone: the updater reads it without a parser.
+        with open(os.path.join(self.store, "index", "index.json")) as f:
+            lines = [line.rstrip(",\n") for line in f if line.startswith('{"component"')]
+        self.assertEqual(sorted(json.loads(line)["release"] for line in lines), [f"app-{B}", f"os-{A}"])
         self.assertTrue(os.path.exists(os.path.join(self.store, f"os-{A}", ".prerelease")))
         result, taken = self.taken("preview")
         self.assertEqual((result["result"], taken), ("ok", [("app", B), ("os", A)]))

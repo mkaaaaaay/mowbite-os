@@ -89,7 +89,8 @@ def entry_of(path, channel):
         raise Stop(f"{path}: the name is not mowbite-{component}-{meta['revision']}.tar.gz")
     return {"component": component, "revision": meta["revision"], "serial": meta["serial"],
             "date": meta.get("date", meta["serial"]), "size": size, "sha256": sha256(path), "file": name,
-            "url": f"{component}-{meta['revision']}/{name}", "channel": channel,
+            "url": f"{component}-{meta['revision']}/{name}", "release": f"{component}-{meta['revision']}",
+            "channel": channel,
             **{key: meta[key] for key in origin.FIELDS if key in meta}}
 
 
@@ -101,14 +102,21 @@ def keep_newest(entries):
     return kept
 
 
+# The index with one bundle per line, each line a whole JSON value: the MowBite Updater reads it with busybox only.
+def index_text(index):
+    head = [f"{json.dumps(key)}: {json.dumps(value)}," for key, value in index.items() if key != "bundles"]
+    bundles = [json.dumps(entry, separators=(",", ":")) for entry in index["bundles"]]
+    return "\n".join(["{", *head, '"bundles": [', ",\n".join(bundles), "]", "}", ""])
+
+
 def write_index(work, index, key):
+    bundles = [{**entry, "release": entry["url"].split("/")[0]} for entry in keep_newest(index["bundles"])]
     index = {**index, "schema": net.SCHEMA, "serial": max(index["serial"] + 1, int(time.time())),
-             "date": int(time.time()), "bundles": keep_newest(index["bundles"])}
+             "date": int(time.time()), "bundles": bundles}
     path = os.path.join(work, "new", origin.INDEX)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
-        json.dump(index, f, indent=1)
-        f.write("\n")
+        f.write(index_text(index))
     if os.path.getsize(path) > origin.MAX_INDEX:
         raise Stop(f"the index has {os.path.getsize(path)} bytes, more than the updater takes")
     subprocess.run(["ssh-keygen", "-q", "-Y", "sign", "-f", key, "-n", bundle.namespace("index"), path],
