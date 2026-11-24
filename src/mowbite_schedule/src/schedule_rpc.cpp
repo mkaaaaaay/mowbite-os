@@ -41,7 +41,7 @@ json GetAnswer(const Scheduler& scheduler, const ClockState& clock, const SunTim
   return {{"schema", kSchema},
           {"version", file.version},
           {"available", scheduler.available()},
-          {"reason", scheduler.available() ? json() : json("platform_off")},
+          {"reason", scheduler.available() ? json() : json(scheduler.UnavailableReason())},
           {"clock_ok", clock.ok},
           {"clock_reason", clock.ok ? json() : json(clock.reason)},
           {"next_start", UnixOrNull(scheduler.NextStart())},

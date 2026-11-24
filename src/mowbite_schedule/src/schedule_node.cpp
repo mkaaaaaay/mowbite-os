@@ -24,6 +24,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/nav_sat_fix.hpp>
+#include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 
@@ -128,6 +129,9 @@ class ScheduleNode : public rclcpp::Node {
     hold_sub_ = create_subscription<std_msgs::msg::Int64>(
         "logic/hold", LatchedQos(1),
         [this](const std_msgs::msg::Int64::ConstSharedPtr& msg) { hold_until_ = msg->data; });
+    data_rollback_sub_ = create_subscription<std_msgs::msg::Bool>(
+        "logic/data_rollback", LatchedQos(1),
+        [this](const std_msgs::msg::Bool::ConstSharedPtr& msg) { data_rollback_ = msg->data; });
     clock_sub_ = create_subscription<mowbite_msgs::msg::ClockStatus>(
         "time/clock", LatchedQos(1), [this](const mowbite_msgs::msg::ClockStatus::ConstSharedPtr& msg) {
           clock_ = ClockState{msg->ok, msg->reason};
@@ -248,6 +252,7 @@ class ScheduleNode : public rclcpp::Node {
     facts.rain_wet = hw && hw->rain;
     facts.rain_mode = rain_mode_;
     facts.hold = hold_until_ > facts.wall || (hw && hw->hold);
+    facts.data_rollback = data_rollback_;
     facts.latitude = latitude_;
     facts.longitude = longitude_;
     for (const auto& area : map_.MowAreas()) facts.areas.push_back(Area{area.id, area.mowable});
@@ -500,6 +505,7 @@ class ScheduleNode : public rclcpp::Node {
   bool rain_sensor_ = false;
   int rain_mode_ = 0;
   int64_t hold_until_ = 0;
+  bool data_rollback_ = false;
   ClockState clock_{false, "never_synced"};
   std::optional<double> latitude_;
   std::optional<double> longitude_;
@@ -525,6 +531,7 @@ class ScheduleNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::HardwareStatus>::SharedPtr hw_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr caps_sub_;
   rclcpp::Subscription<std_msgs::msg::Int64>::SharedPtr hold_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr data_rollback_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ClockStatus>::SharedPtr clock_sub_;
   rclcpp::Subscription<sensor_msgs::msg::NavSatFix>::SharedPtr datum_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr map_sub_;

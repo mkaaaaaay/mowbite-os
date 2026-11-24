@@ -243,3 +243,42 @@ TEST(LogicHold, AHoldOfTheDriverAloneStopsStartsToo) {
   EXPECT_FALSE(core.Held());
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
 }
+
+// A way back to an older backup whose map changed since the update: nothing mows by itself until the user confirmed
+// it, drives and recording stay; without confirm only the event tells it.
+TEST(LogicDataRollback, MowingWaitsForTheConfirmation) {
+  TestCore core = Ready();
+  core.SetDataRollback({{"from", 3}, {"to", 2}, {"backup", "backup-3"}, {"backup_of", 1767225600}, {"confirm", true}});
+  auto events = core.TakeEvents();
+  const Event* restored = Find(events, "DATA_ROLLBACK");
+  ASSERT_NE(restored, nullptr);
+  EXPECT_EQ(restored->details["what"], "restored");
+  EXPECT_EQ(restored->details["backup_of"], 1767225600);
+  EXPECT_EQ(restored->details["confirm"], true);
+  EXPECT_TRUE(core.TakeActionsChanged());
+  const Reason why = core.StartProblem();
+  EXPECT_EQ(why.code, "DATA_ROLLBACK");
+  EXPECT_EQ(why.fields["backup_of"], 1767225600);
+  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
+  const Event* refused = Find(core.TakeEvents(), "MOWING_REFUSED");
+  ASSERT_NE(refused, nullptr);
+  EXPECT_EQ(refused->details["reason"], "DATA_ROLLBACK");
+  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_TRUE(core.DriveProblem().empty());
+  core.SetDataRollback(nullptr);
+  events = core.TakeEvents();
+  const Event* confirmed = Find(events, "DATA_ROLLBACK");
+  ASSERT_NE(confirmed, nullptr);
+  EXPECT_EQ(confirmed->details["what"], "confirmed");
+  EXPECT_TRUE(core.StartProblem().empty());
+  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+}
+
+TEST(LogicDataRollback, ANoteWithoutConfirmLocksNothing) {
+  TestCore core = Ready();
+  core.SetDataRollback({{"from", 3}, {"to", 2}, {"backup", "backup-3"}, {"backup_of", 1767225600}, {"confirm", false}});
+  ASSERT_NE(Find(core.TakeEvents(), "DATA_ROLLBACK"), nullptr);
+  EXPECT_TRUE(core.StartProblem().empty());
+  EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
+}

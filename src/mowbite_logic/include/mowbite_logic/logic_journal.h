@@ -208,7 +208,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::CheckDockBeforeDrive, &L::OnDockCheck, &L::OnChargeOff, &L::OnUndockEnded, &L::AbortUndocking,
       &L::StartDocking, &L::TakeDockingLeg, &L::OnDockingLegEnded, &L::SetDockingSettings, &L::SetHomeSettings,
       &L::RestoreJob, &L::RefuseStart, &L::RefuseReset, &L::OnReleaseAnswered, &L::GeometryChanged, &L::SetHold,
-      &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
+      &L::SetDataRollback, &L::SetGpsSettings, &L::NextJobStep, &L::OnJobPlanned, &L::OnJobPlanFailed, &L::OnJobProgress, &L::OnLegEnded,
       &L::OnTick, &L::OnBladeRefused, &L::TakeOverlayChanged, &L::SetRestartHold, &L::ReportRestart, &L::OnStopRelease,
       &L::TakeEffects, &L::SetUnwritableFile, &L::AbandonStart, &L::SetTurningRadius,
       &L::RecordedBodyKept, &L::OnWheelOdom, &L::SetSunsetSettings, &L::OnClock, &L::OnDatum,
@@ -221,7 +221,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
   }
 
   // Fields of details and reasons in unix s.
-  static inline const std::vector<std::string> kUnixKeys = {"until", "crashed_at"};
+  static inline const std::vector<std::string> kUnixKeys = {"until", "crashed_at", "backup_of"};
   template <typename O>
   static void AnonymizeReason(const O& o, mowbite_logic::Reason& why) {
     why.message = o.ShiftDates(why.message);
@@ -240,6 +240,9 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
         [](const auto& o, bool&, std::string&, double& unix_minus_mono_s) { unix_minus_mono_s += o.shift_s(); });
     a.template Args<&L::SetHold>([](const auto& o, int64_t& until) {
       if (until > 0) until += o.shift_s();
+    });
+    a.template Args<&L::SetDataRollback>([](const auto& o, mowbite_logic::json& note) {
+      o.ShiftWallIn(&note, {"t", "backup_of"});
     });
     a.template Args<&L::ReportRestart>([](const auto& o, mowbite_logic::RestartReport& report) {
       if (report.crashed_at > 0) report.crashed_at += o.shift_s();

@@ -26,8 +26,10 @@ inline void from_json(const json& j, ScheduleFile& file) {
 
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SchedulerStart, file, available, state, log, now)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Area, id, mowable)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Facts, wall, mono, clock_ok, clock_reason, logic_fresh, state, docked, emergency,
-                                   battery, rain_sensor, rain_wet, rain_mode, hold, latitude, longitude, areas)
+// data_rollback only from journals since it came; before it false.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(Facts, wall, mono, clock_ok, clock_reason, logic_fresh, state, docked,
+                                                emergency, battery, rain_sensor, rain_wet, rain_mode, hold, data_rollback,
+                                                latitude, longitude, areas)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WeatherRequest, id, latitude, longitude, hours)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Weather, id, ok, age_s, has_rain, rain_now_mm, rain_hour_mm, has_temp, temp_c)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(RunRequest, run_id, area_ids, pass_over, restart, angle_offset_deg, dark_allowed,

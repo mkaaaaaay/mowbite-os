@@ -225,8 +225,12 @@ Field ScheduleAnswer() {
   return Object(
       "result", "The schedule now",
       {Integer("schema", "Always 1"), Integer("version", "Goes up with every change; schedule.set may name it"),
-       Bool("available", "Whether the platform lets the schedule start the mower"),
-       Nullable(Text("reason", "platform_off without available, else null", true, {"platform_off"})),
+       Bool("available", "Whether the schedule may start the mower now"),
+       Nullable(Text("reason",
+                     "Why not, else null: platform_off (not released for the platform), data_rollback (the data went "
+                     "back to an older backup and the map waits for data.rollback.confirm; schedule.set still takes "
+                     "changes)",
+                     true, {"platform_off", "data_rollback"})),
        Bool("clock_ok", "Whether the wall clock is safe for date, weekday and sun"),
        Nullable(Text("clock_reason", "Why it is not safe, null when it is", true,
                      {"never_synced", "clock_jump", "gnss_mismatch"})),
@@ -584,7 +588,18 @@ const std::vector<Command>& Commands() {
         Text("names",
              "openmower: sensor ids, /ll/board and the line of emergency reasons in the log as the app of OpenMower "
              "knows them, each sensor with its own id as key; own: only the own ids",
-             true, {"openmower", "own"})},
+             true, {"openmower", "own"}),
+        Nullable(Object("data_rollback",
+                        "The last way back of the data to an older backup until data.rollback.confirm or the next "
+                        "update; null or missing without one",
+                        {Integer("from", "Schema of the data before"),
+                         Integer("to", "Schema of the backup that came back"),
+                         Text("backup", "Folder in data_dir that keeps the data before"),
+                         Integer("backup_of", "When the backup that came back was made, unix s"),
+                         Integer("t", "When the way back was, unix s"),
+                         Bool("confirm", "The map changed since the update: nothing mows by itself until "
+                                         "data.rollback.confirm")},
+                        false))},
        "",
        {}},
       {"system.api",
@@ -821,6 +836,10 @@ const std::vector<Method>& Methods() {
                Time("next_start", "The next start of the schedule, null without one"),
                Bool("scheduled_start", "Whether next_start refuses a hold now: within 1800 s or past it")}),
        ""},
+      {"data.rollback.confirm", "mowbite_logic",
+       "The user checked the map after a way back of the data: the note goes and mowing by itself is free again "
+       "(DATA_ROLLBACK confirmed); without a note nothing happens",
+       NoParams(), Object("result", "What happened", {Bool("released", "A note was there and went")}), ""},
       {"calibration.check", "mowbite_logic", "Whether a calibration drive could start here, without a drive",
        NoParams(),
        Object("result", "The check",

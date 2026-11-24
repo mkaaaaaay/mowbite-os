@@ -230,7 +230,11 @@ class BridgeNode : public rclcpp::Node {
         core_(BridgeConfig{declare_parameter("software_version", std::string()),
                            declare_parameter("params_json", std::string("{}")),
                            declare_parameter("update_path", std::string()), nullptr,
-                           declare_parameter("openmower_names", true)}),
+                           declare_parameter("openmower_names", true),
+                           [this] {
+                             const auto text = ReadNote(kRollbackNote);
+                             return DataRollbackInfo(text ? &*text : nullptr);
+                           }}),
         events_(JoinPath(data_dir_, "event_history"),
                 static_cast<std::size_t>(std::max<int64_t>(0, declare_parameter("event_history_days", 60))),
                 static_cast<std::uintmax_t>(std::max(0.0, declare_parameter("event_history_max_mb", 20.0)) * 1e6)),
@@ -634,13 +638,18 @@ class BridgeNode : public rclcpp::Node {
   }
 
   void ReportNote(const char* name, std::string (*warning)(std::string_view)) {
+    if (const auto text = ReadNote(name)) RCLCPP_WARN(get_logger(), "%s", warning(*text).c_str());
+  }
+
+  // The text of a note in data_dir, null without it.
+  std::optional<std::string> ReadNote(const char* name) const {
     const std::string path = JoinPath(data_dir_, name);
-    if (path.empty()) return;
+    if (path.empty()) return std::nullopt;
     std::ifstream in(path);
-    if (!in) return;
+    if (!in) return std::nullopt;
     std::ostringstream text;
     text << in.rdbuf();
-    RCLCPP_WARN(get_logger(), "%s", warning(text.str()).c_str());
+    return text.str();
   }
 
   const std::string host_;

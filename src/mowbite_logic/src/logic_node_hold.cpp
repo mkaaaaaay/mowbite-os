@@ -169,4 +169,58 @@ void LogicNode::MirrorHold() {
   publish_pub_->publish(msg);
 }
 
+// The note data_store.py left after a way back of the data; one that cannot be read locks like one with confirm.
+void LogicNode::RestoreDataRollback() {
+  if (data_rollback_path_.empty()) return;
+  std::string text;
+  std::string error;
+  const mowbite_hold::FileRead read = mowbite_hold::ReadSmallFile(data_rollback_path_, 4096, &text, &error);
+  if (read == mowbite_hold::FileRead::kMissing) return;
+  json note = read == mowbite_hold::FileRead::kText ? json::parse(text, nullptr, false) : json();
+  if (!note.is_object()) {
+    RCLCPP_ERROR(get_logger(), "%s cannot be read%s: mowing waits for data.rollback.confirm",
+                 data_rollback_path_.c_str(), error.empty() ? "" : (": " + error).c_str());
+    note = json{{"confirm", true}};
+  }
+  core_.Call<&LogicCore::SetDataRollback>(note);
+  if (core_.View().DataRollbackOpen()) {
+    RCLCPP_WARN(get_logger(), "The data went back to an older backup and its map changed since the update: nothing "
+                              "mows by itself until data.rollback.confirm");
+  }
+}
+
+// data.rollback.confirm: the note goes first, then the lock; a note that cannot be removed keeps it.
+void LogicNode::OnDataRollbackConfirm(const mowbite_msgs::msg::RpcRequest& request) {
+  std::string error;
+  bool released = false;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    released = core_.View().DataRollback().is_object();
+    if (released && !mowbite_hold::RemoveFileSynced(data_rollback_path_, &error)) released = false;
+    if (released) core_.Call<&LogicCore::SetDataRollback>(json());
+  }
+  if (!error.empty()) {
+    RCLCPP_ERROR(get_logger(), "data.rollback.confirm: %s", error.c_str());
+    PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INTERNAL, "Cannot remove the note: " + error);
+    return;
+  }
+  if (released) RCLCPP_INFO(get_logger(), "data.rollback.confirm: the map is confirmed, mowing by itself is free");
+  mowbite_msgs::msg::RpcResponse msg;
+  msg.result = json{{"released", released}}.dump();
+  msg.id = request.id;
+  rpc_response_pub_->publish(msg);
+  Step();
+}
+
+void LogicNode::PublishDataRollbackIfChanged() {
+  std_msgs::msg::Bool msg;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    msg.data = core_.View().DataRollbackOpen();
+    if (published_data_rollback_ == msg.data) return;
+    published_data_rollback_ = msg.data;
+  }
+  data_rollback_pub_->publish(msg);
+}
+
 }  // namespace mowbite_logic

@@ -193,9 +193,20 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
                 std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                 R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
-                R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,"names":"openmower"})");
+                R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,"names":"openmower",)"
+                R"("data_rollback":null})");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "", false)["names"], "own");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
+  EXPECT_TRUE(SystemInfo("1.2.3", "", 3)["data_rollback"].is_null());
+  const std::string note =
+      R"({"from": 3, "to": 2, "backup": "backup-3", "t": 1767225700.5, "backup_of": 1767225600, "confirm": true})";
+  EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "", true, DataRollbackInfo(&note))["data_rollback"].dump(),
+            R"({"from":3,"to":2,"backup_of":1767225600,"t":1767225700,"backup":"backup-3","confirm":true})");
+  EXPECT_TRUE(DataRollbackInfo(nullptr).is_null());
+  const std::string broken = "{";
+  EXPECT_EQ(DataRollbackInfo(&broken), (Json{{"confirm", true}}));
+  const std::string open = R"({"confirm": "yes"})";
+  EXPECT_EQ(DataRollbackInfo(&open)["confirm"], false);
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["mqtt"], 3);
   EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "native")["update_path"], "native");
   EXPECT_EQ(SystemInfo("1.2.3", "airseekers_tron", 5, StopRelease(2, 3, 10))["stop_release"].dump(),

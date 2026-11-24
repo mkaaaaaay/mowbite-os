@@ -62,11 +62,13 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   data_dir_ = declare_parameter("data_dir", std::string());
   // system.hold of the updater; the drivers read the same file themselves.
   hold_path_ = data_dir_.empty() ? "" : data_dir_ + "/hold.json";
+  data_rollback_path_ = data_dir_.empty() ? "" : data_dir_ + "/data_rollback.json";
   // The lock of the setup program, looked at every 100 ms with the blade; empty without data_dir.
   lock_watch_ = std::make_unique<mowbite_hold::SafetyLockWatch>(
       data_dir_.empty() ? "" : data_dir_ + "/" + mowbite_hold::kSafetyLockFile);
   lock_watch_->Poll();
   RestoreHold();
+  RestoreDataRollback();
   LoadLogicParams();
   LoadGeometryEntries();
   std::string problem;
@@ -111,6 +113,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   idle_pub_ = create_publisher<std_msgs::msg::Bool>("logic/idle", rclcpp::QoS(1).reliable().transient_local());
   // The hold of an update for nodes that refuse changes of data in it (map, NTRIP access): until in unix s, 0 none.
   hold_pub_ = create_publisher<std_msgs::msg::Int64>("logic/hold", LatchedQos(1));
+  // For the schedule: true while mowing by itself waits for data.rollback.confirm.
+  data_rollback_pub_ = create_publisher<std_msgs::msg::Bool>("logic/data_rollback", LatchedQos(1));
   PublishLogicParams();
   PublishGeometry();
   // Releases go through mowbite_safety, which keeps the emergency while the mower is tilted.
@@ -344,6 +348,7 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   PublishActions();
   PublishIdleIfChanged();
   PublishHoldIfChanged();
+  PublishDataRollbackIfChanged();
   watch_ = mowbite_watch::Attach(*this);
 }
 
@@ -1322,6 +1327,10 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
     OnSystemHold(request);
     return;
   }
+  if (request.method == "data.rollback.confirm") {
+    OnDataRollbackConfirm(request);
+    return;
+  }
   if (request.method == "calibration.check") {
     OnCalibrationCheck(request);
     return;
@@ -2290,6 +2299,7 @@ void LogicNode::Record(const std::vector<Effect>& effects) {
   if (actions_changed) PublishActions();
   PublishIdleIfChanged();
   PublishHoldIfChanged();
+  PublishDataRollbackIfChanged();
 }
 
 void LogicNode::PublishIdleIfChanged() {

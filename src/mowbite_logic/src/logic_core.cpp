@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <initializer_list>
 #include <iterator>
+#include <utility>
 
 #include "mowbite_api/catalog.h"
 
@@ -821,6 +822,11 @@ Reason LogicCore::StartProblem(const std::vector<std::string>& tasks) const {
 Reason LogicCore::MowProblem(const std::vector<std::string>& tasks) const {
   Reason why = Unsafe();
   if (!why.empty()) return why;
+  if (DataRollbackOpen()) {
+    const json& backup_of = data_rollback_.contains("backup_of") ? data_rollback_["backup_of"] : json();
+    return Reason("DATA_ROLLBACK", "The data went back to an older backup: check the map and confirm it in the app")
+        .With("backup_of", backup_of.is_number_integer() ? backup_of.get<int64_t>() : 0);
+  }
   if (hw_.rain) return Reason("RAIN", "Rain detected");
   if (!hw_.battery_ok) return Reason("BATTERY_LOW", "No battery level from the driver");
   char text[160];
@@ -905,6 +911,25 @@ void LogicCore::SetShapeOutside(const std::string& parts) {
 
 bool LogicCore::Idle() const {
   return state_ == State::kIdle;
+}
+
+void LogicCore::SetDataRollback(const json& note) {
+  const bool was_open = DataRollbackOpen();
+  const json before = std::exchange(data_rollback_, note.is_object() ? note : json());
+  if (data_rollback_.is_object() && !before.is_object()) {
+    const bool open = DataRollbackOpen();
+    json details = {{"what", "restored"}};
+    for (const char* key : {"from", "to", "backup", "backup_of"}) {
+      if (data_rollback_.contains(key)) details[key] = data_rollback_[key];
+    }
+    details["confirm"] = open;
+    details["severity"] = open ? "warning" : "info";
+    details["resume"] = open ? "user" : "auto";
+    AddEvent("DATA_ROLLBACK", std::move(details));
+  } else if (before.is_object() && !data_rollback_.is_object()) {
+    AddEvent("DATA_ROLLBACK", {{"what", "confirmed"}, {"severity", "info"}, {"resume", "auto"}});
+  }
+  if (was_open != DataRollbackOpen()) SetDue<ActionsChanged>(true);
 }
 
 void LogicCore::SetHold(int64_t until) {

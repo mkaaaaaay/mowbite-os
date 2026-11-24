@@ -325,6 +325,20 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"Data in use",
            "Another MowBite OS holds the data of the mower, this one does not start.",
            "End the other MowBite OS, then restart."}}}}},
+      {"DATA_ROLLBACK",
+       {"The data went back to an older backup whose map is not the one of now: nothing mows by itself until the user "
+        "confirms the map (data.rollback.confirm)",
+        {Integer("backup_of", "unix s", "When the backup that came back was made")},
+        {{"de",
+          {"Karte bestätigen",
+           "MowBite OS hat seine Daten auf eine ältere Sicherung zurückgesetzt. Die Karte ist die von damals, "
+           "Änderungen seit dem Update fehlen. Bis zur Bestätigung mäht der Mäher nicht von selbst.",
+           "Karte und Flächen prüfen, bei Bedarf anpassen, dann bestätigen."}},
+         {"en",
+          {"Confirm the map",
+           "MowBite OS took its data back to an older backup. The map is the one of then, changes since the update "
+           "are missing. Until it is confirmed the mower doesn't mow by itself.",
+           "Check the map and the areas, change them if needed, then confirm."}}}}},
       {"DATA_ERROR",
        {"The data of MowBite OS cannot be read or prepared, it does not start",
         {},
@@ -1347,7 +1361,8 @@ const std::vector<EventEntry>& Events() {
                   {"NOT_DOCKED", "info"},
                   {"CLOCK_UNSAFE", "info"},
                   {"DARK", "info"},
-                  {"OBSTACLE", "warning"}})),
+                  {"OBSTACLE", "warning"},
+                  {"DATA_ROLLBACK", "warning"}})),
       Event("DRIVE_REFUSED", "logic", "A drive (to a point or home) was refused", Rated(true),
             User({{"BUSY", "info"},
                   {"HOLD", "info"},
@@ -1650,6 +1665,19 @@ const std::vector<EventEntry>& Events() {
             {R("BELOW_DEFAULT", "warning", "user"), R("SHAPE_OUTSIDE", "warning", "user")}),
       Event("STORAGE", "logic", "Writing in data_dir failed; the reason tells what, once each time it begins",
             Rated(true), User({{"STORAGE_NOT_WRITABLE", "error"}}), "error", "user"),
+      Event("DATA_ROLLBACK", "logic",
+            "The data went back to an older backup (restored, at the start while its note is there), or the user "
+            "confirmed the map and the note went (confirmed). With confirm nothing mows by itself until then: "
+            "MOWING_REFUSED and the actions with DATA_ROLLBACK, schedule.get not available",
+            {Text("what", "restored or confirmed", true, {"restored", "confirmed"}),
+             Integer("from", "", "With restored: the schema of the data before", false),
+             Integer("to", "", "With restored: the schema of the backup that came back", false),
+             Text("backup", "With restored: the folder in data_dir that keeps the data before", false),
+             Integer("backup_of", "unix s", "With restored: when the backup that came back was made", false),
+             Bool("confirm", "With restored: whether the map changed since the update and mowing waits for "
+                             "data.rollback.confirm", false),
+             Text("severity", "warning with confirm, else info", true, {"info", "warning"}),
+             Text("resume", "user with confirm, else auto", true, {"auto", "user"})}),
       Event("SCHEDULE_START", "logic",
             "A plan of the schedule starts: the mower announces it for seconds, then checks again and leaves the "
             "docking station",

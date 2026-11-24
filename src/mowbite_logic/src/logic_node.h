@@ -196,6 +196,9 @@ class LogicNode : public rclcpp::Node {
   void ExpireHoldLocked(double t);
   void PublishHoldIfChanged();
   void MirrorHold();
+  void RestoreDataRollback();
+  void OnDataRollbackConfirm(const mowbite_msgs::msg::RpcRequest& request);
+  void PublishDataRollbackIfChanged();
   static bool Ours(const mowbite_api::Command& command);
   void PublishRpcMethods();
   void OnCalibrationStatus(const mowbite_msgs::msg::CalibrationStatus& msg);
@@ -335,6 +338,8 @@ class LogicNode : public rclcpp::Node {
   // system.hold: <data_dir>/hold.json (empty without data_dir), its time on the monotonic clock, what logic/hold said
   // last and when mowbite/hold went out.
   std::string hold_path_;
+  // The note of a way back of the data (data_store.py), empty without data_dir.
+  std::string data_rollback_path_;
   // The restart hold: os-session.json, its record last written or queued, whether its last write failed, whether a
   // record that holds is surely on the disk; restart-hold.json (all empty without data_dir) and its text until written;
   // what the core was told cannot be written; the boot of this start and the event that waits for the bridge.
@@ -447,6 +452,8 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr idle_pub_;
   rclcpp::Publisher<std_msgs::msg::Int64>::SharedPtr hold_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr data_rollback_pub_;
+  std::optional<bool> published_data_rollback_;
   std::optional<bool> published_idle_;
   rclcpp::Publisher<mowbite_msgs::msg::DriveCommand>::SharedPtr drive_pub_;
   rclcpp::Client<mowbite_msgs::srv::SetEmergency>::SharedPtr emergency_client_;

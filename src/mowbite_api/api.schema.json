@@ -48,7 +48,8 @@
               "NOT_DOCKED",
               "CLOCK_UNSAFE",
               "DARK",
-              "OBSTACLE"
+              "OBSTACLE",
+              "DATA_ROLLBACK"
             ],
             "type": "string"
           }
@@ -320,6 +321,24 @@
       ],
       "type": "object"
     },
+    "data.rollback.confirm.params": {
+      "description": "The params of data.rollback.confirm: None",
+      "type": "object"
+    },
+    "data.rollback.confirm.result": {
+      "additionalProperties": false,
+      "description": "The result of data.rollback.confirm: What happened",
+      "properties": {
+        "released": {
+          "description": "A note was there and went",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "released"
+      ],
+      "type": "object"
+    },
     "docking.abort.params": {
       "additionalProperties": false,
       "description": "The params of docking.abort",
@@ -576,6 +595,9 @@
         },
         {
           "$ref": "#/$defs/event.STORAGE"
+        },
+        {
+          "$ref": "#/$defs/event.DATA_ROLLBACK"
         },
         {
           "$ref": "#/$defs/event.SCHEDULE_START"
@@ -1996,6 +2018,112 @@
       ],
       "type": "object",
       "x-emitter": "ntrip"
+    },
+    "event.DATA_ROLLBACK": {
+      "additionalProperties": false,
+      "description": "The data went back to an older backup (restored, at the start while its note is there), or the user confirmed the map and the note went (confirmed). With confirm nothing mows by itself until then: MOWING_REFUSED and the actions with DATA_ROLLBACK, schedule.get not available",
+      "properties": {
+        "backup": {
+          "description": "With restored: the folder in data_dir that keeps the data before",
+          "type": "string"
+        },
+        "backup_of": {
+          "description": "With restored: when the backup that came back was made",
+          "type": "integer",
+          "x-unit": "unix s"
+        },
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        },
+        "confirm": {
+          "description": "With restored: whether the map changed since the update and mowing waits for data.rollback.confirm",
+          "type": "boolean"
+        },
+        "from": {
+          "description": "With restored: the schema of the data before",
+          "type": "integer"
+        },
+        "id": {
+          "description": "Random id of the event, 32 letters and digits",
+          "type": "string"
+        },
+        "job_id": {
+          "description": "The job of mowing it belongs to",
+          "type": "string"
+        },
+        "resume": {
+          "description": "user with confirm, else auto",
+          "enum": [
+            "auto",
+            "user"
+          ],
+          "type": "string"
+        },
+        "session_id": {
+          "description": "The session of the logic since its start",
+          "type": "string"
+        },
+        "severity": {
+          "description": "warning with confirm, else info",
+          "enum": [
+            "info",
+            "warning"
+          ],
+          "type": "string"
+        },
+        "source": {
+          "description": "schedule while a run of the schedule lasts, from its start until the mower is idle again; an event with a source of its own names that instead",
+          "enum": [
+            "schedule"
+          ],
+          "type": "string"
+        },
+        "t": {
+          "description": "When it happened",
+          "type": "number",
+          "x-unit": "unix s"
+        },
+        "to": {
+          "description": "With restored: the schema of the backup that came back",
+          "type": "integer"
+        },
+        "type": {
+          "const": "DATA_ROLLBACK",
+          "description": "What happened; a type this version does not know carries only the envelope for sure"
+        },
+        "what": {
+          "description": "restored or confirmed",
+          "enum": [
+            "restored",
+            "confirmed"
+          ],
+          "type": "string"
+        },
+        "x": {
+          "description": "Where the mower was, east of the datum of the map",
+          "type": "number",
+          "x-unit": "m"
+        },
+        "y": {
+          "description": "Where the mower was, north of the datum of the map",
+          "type": "number",
+          "x-unit": "m"
+        }
+      },
+      "required": [
+        "id",
+        "t",
+        "type",
+        "x",
+        "y",
+        "what",
+        "severity",
+        "resume"
+      ],
+      "type": "object",
+      "x-emitter": "logic"
     },
     "event.DOCKED": {
       "additionalProperties": false,
@@ -4588,6 +4716,11 @@
           "type": "number",
           "x-unit": "m"
         },
+        "backup_of": {
+          "description": "When the backup that came back was made",
+          "type": "integer",
+          "x-unit": "unix s"
+        },
         "battery_percentage": {
           "description": "Charge of the battery",
           "type": "integer",
@@ -4679,7 +4812,8 @@
             "NOT_DOCKED",
             "CLOCK_UNSAFE",
             "DARK",
-            "OBSTACLE"
+            "OBSTACLE",
+            "DATA_ROLLBACK"
           ],
           "type": "string"
         },
@@ -6575,6 +6709,7 @@
               "RECORDED_BODY_KEPT",
               "GEOMETRY_CHANGED",
               "STORAGE",
+              "DATA_ROLLBACK",
               "SCHEDULE_START",
               "SCHEDULE_START_CANCELED",
               "INCIDENT",
@@ -9485,7 +9620,7 @@
       "description": "The result of schedule.get: The schedule now",
       "properties": {
         "available": {
-          "description": "Whether the platform lets the schedule start the mower",
+          "description": "Whether the schedule may start the mower now",
           "type": "boolean"
         },
         "clock_ok": {
@@ -9514,9 +9649,10 @@
           "x-unit": "unix s"
         },
         "reason": {
-          "description": "platform_off without available, else null",
+          "description": "Why not, else null: platform_off (not released for the platform), data_rollback (the data went back to an older backup and the map waits for data.rollback.confirm; schedule.set still takes changes)",
           "enum": [
             "platform_off",
+            "data_rollback",
             null
           ],
           "type": [
@@ -9956,7 +10092,7 @@
       "description": "The result of schedule.set: The schedule now",
       "properties": {
         "available": {
-          "description": "Whether the platform lets the schedule start the mower",
+          "description": "Whether the schedule may start the mower now",
           "type": "boolean"
         },
         "clock_ok": {
@@ -9985,9 +10121,10 @@
           "x-unit": "unix s"
         },
         "reason": {
-          "description": "platform_off without available, else null",
+          "description": "Why not, else null: platform_off (not released for the platform), data_rollback (the data went back to an older backup and the map waits for data.rollback.confirm; schedule.set still takes changes)",
           "enum": [
             "platform_off",
+            "data_rollback",
             null
           ],
           "type": [
@@ -12589,6 +12726,48 @@
             "min_mm",
             "max_mm",
             "default_mm"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "data_rollback": {
+          "additionalProperties": false,
+          "description": "The last way back of the data to an older backup until data.rollback.confirm or the next update; null or missing without one",
+          "properties": {
+            "backup": {
+              "description": "Folder in data_dir that keeps the data before",
+              "type": "string"
+            },
+            "backup_of": {
+              "description": "When the backup that came back was made, unix s",
+              "type": "integer"
+            },
+            "confirm": {
+              "description": "The map changed since the update: nothing mows by itself until data.rollback.confirm",
+              "type": "boolean"
+            },
+            "from": {
+              "description": "Schema of the data before",
+              "type": "integer"
+            },
+            "t": {
+              "description": "When the way back was, unix s",
+              "type": "integer"
+            },
+            "to": {
+              "description": "Schema of the backup that came back",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "from",
+            "to",
+            "backup",
+            "backup_of",
+            "t",
+            "confirm"
           ],
           "type": [
             "object",
@@ -16736,11 +16915,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:57",
+  "$id": "urn:mowbite-os:api:58",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 57,
+  "x-api": 58,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17407,6 +17586,13 @@
       "offered": "with at least one camera",
       "params": "#/$defs/camera.stream.params",
       "result": "#/$defs/camera.stream.result"
+    },
+    "data.rollback.confirm": {
+      "description": "The user checked the map after a way back of the data: the note goes and mowing by itself is free again (DATA_ROLLBACK confirmed); without a note nothing happens",
+      "node": "mowbite_logic",
+      "offered": "",
+      "params": "#/$defs/data.rollback.confirm.params",
+      "result": "#/$defs/data.rollback.confirm.result"
     },
     "docking.abort": {
       "description": "Stops docking",
@@ -19916,6 +20102,26 @@
         },
         "resume": "user",
         "severity": "info"
+      },
+      "DATA_ROLLBACK": {
+        "description": "The data went back to an older backup whose map is not the one of now: nothing mows by itself until the user confirms the map (data.rollback.confirm)",
+        "fields": {
+          "backup_of": "unix s"
+        },
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Karte und Flächen prüfen, bei Bedarf anpassen, dann bestätigen.",
+            "help": "MowBite OS hat seine Daten auf eine ältere Sicherung zurückgesetzt. Die Karte ist die von damals, Änderungen seit dem Update fehlen. Bis zur Bestätigung mäht der Mäher nicht von selbst.",
+            "name": "Karte bestätigen"
+          },
+          "en": {
+            "fix": "Check the map and the areas, change them if needed, then confirm.",
+            "help": "MowBite OS took its data back to an older backup. The map is the one of then, changes since the update are missing. Until it is confirmed the mower doesn't mow by itself.",
+            "name": "Confirm the map"
+          }
+        }
       },
       "DOCK_UNREACHABLE": {
         "description": "The docking station is outside of the areas the mower may drive in",

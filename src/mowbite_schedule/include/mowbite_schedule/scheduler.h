@@ -52,6 +52,7 @@ struct Facts {
   bool rain_wet = false;
   int rain_mode = 0;
   bool hold = false;  // system.hold or a driver holds
+  bool data_rollback = false;  // the data went back to an older backup, the map waits for data.rollback.confirm
   std::optional<double> latitude;
   std::optional<double> longitude;
   std::vector<Area> areas;  // of the map, in its order
@@ -164,7 +165,10 @@ class Scheduler {
   Output TakeOutput();
 
   const ScheduleFile& file() const { return file_; }
-  bool available() const { return available_; }
+  // Whether the schedule may start the mower now; else UnavailableReason says why.
+  bool available() const { return UnavailableReason() == nullptr; }
+  // platform_off: not released for the platform; data_rollback: the map waits for its confirmation; else null.
+  const char* UnavailableReason() const;
   // The next start (unix s): now while a plan waits or starts; nothing without one, switched off or with an unsafe
   // clock.
   std::optional<int64_t> NextStart() const;

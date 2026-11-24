@@ -117,6 +117,8 @@ struct BridgeConfig {
   std::function<double()> clock = nullptr;
   // Sensor ids, /ll/board and the log line of emergency reasons as the app of OpenMower knows them (compat.h).
   bool openmower_names = true;
+  // The note of the last way back of the data for system.info.data_rollback, read at each call; null without one.
+  std::function<Json()> data_rollback = nullptr;
 };
 
 // The bridge between the nodes and MQTT without ROS or MQTT client; retained texts are resent after every connect.

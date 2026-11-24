@@ -166,7 +166,8 @@ std::string VersionText(const std::string& version) {
 }
 
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release,
-                const Json& blade_height, const std::string& update_path, bool openmower_names) {
+                const Json& blade_height, const std::string& update_path, bool openmower_names,
+                const Json& data_rollback) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
@@ -177,7 +178,21 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
               {"stop_release", stop_release},
               {"blade_height", blade_height},
               {"update_path", update_path.empty() ? Json() : Json(update_path)},
-              {"names", openmower_names ? "openmower" : "own"}};
+              {"names", openmower_names ? "openmower" : "own"},
+              {"data_rollback", data_rollback}};
+}
+
+Json DataRollbackInfo(const std::string* text) {
+  if (text == nullptr) return Json();
+  const Json note = Json::parse(*text, nullptr, false);
+  if (!note.is_object()) return Json{{"confirm", true}};
+  Json info = Json::object();
+  for (const char* key : {"from", "to", "backup_of", "t"}) {
+    if (note.contains(key) && note[key].is_number()) info[key] = static_cast<int64_t>(note[key].get<double>());
+  }
+  if (note.contains("backup") && note["backup"].is_string()) info["backup"] = note["backup"];
+  info["confirm"] = note.contains("confirm") && note["confirm"] == true;
+  return info;
 }
 
 Json StopRelease(double free_s, double hold_s, double max_hold_s) {

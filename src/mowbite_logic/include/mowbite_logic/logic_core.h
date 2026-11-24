@@ -321,6 +321,16 @@ class LogicCore {
   // HOLD while held, with until when the logic holds; else STORAGE_NOT_WRITABLE while a file of the restart hold
   // cannot be written; else empty. mowing.continue checks only the hold: PAUSED holds on the disk already.
   Reason HoldProblem() const;
+  // The note of a way back of the data (data_rollback.json, null without one): with confirm true nothing mows by itself,
+  // refused with DATA_ROLLBACK, until the user confirmed the map (null again). Event DATA_ROLLBACK restored with the
+  // note at the start, confirmed when it goes.
+  void SetDataRollback(const json& note);
+  bool DataRollbackOpen() const {
+    return data_rollback_.is_object() && data_rollback_.contains("confirm") && data_rollback_["confirm"] == true;
+  }
+  const json& DataRollback() const {
+    return data_rollback_;
+  }
   // The file in data_dir of the restart hold (os-session.json, restart-hold.json) that the node cannot write, empty
   // once it can again. While one cannot, every start from IDLE is refused with STORAGE_NOT_WRITABLE; the event STORAGE
   // tells it once each time it begins.
@@ -589,6 +599,7 @@ class LogicCore {
   SetupPart setup_;
   CalibrationPart calibration_;
   int64_t hold_until_ = 0;
+  json data_rollback_;
   // The client of the command being run, for its events.
   std::string client_;
   ReleasePart release_;

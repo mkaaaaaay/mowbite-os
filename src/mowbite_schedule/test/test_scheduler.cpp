@@ -122,6 +122,26 @@ TEST_F(SchedulerTest, T0_NotReleasedOrSwitchedOffDoesNothing) {
   EXPECT_EQ(scheduler_->StateJson()["handled"], json::object());
 }
 
+TEST_F(SchedulerTest, T0_TheMapWaitingForItsConfirmationStartsNothing) {
+  Make(File());
+  Facts facts = Good(At(kMonday, "10:00"));
+  facts.data_rollback = true;
+  EXPECT_FALSE(Tick(facts).start);
+  EXPECT_FALSE(scheduler_->available());
+  EXPECT_STREQ(scheduler_->UnavailableReason(), "data_rollback");
+  EXPECT_FALSE(scheduler_->NextStart());
+  EXPECT_TRUE(Words().empty());
+  // schedule.set still takes a change while it waits.
+  EXPECT_FALSE(scheduler_->SetSchedule({{"enabled", 1}}, At(kMonday, "10:00")));
+  // Confirmed within the window of the plan: it starts.
+  EXPECT_TRUE(TickAt(kMonday, "10:00", 30).start);
+  EXPECT_TRUE(scheduler_->available());
+  EXPECT_EQ(scheduler_->UnavailableReason(), nullptr);
+  Make(File(), false);
+  TickAt(kMonday, "09:00");
+  EXPECT_STREQ(scheduler_->UnavailableReason(), "platform_off");
+}
+
 TEST_F(SchedulerTest, T1_MissedWhileTheOsWasOffIsNotMadeUp) {
   Make(File());
   EXPECT_FALSE(TickAt(kMonday, "12:00").start);

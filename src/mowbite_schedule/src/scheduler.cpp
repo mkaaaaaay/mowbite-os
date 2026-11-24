@@ -239,8 +239,8 @@ void Scheduler::Tick(const Facts& facts) {
       for (auto it = keys->begin(); it != keys->end();) it = stale(*it) ? keys->erase(it) : std::next(it);
     }
   }
-  // T0: not released for the platform, or switched off.
-  if (!available_ || !file_.schedule.enabled) {
+  // T0: not released for the platform, the map waits for its confirmation, or switched off.
+  if (!available() || !file_.schedule.enabled) {
     if (waiting_) {
       waiting_.reset();
       out_.state_changed = true;
@@ -572,8 +572,14 @@ Output Scheduler::TakeOutput() {
   return std::exchange(out_, Output());
 }
 
+const char* Scheduler::UnavailableReason() const {
+  if (!available_) return "platform_off";
+  if (facts_.data_rollback) return "data_rollback";
+  return nullptr;
+}
+
 bool Scheduler::Planning() const {
-  return available_ && file_.schedule.enabled && ticked_;
+  return available() && file_.schedule.enabled && ticked_;
 }
 
 std::optional<Scheduler::PlanKey> Scheduler::NextPlan() const {
