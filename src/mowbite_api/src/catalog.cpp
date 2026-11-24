@@ -1331,7 +1331,7 @@ const std::vector<Method>& Methods() {
        "logged or shown in a status; INVALID for a name or password out of range, BUSY while a change runs",
        Object("params", "The WLAN",
               {Text("ssid", "Its name, 1 to 32 bytes", true),
-               Text("password", "8 to 63 printable ASCII characters or 64 hex digits; none for an open WLAN")}),
+               Text("password", "8 to 63 printable ASCII characters or 64 hex digits; none for an open WLAN", false)}),
        Object("result", "wifi of mowbite/host/status",
               {Text("state", "trying, connected or failed", true, {"trying", "connected", "failed"}),
                Text("ssid", "The WLAN", true), Nullable(Text("reason", "Why it failed, else null")),
