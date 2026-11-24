@@ -19,7 +19,6 @@ import unittest
 
 import launch
 import launch_testing.actions
-import launch_testing.asserts
 import rclpy
 from launch.actions import ExecuteProcess
 from mowbite_msgs.msg import HardwareStatus, RobotState
@@ -44,8 +43,21 @@ os.makedirs(DATA, exist_ok=True)
 
 
 def generate_test_description():
-    system = ExecuteProcess(cmd=COMMAND, env=ENV, output="screen", sigterm_timeout="30", sigkill_timeout="30")
-    return launch.LaunchDescription([system, launch_testing.actions.ReadyToTest()]), {"system": system}
+    # Both starts run as processes of the tests, the end of the first must not end the launch.
+    keep = ExecuteProcess(cmd=["sleep", "infinity"])
+    return launch.LaunchDescription([keep, launch_testing.actions.ReadyToTest()]), {}
+
+
+def start(name):
+    """mowbite.launch.py as the installation starts it, its output in WORK/<name>.log."""
+    with open(os.path.join(WORK, name + ".log"), "w") as log:
+        return subprocess.Popen(COMMAND, env=ENV, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def stop(process):
+    if process.poll() is None:
+        os.killpg(process.pid, signal.SIGINT)
+        process.wait(30)
 
 
 class Probe(SimProbe):
@@ -77,9 +89,24 @@ class TestPlatformChoice(unittest.TestCase):
     def tearDownClass(cls):
         cls.probe.stop()
         rclpy.shutdown()
+        # The output of both starts for the log of the test, then WORK goes.
+        for name in ("first", "second"):
+            path = os.path.join(WORK, name + ".log")
+            if os.path.exists(path):
+                with open(path) as f:
+                    print(f"--- {name} start, last lines ---\n" + "".join(f.readlines()[-60:]))
         shutil.rmtree(WORK, ignore_errors=True)
 
-    def test_01_the_stage_of_the_choice(self, proc_info, system):
+    def test_01_the_stage_of_the_choice(self):
+        first = start("first")
+        try:
+            self.the_stage_of_the_choice(first)
+        finally:
+            stop(first)
+        with open(PLATFORM_FILE) as f:
+            self.assertEqual(json.load(f)["platform"], "nx60i")
+
+    def the_stage_of_the_choice(self, first):
         p = self.probe
         self.assertTrue(p.wait(lambda: p.robot and (p.robot.current_state, p.robot.current_sub_state)
                                == ("SETUP", "PLATFORM"), 60), p.robot)
@@ -99,15 +126,12 @@ class TestPlatformChoice(unittest.TestCase):
         event = p.event(since, "SETUP", 10, what="platform")
         self.assertTrue(event, p.events[since:])
         self.assertEqual((event["platform"], event["from"]), ("nx60i", ""))
-        proc_info.assertWaitForShutdown(process=system, timeout=60)
-        with open(PLATFORM_FILE) as f:
-            self.assertEqual(json.load(f)["platform"], "nx60i")
+        self.assertEqual(first.wait(60), 0)
 
     def test_02_started_again_as_the_mower_chosen(self):
         p = self.probe
         p.robot = p.status = None
-        with open(os.path.join(WORK, "second.log"), "w") as log:
-            second = subprocess.Popen(COMMAND, env=ENV, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        second = start("second")
         try:
             # Its board never answers: the driver sent nothing and says so, without a latch.
             self.assertTrue(p.wait(lambda: p.status and p.status.emergency_reason & NOT_HEARD, 60), p.status)
@@ -126,16 +150,9 @@ class TestPlatformChoice(unittest.TestCase):
             self.assertEqual((event["platform"], event["from"]), ("tron", "nx60i"))
             self.assertEqual(second.wait(60), 0)
         finally:
-            if second.poll() is None:
-                os.killpg(second.pid, signal.SIGINT)
-                second.wait(30)
+            stop(second)
         with open(PLATFORM_FILE) as f:
             self.assertEqual(json.load(f)["platform"], "tron")
         with open(LOCK) as f:
             self.assertTrue(any(cause.get("reset") for cause in json.load(f)["causes"]))
 
-
-@launch_testing.post_shutdown_test()
-class TestExit(unittest.TestCase):
-    def test_the_choice_ended_the_launch_in_order(self, proc_info):
-        launch_testing.asserts.assertExitCodes(proc_info, allowable_exit_codes=[0])
