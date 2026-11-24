@@ -22,7 +22,7 @@ json Program::Platforms() const {
 
 void Program::MarkPlatform() {
   for (const Step& step : list_.steps) {
-    if (step.check == "platform") records_.at(step.id).state = chosen_.empty() ? "open" : "ok";
+    if (step.check == "platform") records_.at(step.id).state = platform_.empty() ? "open" : "ok";
   }
 }
 
@@ -46,7 +46,7 @@ std::optional<Refusal> Program::ChoosePlatform(const json& params, double wall, 
     return std::nullopt;
   }
   if (run_) return Refuse("BUSY", StepOf(*run_).id + " is running", {{"step", StepOf(*run_).id}});
-  if (!chosen_.empty()) {
+  if (!platform_.empty()) {
     if (hardware_.hold) return Refuse("BUSY", "An update holds the mower", {{"state", "HOLD"}});
     if (world_.state != "IDLE") return Refuse("BUSY", "The mower is not in IDLE", {{"state", world_.state}});
     // Another mower: nothing measured on this one counts, the lock stays closed until its summary passes.

@@ -41,13 +41,15 @@ FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
 DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end", "ground", "blade")
-# inputs_assign and summary restart the OS; summary needs the step silence before it as well.
-LIST["steps"] = [step for step in LIST["steps"] if step["check"] not in ("inputs_assign", "summary") + DRIVE]
+# inputs_assign and summary restart the OS; summary needs the step silence before it as well. The step platform is ok
+# by itself (test_platform_choice.py).
+LIST["steps"] = [step for step in LIST["steps"]
+                 if step["check"] not in ("inputs_assign", "summary", "platform") + DRIVE]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
 METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.keep", "setup.reset",
-           "setup.image"]
+           "setup.platforms", "setup.platform.set", "setup.image"]
 G = 9.81
 FIRMWARE = "main 1.2.3"
 # The emergency a press of an input brings where the step names none.

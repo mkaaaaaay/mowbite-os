@@ -465,7 +465,8 @@ if args.target == "mowbite-os" and offers("ntrip.get"):
     check("ntrip.get without user and password", fields == expected, json.dumps(fields or r))
     writable = [m for m in ("ntrip.set", "ntrip.delete") if m in methods]
     check("ntrip.set and ntrip.delete only together", len(writable) in (0, 2), ",".join(writable))
-SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image"]
+SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.reset", "setup.image",
+                 "setup.platforms", "setup.platform.set"]
 setup_offered = [m for m in SETUP_METHODS if methods is not None and m in methods]
 if args.target == "mowbite-os":
     # The setup program, offered where the platform has a step list. Nothing here starts, skips or resets a step.

@@ -134,7 +134,8 @@ class SetupNode : public rclcpp::Node {
 
     mowbite_msgs::msg::RpcMethods methods;
     methods.node_id = "mowbite_setup";
-    if (chosen_.empty() && !data_dir_.empty()) {
+    choice_ = platform.empty() && steps.empty() && !data_dir_.empty();
+    if (choice_) {
       // The stage of the choice: the step platform alone, nothing else runs.
       program_.emplace(*ParseSteps(json::parse(kChoiceSteps), nullptr), "");
       program_->SetPlatforms(platforms.is_array() ? platforms : json::array(), "", false);
@@ -292,7 +293,7 @@ class SetupNode : public rclcpp::Node {
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
     tick_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { OnTick(); });
-    if (chosen_.empty()) {
+    if (choice_) {
       // Without the logic in the stage of the choice robot_state comes from here: SETUP, PLATFORM, no hardware.
       robot_state_pub_ = create_publisher<mowbite_msgs::msg::RobotState>("bridge/robot_state", 10);
       choice_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
@@ -484,7 +485,7 @@ class SetupNode : public rclcpp::Node {
   // The restart a step asked for, by the way of the step list: self leaves a note for the launch and ends this
   // process in order, so that whatever runs the OS starts it again; host asks mowbite-host over the broker.
   void Restart() {
-    if (!chosen_.empty() && program_->restart_way() == "host") {
+    if (!choice_ && program_->restart_way() == "host") {
       RCLCPP_INFO(get_logger(), "The setup program asks mowbite-host to restart the OS");
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "rpc/request";
@@ -518,6 +519,7 @@ class SetupNode : public rclcpp::Node {
     Flush(now);
     // A restart waits until the record is on the disk.
     if (!save_pending_ && program_->TakeRestart(now)) Restart();
+    TakePlatform();
     if (!save_pending_ && !program_->writable() && now - write_tried_ >= kWriteRetry) Save(now);
     // What blocks a step changes without a change of the record: the app has to see it as well.
     std::string blocked = program_->BlockedNow(now);
@@ -764,8 +766,8 @@ class SetupNode : public rclcpp::Node {
         Flush(now);
         state = State(now);
       } else if (!refusal && request.method == "setup.platform.set") {
+        // platform.json and the restart follow with the next tick, after this answer went out.
         Flush(now);
-        TakePlatform();
       }
     }
     if (refusal) {
@@ -779,8 +781,9 @@ class SetupNode : public rclcpp::Node {
   std::string data_dir_;
   std::string layer_path_;
   std::optional<Program> program_;
-  // The platform package the OS runs as; empty in the stage of the choice.
+  // The platform package the OS runs as; empty in the stage of the choice, which runs without a driver and logic.
   std::string chosen_;
+  bool choice_ = false;
   std::map<std::string, Image> images_;
   std::map<std::string, std::pair<std::string, int>> image_infos_;
   World world_;

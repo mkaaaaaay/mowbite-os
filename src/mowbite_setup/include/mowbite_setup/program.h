@@ -519,7 +519,7 @@ class Program {
   json BladeValues(const Run& run, const Step& step, bool final) const;
   // summary.cpp: the step that opens the lock.
   static bool IsSummary(const Step& step);
-  // The step platform is ok while the OS runs as a mower, open in the stage of the choice.
+  // The step platform is ok while the OS runs as a mower (platform_), open in the stage of the choice.
   void MarkPlatform();
   // What keeps the step summary from starting; the first of them refuses setup.start.
   std::vector<Refusal> SummaryProblems(double now) const;
