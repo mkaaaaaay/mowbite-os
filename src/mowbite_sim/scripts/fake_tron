@@ -8,7 +8,8 @@ SpeedData, also while heartbeats come, and while lift or stop is set; it stays 0
 the last three SpeedData came each less than 75 ms after the one before, the setpoint lasts --fast-speed-hold s (flag
 fast_speed_hold, 3.6 as measured on the Tron at 20 SpeedData/s; 0 off). The motor report gives the drive motors as the Tron does: right before left, negative rpm forwards. Standing wheels report
 the noise of the Tron with --standstill-noise (flag standstill_noise). The state file counts the bytes the host wrote to
-the MCU pty (host_bytes). The GNSS pty carries NMEA GGA, RMC and VTG for the
+the MCU pty (host_bytes). With the flag mcu_quiet the MCU pty sends nothing, and every byte the host writes meanwhile
+goes to the log (quiet_rx). The GNSS pty carries NMEA GGA, RMC and VTG for the
 antenna position (every 0.2 s, flag gnss_period), the IMU pty WIT standard frames 0x51, 0x52, 0x53 (50 Hz) for an
 upright sensor.
 Optional: a JSON file with flags (lift, stop, bumper, bumper_left, bumper_right, rain, dock, host_timeout, fast_speed_hold, gnss_quality, gnss_noise, gnss_age, gnss_delay,
@@ -17,7 +18,7 @@ imu_off, cutter_ignores_off,
 cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
-stop_latches) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true
+stop_latches, mcu_quiet) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true
 pose as JSON with the time.monotonic() it was taken (clock); a thread of its own does all of this file work, so a
 slow disk never holds the ptys (Files). The GNSS pty also plays the RTK board in front of the receiver (Board).
 gnss_rtcm true makes the fix depend on the RTCM the board passes: RTK fixed with the real age while corrections are
@@ -840,7 +841,7 @@ def main():
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, "
                         "lift_tilt, lift_front_only, gyro_bias_dps, charge_current, battery_percentage, "
                         "battery_voltage, battery_temperature, blade_temperature, "
-                        "standstill_noise, fast_speed_hold")
+                        "standstill_noise, fast_speed_hold, mcu_quiet")
     parser.add_argument("--log", help="JSON lines log of received sub packets")
     parser.add_argument("--log-max-mb", type=float, default=20.0)
     parser.add_argument("--state", help="JSON file with the true pose, written 5 times a second")
@@ -918,6 +919,7 @@ def main():
         while True:
             now = time.monotonic() - t0
             flags = files.flags
+            quiet = bool(flags.get("mcu_quiet", 0))
             # Somebody puts the mower down there by hand, once for each new value of the flag; lifting it drops the
             # setpoint the MCU held.
             place = flags.get("place")
@@ -972,7 +974,8 @@ def main():
                 measured = drive.measured(float(flags.get("odom_scale", args.odom_scale)))
                 if drive.standing() and flags.get("standstill_noise", args.standstill_noise):
                     measured = standstill_noise(noise_rng)
-                send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
+                if not quiet:
+                    send(mcu.fd, encode([(FROM_MCU, 10, sensor), (FROM_MCU, 4, struct.pack("<ff", *measured))]))
             if now >= next_status:
                 next_status = now + 1.0
                 # 0.1 V steps, charging on the dock after Charge 1 (0.1 A steps, negative) or 1.2 A discharging
@@ -983,7 +986,8 @@ def main():
                 battery = struct.pack("<HhBbbI", decivolts, current, percentage, int(dock_ok),
                                       celsius(flags.get("battery_temperature", 30)), 0)
                 version = bytes([0, 6, 36, 0, 6, 34, 0, 0, 0])
-                send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version)]))
+                if not quiet:
+                    send(mcu.fd, encode([(FROM_MCU, 5, battery), (FROM_MCU, 12, version)]))
             if now >= next_motors:
                 next_motors = now + MOTORS_PERIOD
                 left_rpm, right_rpm = drive.rpm()
@@ -994,7 +998,8 @@ def main():
                 # 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", BLADE_RPM if cutter_percent else 0, 80 if cutter_percent else 0, 2450,
                                      celsius(flags.get("blade_temperature", 30)), 0)
-                send(mcu.fd, encode([(FROM_MCU, 13, cutter + motors)]))
+                if not quiet:
+                    send(mcu.fd, encode([(FROM_MCU, 13, cutter + motors)]))
             if now >= next_gnss:
                 next_gnss = now + min(max(float(flags.get("gnss_period", GNSS_PERIOD)), 0.05), 1.0)
                 sigma = float(flags.get("gnss_noise", args.gnss_noise_m))
@@ -1056,6 +1061,8 @@ def main():
             except OSError:
                 continue
             host_bytes += len(data)
+            if quiet:
+                log.write({"t": round(now, 3), "quiet_rx": len(data)})
             for packets in decoder.feed(data):
                 if packets is None:
                     log.write({"t": round(now, 3), "bad": True})

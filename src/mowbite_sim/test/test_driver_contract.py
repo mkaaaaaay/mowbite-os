@@ -13,6 +13,8 @@ A case is the class Case of its file:
   time()                  the time of the board, the clock of the two lists below
   drive(since)            (t, linear m/s, angular rad/s) of every drive command the board got since then
   blade(since)            (t, running) of every blade command the board got since then
+  board_quiet(quiet)      optional: the board sends nothing while quiet; the run starts with it quiet
+  quiet_bytes()           with board_quiet: the bytes the board got from the driver while quiet
 
 Run in a sourced workspace: MOWBITE_PLATFORM=<platform> launch_test /ws/src/mowbite_sim/test/test_driver_contract.py
 """
@@ -40,6 +42,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_contract_")
 HOLD = os.path.join(WORK, "hold.json")
 CASE = importlib.import_module(f"contract_{PLATFORM}").Case(WORK, HOLD)
 LATCH = HardwareStatus.REASON_LATCH
+NOT_HEARD = HardwareStatus.REASON_BOARD_NOT_HEARD
 HOST = LATCH | HardwareStatus.REASON_HIGH_LEVEL
 CMD_VEL_TIMEOUT = CASE.cmd_vel_timeout
 # The longest time without hw/cmd_vel a driver may keep the wheels turning.
@@ -47,7 +50,10 @@ CMD_VEL_TIMEOUT_MAX = 0.5
 
 
 def generate_test_description():
-    CASE.inputs()
+    if hasattr(CASE, "board_quiet"):
+        CASE.board_quiet(True)
+    else:
+        CASE.inputs()
     return launch.LaunchDescription([
         CASE.board(),
         TimerAction(period=CASE.driver_delay, actions=[CASE.driver(), launch_testing.actions.ReadyToTest()]),
@@ -90,9 +96,17 @@ class TestDriverContract(unittest.TestCase):
     def setUpClass(cls):
         rclpy.init()
         cls.probe = Probe()
-        ready = cls.probe.wait_for(
+        cls.ready = False
+
+    def setUp(self):
+        if TestDriverContract.ready or self._testMethodName == "test_0_board_not_heard":
+            return
+        if getattr(CASE, "quiet", False):
+            CASE.board_quiet(False)
+        ready = self.probe.wait_for(
             lambda p: p.status is not None and p.status.telemetry_ok and not p.status.emergency, 20)
         assert ready, "driver never ready"
+        TestDriverContract.ready = True
 
     @classmethod
     def tearDownClass(cls):
@@ -122,6 +136,30 @@ class TestDriverContract(unittest.TestCase):
         self.assertEqual(p.status.emergency_reason, LATCH | reason)
         self.assertTrue(self.release(), "release failed")
         self.assertEqual(p.status.emergency_reason, 0)
+
+    def test_0_board_not_heard(self):
+        """Nothing goes to a board not heard since the port opened, whatever the host asks; after the telemetry timeout
+        that is BOARD_NOT_HEARD, not latched, and the first frames end it without a release."""
+        if not hasattr(CASE, "board_quiet"):
+            self.skipTest("the fake board of this platform cannot start quiet yet")
+        p = self.probe
+        s = p.wait_for(lambda p: p.status is not None and p.status.emergency_reason & NOT_HEARD and p.status, 10)
+        self.assertTrue(s, "no BOARD_NOT_HEARD while the board is quiet")
+        self.assertEqual(s.emergency_reason, NOT_HEARD)
+        self.assertTrue(s.emergency)
+        self.assertFalse(s.emergency_latched)
+        self.assertFalse(s.telemetry_ok)
+        p.cmd_vel_for(0.2, 0.5)
+        r = p.set_blade(True, lease_s=1.0)
+        self.assertFalse(r.success)
+        self.assertEqual(r.emergency_reason, NOT_HEARD)
+        p.set_emergency(False)
+        time.sleep(0.5)
+        self.assertEqual(CASE.quiet_bytes(), 0)
+        CASE.board_quiet(False)
+        ready = p.wait_for(lambda p: p.status.telemetry_ok and not p.status.emergency, 10)
+        self.assertTrue(ready, "the first frames did not end BOARD_NOT_HEARD")
+        TestDriverContract.ready = True
 
     def test_a_capabilities_latched_and_complete(self):
         # The driver publishes them again once a board named its firmware; one that did not keeps an empty value.

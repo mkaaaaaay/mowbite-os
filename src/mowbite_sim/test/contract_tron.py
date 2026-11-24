@@ -1,7 +1,7 @@
 """The Tron in the driver contract (test_driver_contract.py): tron_mcu against fake_tron on a pty."""
 from launch_ros.actions import Node
 from sim_common import TRON_CUTTER as CUTTER, TRON_SPEED as SPEED
-from sim_common import fake_tron, last_time, layers, sim_files, sim_links, sub_packets, write_json
+from sim_common import fake_tron, last_time, layers, log_entries, sim_files, sim_links, sub_packets, write_json
 
 
 class Case:
@@ -14,6 +14,7 @@ class Case:
         self.hold_file = hold_file
         self.files = layers.files("tron")
         self.cmd_vel_timeout = layers.parameters(self.files, "tron_mcu")["cmd_vel_timeout"]
+        self.quiet = False
 
     def board(self):
         return fake_tron(self.links, "--flags", self.flags, "--log", self.log, "--log-max-mb", "5")
@@ -25,7 +26,14 @@ class Case:
                                               "hold_file": self.hold_file}])
 
     def inputs(self, stop=False, lift=False):
-        write_json(self.flags, {"stop": int(stop), "lift": int(lift)})
+        write_json(self.flags, {"stop": int(stop), "lift": int(lift), "mcu_quiet": int(self.quiet)})
+
+    def board_quiet(self, quiet):
+        self.quiet = quiet
+        self.inputs()
+
+    def quiet_bytes(self):
+        return sum(e["quiet_rx"] for e in log_entries(self.log) if "quiet_rx" in e)
 
     def time(self):
         return last_time(self.log)
