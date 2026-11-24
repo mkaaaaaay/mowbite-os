@@ -920,6 +920,18 @@ const std::vector<SetupCheck>& SetupChecks() {
              "once for it.",
              "If a check is missing, finish it first. If the tick does not come after the restart, check the device "
              "file kept by hand."})},
+      {"platform", "platform", false, true,
+       "Which mower this is: ok while the OS runs as one, the only step while none is chosen (robot_state SETUP with "
+       "sub_state PLATFORM, no driver, no port open). setup.platforms lists the mowers of the image, "
+       "setup.platform.set chooses one and restarts the OS as it; the step board then shows whether the board "
+       "answers as that mower's. Another choice later takes every result back and closes the lock with a reset",
+       {}, {}, {},
+       Both({"Mäher wählen",
+             "MowBite OS muss wissen, welcher Mäher das ist. Erst danach spricht es seine Platine an.",
+             "Den Mäher aus der Liste wählen. Antwortet die Platine danach nicht, einen anderen wählen."},
+            {"Choose the mower",
+             "MowBite OS has to know which mower this is. Only then does it talk to its board.",
+             "Pick the mower from the list. Should the board not answer after it, pick another one."})},
   });
   return checks;
 }
@@ -1072,8 +1084,8 @@ Field SetupState() {
       {Text("id", "Name of the step in setup.*"),
        Text("stage", "Its stage"),
        Text("check", "Its check, a key of x-setup.checks"),
-       Text("kind", "How to show it: confirm, input, measure, drive or blade; a kind the app does not know as text "
-                    "with a button"),
+       Text("kind", "How to show it: confirm, input, measure, drive, blade or platform (the choice of the mower, "
+                    "setup.platforms and setup.platform.set); a kind the app does not know as text with a button"),
        Text("state", "locked: a step of needs is not ok; open; running; ok; failed; skipped; stale", true,
             SetupStates()),
        Bool("safety", "A safety step: failing it with a reason that closes closes the lock, passing it opens it again"),
@@ -1433,12 +1445,16 @@ EventEntry SetupProgramEvent() {
                         "setup.reset took all results back; safety_closed: a safety step failed and closed the lock "
                         "of autonomous driving and mowing; safety_opened: the lock is open (again); blade_allowed: the "
                         "first start of a step blade allowed the blade, the OS restarts and the step waits for its "
-                        "next start",
-                true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened", "blade_allowed"}),
+                        "next start; platform: setup.platform.set chose another mower, every result is taken back, "
+                        "the lock closes with a reset and the OS restarts as that mower",
+                true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened", "blade_allowed",
+                       "platform"}),
            Text("stage", "With stage_done: the stage", false),
            Text("step", "With safety_closed: the step that failed; with blade_allowed: the step blade", false),
            Text("cause", "With safety_closed: its reason of SETUP_STEP", false),
-           Text("date", "With safety_opened by a step summary: the date it wrote", false)},
+           Text("date", "With safety_opened by a step summary: the date it wrote", false),
+           Text("platform", "With platform: the mower chosen", false),
+           Text("from", "With platform: the mower before, empty in the stage of the choice", false)},
           {}};
 }
 
@@ -1495,6 +1511,18 @@ EventEntry SetupRefused() {
                          "This step restarts MowBite OS or turns the wheels. That takes a mower without an emergency "
                          "stop.",
                          "Release the emergency stop, then start the step."})),
+           refused("PLATFORM_FIXED", "The installation fixed the platform (MOWBITE_PLATFORM): setup.platform.set takes "
+                   "no other", {},
+                   Both({"Mäher fest eingestellt", "Die Installation legt fest, welcher Mäher das ist.",
+                         "MowBite OS für den anderen Mäher neu aufspielen."},
+                        {"Mower set by the installation", "The installation sets which mower this is.",
+                         "Install MowBite OS again for the other mower."})),
+           refused("UNKNOWN_PLATFORM", "The image has no platform of this name: see setup.platforms",
+                   {Text("platform", "The name", false)},
+                   Both({"Unbekannter Mäher", "Diese Version von MowBite OS kennt den Mäher nicht.",
+                         "Einen Mäher aus der Liste wählen."},
+                        {"Unknown mower", "This version of MowBite OS doesn't know the mower.",
+                         "Pick a mower from the list."})),
            DriverMissing("info"), NotWritable("error")},
           "info", "user"};
   for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));

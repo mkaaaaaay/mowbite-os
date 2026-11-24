@@ -536,6 +536,18 @@ const std::vector<EmergencyBit>& EmergencyBits() {
           "The mower is watching its inputs to assign them. No sensor stops anything meanwhile, so it does not "
           "drive or mow.",
           "Finish or stop the assignment in the setup. MowBite OS restarts after it."}}}},
+      {23, "BOARD_NOT_HEARD",
+       "The driver opened its port and heard no frame of its board since: it sends nothing there until one comes, so "
+       "a mower chosen wrong talks to no other board. The first frame ends it without a release",
+       {{"de",
+         {"Platine meldet sich nicht",
+          "Am Anschluss des gewählten Mähers meldet sich keine passende Platine. MowBite OS sendet nichts dorthin.",
+          "Prüfen, ob der richtige Mäher gewählt ist und die Platine Strom hat. Sonst in der Einrichtung einen "
+          "anderen Mäher wählen."}},
+        {"en",
+         {"Board not answering",
+          "No board of the chosen mower reports at its port. MowBite OS sends nothing there.",
+          "Check that the right mower is chosen and the board has power. Else choose another mower in the setup."}}}},
   };
   return bits;
 }
@@ -944,6 +956,25 @@ const std::vector<Method>& Methods() {
        "closes with a reset until a summary passes again, a date from the file kept by hand stays as it is. The "
        "causes of failed safety steps stay",
        Object("params", "The version", {SetupVersion()}), SetupAnswer(), kSetupOffered},
+      {"setup.platforms", "mowbite_setup",
+       "The mowers this image runs as, for the step platform: name, texts and image of each, the one chosen and "
+       "whether the installation fixed it",
+       NoParams(),
+       Object("result", "The mowers",
+              {Rows("platforms", "The platforms of the image, by name",
+                    {Text("name", "Name for setup.platform.set"),
+                     Object("texts", "name, text (what it is) and board (what the driver expects at which port) by "
+                                     "language (de, en)"),
+                     Text("image", "name for setup.image, empty without", false)}),
+               Text("current", "The platform the OS runs as, empty in the stage of the choice"),
+               Bool("fixed", "The installation fixed it (MOWBITE_PLATFORM): setup.platform.set takes no other")}),
+       ""},
+      {"setup.platform.set", "mowbite_setup",
+       "Chooses the mower and restarts the OS as it; refused while a step runs or the mower is not idle. On a mower "
+       "that runs as another one every result goes back and the lock closes with a reset (SETUP platform); the same "
+       "one again does nothing",
+       Object("params", "The mower", {Text("platform", "A name of setup.platforms"), SetupVersion()}),
+       Object("result", "What happens", {Bool("restart", "The OS restarts as the mower chosen")}), ""},
       {"setup.image", "mowbite_setup",
        "An image of a step in pieces of at most " + std::to_string(kSetupImageBytes) + " bytes",
        Object("params", "The piece",

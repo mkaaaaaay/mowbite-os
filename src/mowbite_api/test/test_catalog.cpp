@@ -216,7 +216,7 @@ TEST(Catalog, DrivenReasonsInTheOrderOfTheCheck) {
 }
 
 TEST(Catalog, EmergencyBits) {
-  ASSERT_EQ(EmergencyBits().size(), 23u);
+  ASSERT_EQ(EmergencyBits().size(), 24u);
   for (size_t i = 0; i < EmergencyBits().size(); i++) {
     EXPECT_EQ(EmergencyBits()[i].bit, static_cast<int>(i));
     EXPECT_FALSE(EmergencyBits()[i].text.empty()) << i;
@@ -227,6 +227,7 @@ TEST(Catalog, EmergencyBits) {
   EXPECT_EQ(EmergencyNames((1 << 18) | (1 << 19) | (1 << 20)), "WHEEL_RUNAWAY, FOREIGN_HOST, DRIVER_STALL");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 21)), "LATCH, UNEXPECTED_RESTART");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 22)), "LATCH, INPUTS_LEARNING");
+  EXPECT_EQ(EmergencyNames(1 << 23), "BOARD_NOT_HEARD");
 }
 
 // Home Assistant reads the names from the log line with [A-Z_, ]: each bit, set alone, gives a name that fits it.
@@ -245,7 +246,7 @@ TEST(Catalog, EmergencyNamesOfEachBit) {
     EXPECT_TRUE(std::regex_match(EmergencyNames(bits), line)) << i;
   }
   // One UNKNOWN for any number of bits without a name, after the named ones.
-  EXPECT_EQ(EmergencyNames((1 << 23) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
+  EXPECT_EQ(EmergencyNames((1 << 24) | (1 << 25) | static_cast<int>(1u << 31)), "UNKNOWN");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 25) | (1 << 3) | (1 << 30)), "LATCH, LIFT, UNKNOWN");
   const std::string all = EmergencyNames(-1);
   EXPECT_TRUE(std::regex_match(all, line));
@@ -663,7 +664,7 @@ TEST(Catalog, TheChecksOfTheSetupProgram) {
     EXPECT_TRUE(names.insert(check.name).second) << check.name;
     EXPECT_EQ(FindSetupCheck(check.name), &check);
     EXPECT_TRUE(check.kind == "confirm" || check.kind == "input" || check.kind == "measure" ||
-                check.kind == "drive" || check.kind == "blade")
+                check.kind == "drive" || check.kind == "blade" || check.kind == "platform")
         << check.name;
     EXPECT_FALSE(check.text.empty()) << check.name;
     for (const auto& reason : check.reasons) {

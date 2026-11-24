@@ -5671,8 +5671,16 @@
           "description": "With safety_opened by a step summary: the date it wrote",
           "type": "string"
         },
+        "from": {
+          "description": "With platform: the mower before, empty in the stage of the choice",
+          "type": "string"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
+          "type": "string"
+        },
+        "platform": {
+          "description": "With platform: the mower chosen",
           "type": "string"
         },
         "stage": {
@@ -5693,14 +5701,15 @@
           "description": "What happened; a type this version does not know carries only the envelope for sure"
         },
         "what": {
-          "description": "stage_done: every step of stage is ok or skipped; complete: every step is; reset: setup.reset took all results back; safety_closed: a safety step failed and closed the lock of autonomous driving and mowing; safety_opened: the lock is open (again); blade_allowed: the first start of a step blade allowed the blade, the OS restarts and the step waits for its next start",
+          "description": "stage_done: every step of stage is ok or skipped; complete: every step is; reset: setup.reset took all results back; safety_closed: a safety step failed and closed the lock of autonomous driving and mowing; safety_opened: the lock is open (again); blade_allowed: the first start of a step blade allowed the blade, the OS restarts and the step waits for its next start; platform: setup.platform.set chose another mower, every result is taken back, the lock closes with a reset and the OS restarts as that mower",
           "enum": [
             "stage_done",
             "complete",
             "reset",
             "safety_closed",
             "safety_opened",
-            "blade_allowed"
+            "blade_allowed",
+            "platform"
           ],
           "type": "string"
         }
@@ -10851,7 +10860,7 @@
                 "type": "array"
               },
               "kind": {
-                "description": "How to show it: confirm, input, measure, drive or blade; a kind the app does not know as text with a button",
+                "description": "How to show it: confirm, input, measure, drive, blade or platform (the choice of the mower, setup.platforms and setup.platform.set); a kind the app does not know as text with a button",
                 "type": "string"
               },
               "lines": {
@@ -11444,6 +11453,90 @@
       },
       "required": [
         "running"
+      ],
+      "type": "object"
+    },
+    "setup.platform.set.params": {
+      "additionalProperties": false,
+      "description": "The params of setup.platform.set: The mower",
+      "properties": {
+        "platform": {
+          "description": "A name of setup.platforms",
+          "type": "string"
+        },
+        "version": {
+          "description": "version of the state read last",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "platform",
+        "version"
+      ],
+      "type": "object"
+    },
+    "setup.platform.set.result": {
+      "additionalProperties": false,
+      "description": "The result of setup.platform.set: What happens",
+      "properties": {
+        "restart": {
+          "description": "The OS restarts as the mower chosen",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "restart"
+      ],
+      "type": "object"
+    },
+    "setup.platforms.params": {
+      "description": "The params of setup.platforms: None",
+      "type": "object"
+    },
+    "setup.platforms.result": {
+      "additionalProperties": false,
+      "description": "The result of setup.platforms: The mowers",
+      "properties": {
+        "current": {
+          "description": "The platform the OS runs as, empty in the stage of the choice",
+          "type": "string"
+        },
+        "fixed": {
+          "description": "The installation fixed it (MOWBITE_PLATFORM): setup.platform.set takes no other",
+          "type": "boolean"
+        },
+        "platforms": {
+          "description": "The platforms of the image, by name",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "image": {
+                "description": "name for setup.image, empty without",
+                "type": "string"
+              },
+              "name": {
+                "description": "Name for setup.platform.set",
+                "type": "string"
+              },
+              "texts": {
+                "description": "name, text (what it is) and board (what the driver expects at which port) by language (de, en)",
+                "type": "object"
+              }
+            },
+            "required": [
+              "name",
+              "texts"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "platforms",
+        "current",
+        "fixed"
       ],
       "type": "object"
     },
@@ -16643,11 +16736,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:56",
+  "$id": "urn:mowbite-os:api:57",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 56,
+  "x-api": 57,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17096,6 +17189,23 @@
           "fix": "Finish or stop the assignment in the setup. MowBite OS restarts after it.",
           "help": "The mower is watching its inputs to assign them. No sensor stops anything meanwhile, so it does not drive or mow.",
           "name": "Inputs are being assigned"
+        }
+      }
+    },
+    {
+      "bit": 23,
+      "description": "The driver opened its port and heard no frame of its board since: it sends nothing there until one comes, so a mower chosen wrong talks to no other board. The first frame ends it without a release",
+      "name": "BOARD_NOT_HEARD",
+      "texts": {
+        "de": {
+          "fix": "Prüfen, ob der richtige Mäher gewählt ist und die Platine Strom hat. Sonst in der Einrichtung einen anderen Mäher wählen.",
+          "help": "Am Anschluss des gewählten Mähers meldet sich keine passende Platine. MowBite OS sendet nichts dorthin.",
+          "name": "Platine meldet sich nicht"
+        },
+        "en": {
+          "fix": "Check that the right mower is chosen and the board has power. Else choose another mower in the setup.",
+          "help": "No board of the chosen mower reports at its port. MowBite OS sends nothing there.",
+          "name": "Board not answering"
         }
       }
     }
@@ -17773,6 +17883,20 @@
       "offered": "where the platform has a step list (setup/setup.yaml)",
       "params": "#/$defs/setup.keep.params",
       "result": "#/$defs/setup.keep.result"
+    },
+    "setup.platform.set": {
+      "description": "Chooses the mower and restarts the OS as it; refused while a step runs or the mower is not idle. On a mower that runs as another one every result goes back and the lock closes with a reset (SETUP platform); the same one again does nothing",
+      "node": "mowbite_setup",
+      "offered": "",
+      "params": "#/$defs/setup.platform.set.params",
+      "result": "#/$defs/setup.platform.set.result"
+    },
+    "setup.platforms": {
+      "description": "The mowers this image runs as, for the step platform: name, texts and image of each, the one chosen and whether the installation fixed it",
+      "node": "mowbite_setup",
+      "offered": "",
+      "params": "#/$defs/setup.platforms.params",
+      "result": "#/$defs/setup.platforms.result"
     },
     "setup.reset": {
       "description": "Takes every result back: all steps are open again, the record starts anew. It takes the date, the stand time and allow_blade out of the parameter file of the program; a lock the program opened (safety.source program) closes with a reset until a summary passes again, a date from the file kept by hand stays as it is. The causes of failed safety steps stay",
@@ -20853,6 +20977,24 @@
           }
         }
       },
+      "PLATFORM_FIXED": {
+        "description": "The installation fixed the platform (MOWBITE_PLATFORM): setup.platform.set takes no other",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "MowBite OS für den anderen Mäher neu aufspielen.",
+            "help": "Die Installation legt fest, welcher Mäher das ist.",
+            "name": "Mäher fest eingestellt"
+          },
+          "en": {
+            "fix": "Install MowBite OS again for the other mower.",
+            "help": "The installation sets which mower this is.",
+            "name": "Mower set by the installation"
+          }
+        }
+      },
       "RESTARTS_LOW": {
         "description": "The launch has fewer than two restarts of the driver left",
         "fields": {
@@ -20951,6 +21093,26 @@
             "fix": "Check the storage of the mower, then restart MowBite OS.",
             "help": "The mower can't save the state of the setup.",
             "name": "Storage not writable"
+          }
+        }
+      },
+      "UNKNOWN_PLATFORM": {
+        "description": "The image has no platform of this name: see setup.platforms",
+        "fields": {
+          "platform": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Einen Mäher aus der Liste wählen.",
+            "help": "Diese Version von MowBite OS kennt den Mäher nicht.",
+            "name": "Unbekannter Mäher"
+          },
+          "en": {
+            "fix": "Pick a mower from the list.",
+            "help": "This version of MowBite OS doesn't know the mower.",
+            "name": "Unknown mower"
           }
         }
       },
@@ -23529,7 +23691,8 @@
               "FOREIGN_HOST",
               "DRIVER_STALL",
               "UNEXPECTED_RESTART",
-              "INPUTS_LEARNING"
+              "INPUTS_LEARNING",
+              "BOARD_NOT_HEARD"
             ]
           },
           "height": {
@@ -23983,7 +24146,8 @@
               "FOREIGN_HOST",
               "DRIVER_STALL",
               "UNEXPECTED_RESTART",
-              "INPUTS_LEARNING"
+              "INPUTS_LEARNING",
+              "BOARD_NOT_HEARD"
             ]
           },
           "hold": {
@@ -24639,6 +24803,28 @@
         "start": false,
         "values": {}
       },
+      "platform": {
+        "auto": true,
+        "description": "Which mower this is: ok while the OS runs as one, the only step while none is chosen (robot_state SETUP with sub_state PLATFORM, no driver, no port open). setup.platforms lists the mowers of the image, setup.platform.set chooses one and restarts the OS as it; the step board then shows whether the board answers as that mower's. Another choice later takes every result back and closes the lock with a reset",
+        "kind": "platform",
+        "params": {},
+        "reasons": [],
+        "safety": false,
+        "start": false,
+        "texts": {
+          "de": {
+            "fix": "Den Mäher aus der Liste wählen. Antwortet die Platine danach nicht, einen anderen wählen.",
+            "help": "MowBite OS muss wissen, welcher Mäher das ist. Erst danach spricht es seine Platine an.",
+            "name": "Mäher wählen"
+          },
+          "en": {
+            "fix": "Pick the mower from the list. Should the board not answer after it, pick another one.",
+            "help": "MowBite OS has to know which mower this is. Only then does it talk to its board.",
+            "name": "Choose the mower"
+          }
+        },
+        "values": {}
+      },
       "position": {
         "auto": true,
         "description": "The position holds for time: solution, accuracy and rate of gps/absolute_pose",
@@ -24794,7 +24980,8 @@
               "FOREIGN_HOST",
               "DRIVER_STALL",
               "UNEXPECTED_RESTART",
-              "INPUTS_LEARNING"
+              "INPUTS_LEARNING",
+              "BOARD_NOT_HEARD"
             ]
           },
           "hold": {
