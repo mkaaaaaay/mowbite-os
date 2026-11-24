@@ -258,7 +258,10 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
 
   std::vector<uint32_t> matched;
   for (const Mapped& mapped : finds) {
+    // The nearest track of the find's own kind within its gate, else the nearest other compatible one: a thing next
+    // to a person must not take the person's track and leave the person to start a second one.
     Track* best = nullptr;
+    bool best_same = false;
     double best_distance = std::numeric_limits<double>::infinity();
     for (auto& [id, track] : tracks_) {
       if (!Compatible(track.kind, mapped.find->kind)) continue;
@@ -269,8 +272,10 @@ FrameResult Tracker::OnFrame(const Frame& frame, double now) {
                             LargerSigma(mapped.cxx, mapped.cxy, mapped.cyy);
       const double gate = std::min(config_.match_max, config_.match_distance + 2.0 * spread);
       const double distance = std::hypot(track.x - mapped.x, track.y - mapped.y);
-      if (distance <= gate && distance < best_distance) {
+      const bool same = track.kind == mapped.find->kind;
+      if (distance <= gate && ((same && !best_same) || (same == best_same && distance < best_distance))) {
         best = &track;
+        best_same = same;
         best_distance = distance;
       }
     }

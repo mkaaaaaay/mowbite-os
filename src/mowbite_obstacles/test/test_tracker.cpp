@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <set>
 
 #include "mowbite_obstacles/tracker.h"
 
@@ -190,6 +191,22 @@ TEST_F(TrackerTest, APersonSeenAsAnObjectForAWhileStaysAPerson) {
   // An animal seen as a person becomes one, never the other way.
   Feed(3.6, {Thing(Kind::kAnimal, 1.5, 0.0)});
   EXPECT_EQ(tracker.tracks().begin()->second.kind, Kind::kPerson);
+}
+
+// A thing and a person nearer to each other than the scatter of their finds keep one track each, also when the find
+// of the thing lies nearer the person's track and comes first in the frame.
+TEST_F(TrackerTest, AFindTakesATrackOfItsOwnKindFirst) {
+  Feed(1.0, {Thing(Kind::kObject, 1.20, 0.0)});
+  Feed(1.2, {Thing(Kind::kObject, 1.20, 0.0)});
+  Feed(1.4, {Thing(Kind::kObject, 1.20, 0.0), Thing(Kind::kPerson, 1.26, 0.0)});
+  ASSERT_EQ(tracker.tracks().size(), 2u);
+  for (double t = 1.6; t < 2.5; t += 0.2) {
+    Feed(t, {Thing(Kind::kObject, 1.25, 0.0), Thing(Kind::kPerson, 1.21, 0.0)});
+  }
+  ASSERT_EQ(tracker.tracks().size(), 2u);
+  std::multiset<Kind> kinds;
+  for (const auto& [id, track] : tracker.tracks()) kinds.insert(track.kind);
+  EXPECT_EQ(kinds, (std::multiset<Kind>{Kind::kObject, Kind::kPerson}));
 }
 
 TEST_F(TrackerTest, AClassOfTheModelNamesAThingSeenByDepthAlone) {
