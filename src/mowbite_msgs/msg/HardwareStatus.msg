@@ -29,6 +29,10 @@ uint32 REASON_UNEXPECTED_RESTART = 2097152
 # anything, so that the setup program sees which sensor is on which line (hw/inputs). No release ends it, only a start
 # without inputs.learn.
 uint32 REASON_INPUTS_LEARNING = 4194304
+# The driver opened its port and heard no valid frame of its board since, for longer than its telemetry timeout:
+# it has sent nothing there and sends nothing until one comes (a mower chosen wrong talks to no other board). Not
+# latched: the first valid frame ends it; a port opened again starts it anew.
+uint32 REASON_BOARD_NOT_HEARD = 8388608
 
 # Motion and blade are blocked by the driver: latched, stale telemetry or incompatible firmware.
 bool emergency
