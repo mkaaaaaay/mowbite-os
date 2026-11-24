@@ -261,7 +261,8 @@ TEST(LogicDataRollback, MowingWaitsForTheConfirmation) {
   EXPECT_EQ(why.fields["backup_of"], 1767225600);
   EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
-  const Event* refused = Find(core.TakeEvents(), "MOWING_REFUSED");
+  events = core.TakeEvents();
+  const Event* refused = Find(events, "MOWING_REFUSED");
   ASSERT_NE(refused, nullptr);
   EXPECT_EQ(refused->details["reason"], "DATA_ROLLBACK");
   EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
