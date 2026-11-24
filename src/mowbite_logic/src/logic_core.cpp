@@ -23,10 +23,6 @@ EventObserver event_observer = nullptr;
 
 }  // namespace
 
-std::string EmergencyReasonNames(int reason) {
-  return mowbite_api::EmergencyNames(reason);
-}
-
 bool PlannerSilent(const Reason& why) {
   return why.code == "PLANNER_TIMEOUT" || why.code == "PLANNER_MISSING";
 }

@@ -360,7 +360,9 @@ struct RestartReport {
 };
 
 // "LATCH, LIFT": the names of the bits from the catalog in bit order, one UNKNOWN for all bits without a name.
-std::string EmergencyReasonNames(int reason);
+inline std::string EmergencyReasonNames(int reason) {
+  return mowbite_api::EmergencyNames(reason);
+}
 
 // Called with every event the core adds, before it is queued; for the tests against the catalog, none by default.
 using EventObserver = void (*)(const std::string& type, const json& details);
