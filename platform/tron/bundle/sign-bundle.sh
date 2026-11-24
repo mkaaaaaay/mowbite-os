@@ -75,7 +75,7 @@ fi
 # gate_dir <ls|cat> [file]: lists the folder of gate results or reads one file of it.
 gate_dir() {
     if [[ $MOWBITE_GATE == *:* ]]; then
-        ssh "${MOWBITE_GATE%%:*}" "$1" "${MOWBITE_GATE#*:}${2:+/$2}"
+        ssh -n "${MOWBITE_GATE%%:*}" "$1" "${MOWBITE_GATE#*:}${2:+/$2}"
     else
         "$1" "$MOWBITE_GATE${2:+/$2}"
     fi 2> /dev/null || true
