@@ -138,7 +138,7 @@ class TestParams(unittest.TestCase):
             "unknown": ({"params": {P + "gps_wait_time": 5, P + "tool_width": 0.2}}, None,
                         "/mower_logic/tool_width is not a setting of MowBite OS"),
             "other_node": ({"params": {"/xbot_positioning/antenna_offset_x": 0.1}}, None,
-                           "No dynamic_reconfigure server found for /xbot_positioning/antenna_offset_x"),
+                           "/xbot_positioning/antenna_offset_x is not a setting of MowBite OS"),
             "cold": ({"params": {P + "motor_cold_temperature": 80}}, None,
                      "motor_cold_temperature must be below motor_hot_temperature"),
             "empty": ({}, None, 'Expected {"params": {name: value, ...}}'),

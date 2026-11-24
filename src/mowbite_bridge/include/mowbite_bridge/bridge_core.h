@@ -115,6 +115,8 @@ struct BridgeConfig {
   std::string update_path = "";
   // Monotonic seconds for the open calls; the steady clock without one.
   std::function<double()> clock = nullptr;
+  // Sensor ids, /ll/board and the log line of emergency reasons as the app of OpenMower knows them (compat.h).
+  bool openmower_names = true;
 };
 
 // The bridge between the nodes and MQTT without ROS or MQTT client; retained texts are resent after every connect.
@@ -149,8 +151,12 @@ class BridgeCore {
   void OnMqtt(const std::string& topic, std::string_view payload, bool retained, const ResponseRoute& route = {});
 
   void OnRobotState(const RobotStateView& state);
-  // provider names the publisher the sensor came from (OnProviders); empty: not known, the sensor stays for good.
+  // A change of the reasons of the emergency (bits as in robot_state): its log line.
+  void OnReasonChange(uint32_t before, uint32_t after);
+  // The sensor under its own id; provider names the publisher it came from (OnProviders); empty: not known, the
+  // sensor stays for good.
   void OnSensor(const SensorDescription& sensor, const std::string& provider = "");
+  // id is the own id of the sensor.
   void OnSensorValue(const std::string& id, const Json& value, double stamp);
   // provider: the process that sent them; its actions go with it (OnProviders).
   void OnActions(const std::string& prefix, const std::vector<ActionItem>& items, const std::string& provider = "");
@@ -205,8 +211,9 @@ class BridgeCore {
   double Now() const;
   // The id for the node of a call with this id of the client.
   std::string Open(const Json& id, const std::string& method, const Reply& to);
-  // The client's id of the call with this id for the node and where its answer goes; false when it is not open.
-  bool Close(const std::string& node_id, Json* id, Reply* to);
+  // The client's id of the call with this id for the node, where its answer goes and its method; false when it is
+  // not open.
+  bool Close(const std::string& node_id, Json* id, Reply* to, std::string* method = nullptr);
   // Starts the time to collect when rpc.methods is not the list told last.
   void NoteMethods();
   // -32601 to every open call of one of these methods.

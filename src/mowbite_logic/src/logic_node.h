@@ -34,6 +34,7 @@
 #include <mowbite_msgs/msg/outline.hpp>
 #include <mowbite_msgs/msg/position_jump.hpp>
 #include <mowbite_msgs/msg/robot_pose.hpp>
+#include <mowbite_msgs/msg/reason_change.hpp>
 #include <mowbite_msgs/msg/robot_state.hpp>
 #include <mowbite_msgs/msg/run_status.hpp>
 #include <mowbite_msgs/msg/rpc_error.hpp>
@@ -436,7 +437,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp::Publisher<mowbite_msgs::msg::SensorSpec>::SharedPtr sensor_info_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::SensorValue>::SharedPtr sensor_value_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;
-  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr params_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::ReasonChange>::SharedPtr reason_change_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr logic_params_pub_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr geometry_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::GpsLimits>::SharedPtr gps_limits_pub_;

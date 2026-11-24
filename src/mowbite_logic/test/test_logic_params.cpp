@@ -79,7 +79,7 @@ TEST(LogicParams, AnyBadNameOrValueChangesNothing) {
   const json before = params.Values();
   auto result = params.Set(Request({{"/mower_logic/gps_wait_time", 20.0}, {"/xbot_positioning/antenna_offset_x", 1}}));
   EXPECT_FALSE(result.ok);
-  EXPECT_EQ(result.message, "No dynamic_reconfigure server found for /xbot_positioning/antenna_offset_x");
+  EXPECT_EQ(result.message, "/xbot_positioning/antenna_offset_x is not a setting of MowBite OS");
   result = params.Set(Request({{"/mower_logic/gps_wait_time", 20.0}, {"/mower_logic/tool_width", 0.2}}));
   EXPECT_FALSE(result.ok);
   EXPECT_EQ(result.message, "/mower_logic/tool_width is not a setting of MowBite OS");

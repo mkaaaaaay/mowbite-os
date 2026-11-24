@@ -443,6 +443,7 @@ const std::vector<Field>& RobotState() {
       Integer("emergency_reason", "The bits of the emergency (x-emergency-bits), 0 without one"),
       Switch("is_charging", "1 while the mower charges on the docking station"),
       Switch("rain_detected", "1 while the rain sensor reports rain"),
+      Switch("hardware", "1 while the driver of the platform reports, 0 without a platform or while it is silent"),
       {"pose",
        Type::kObject,
        "",
@@ -567,7 +568,11 @@ const std::vector<Command>& Commands() {
         Nullable(Text("update_path",
                       "How the OS is updated: native as a bundle over mowbite-host, compose as an image by hand; "
                       "null where it does not know",
-                      false, {"native", "compose"}))},
+                      false, {"native", "compose"})),
+        Text("names",
+             "openmower: sensor ids, /ll/board and the line of emergency reasons in the log as the app of OpenMower "
+             "knows them, each sensor with its own id as key; own: only the own ids",
+             true, {"openmower", "own"})},
        "",
        {}},
       {"system.api",
@@ -673,7 +678,8 @@ const std::vector<Method>& Methods() {
        List("result", "Method names", Type::kString), ""},
       {"sensors.list", "mowbite_bridge",
        "Every sensor of sensor_infos/json with its last value; ids selects some, unknown ids are left out",
-       Object("params", "None for all", {List("ids", "Sensor ids of x-sensors", Type::kString, false)}, false),
+       Object("params", "None for all",
+              {List("ids", "Sensor ids or keys of x-sensors", Type::kString, false)}, false),
        Rows("result", "An entry of sensor_infos/json with value and stamp",
             {Text("sensor_id", "Id of x-sensors"), Text("sensor_name", "Name to show"),
              Text("value_type", "STRING or DOUBLE", true, {"STRING", "DOUBLE"}),
@@ -686,6 +692,7 @@ const std::vector<Method>& Methods() {
              Number("lower_critical_value", "", "Below this the value is critical, 0 without one"),
              Switch("has_critical_high", "1 with an upper critical value"),
              Number("upper_critical_value", "", "Above this the value is critical, 0 without one"),
+             Text("key", "Own id of the sensor (key of x-sensors), the same as sensor_id without openmower_names"),
              Nullable({"value", Type::kAny, "", true, "The last value, a text for a text sensor; null before one came",
                        {}, false, {}, ""}),
              Nullable(Number("stamp", "unix s", "When the last value came, null before one came"))}),
@@ -974,7 +981,8 @@ const std::vector<Method>& Methods() {
            " h; the answer stays below " + std::to_string(kHistoryMaxAnswerBytes) +
            " bytes: the step grows to " + HistorySteps(1) + ", then the oldest points go",
        Object("params", "None: all number sensors over the last " + std::to_string(kSensorsHistoryHours) + " h",
-              {Client(), List("sensor_ids", "Sensor ids, none for all; ids the history does not know are left out",
+              {Client(), List("sensor_ids",
+                              "Sensor ids or keys, none for all; ids the history does not know are left out",
                               Type::kString, false),
                Count("from", "unix s", "Points from the one that holds this time on; none for " +
                                            std::to_string(kSensorsHistoryHours) + " h before to"),
@@ -987,7 +995,9 @@ const std::vector<Method>& Methods() {
                UnixTime("to", "The points that begin up to then"),
                Bool("truncated", "The oldest points were left out to keep the answer small"),
                Rows("sensors", "Each number sensor asked for that is recorded now or has values kept, by sensor_id",
-                    {Text("sensor_id", "Id of x-sensors or of the platform"), Text("name", "Name to show"),
+                    {Text("sensor_id", "Id of x-sensors or of the platform"),
+                     Text("key", "Own id of the sensor, the same as sensor_id without openmower_names"),
+                     Text("name", "Name to show"),
                      Text("unit", "Unit of the values, empty for none"),
                      List("points",
                           "[t, min, avg, max] per step with values, oldest first: t its start in unix s, avg "
@@ -1327,18 +1337,29 @@ std::string NodeOf(const std::string& method) {
 
 const std::vector<SensorEntry>& Sensors() {
   static const std::vector<SensorEntry> sensors = {
-      {"om_v_battery", "V Battery", "V", false, "logic", "Voltage of the battery"},
-      {"om_v_charge", "V Charge (dock contact)", "V", false, "logic",
-       "The charge voltage while on the contacts, else 0; derived, the board reports none"},
-      {"om_charge_current", "Charge Current", "A", false, "logic", "Current into the battery"},
-      {"om_charge_state", "Charge State (derived)", "", true, "logic",
-       "Not Charging, Fast Charge or Done, derived from contact, current and charge"},
-      {"om_mow_motor_rpm", "Mow Motor Revolutions", "rpm", false, "logic", "Speed of the blade motor"},
-      {"om_mow_motor_current", "Mow Motor Current", "A", false, "logic", "Current of the blade motor"},
-      {"om_gps_accuracy", "GPS Accuracy", "m", false, "logic", "Expected error of the position"},
-      {"om_mow_motor_temp", "Mow Motor Temp", "deg.C", false, "logic", "Temperature of the blade motor"},
-      {"om_left_esc_temp", "Left ESC Temp", "deg.C", false, "logic", "Temperature of the left motor board"},
-      {"om_right_esc_temp", "Right ESC Temp", "deg.C", false, "logic", "Temperature of the right motor board"},
+      {"battery_voltage", "Battery Voltage", "V", false, "logic", "Voltage of the battery", "om_v_battery",
+       "V Battery"},
+      {"charge_voltage", "Charge Voltage (derived)", "V", false, "logic",
+       "The charge voltage while on the contacts, else 0; derived, the board reports none", "om_v_charge",
+       "V Charge (dock contact)"},
+      {"charge_current", "Charge Current", "A", false, "logic", "Current into the battery", "om_charge_current",
+       "Charge Current"},
+      {"charge_state", "Charge State (derived)", "", true, "logic",
+       "idle, charging or done, derived from contact, current and charge; under om_charge_state Not Charging, Fast "
+       "Charge or Done",
+       "om_charge_state", "Charge State (derived)"},
+      {"blade_rpm", "Blade Speed", "rpm", false, "logic", "Speed of the blade motor", "om_mow_motor_rpm",
+       "Mow Motor Revolutions"},
+      {"blade_current", "Blade Current", "A", false, "logic", "Current of the blade motor", "om_mow_motor_current",
+       "Mow Motor Current"},
+      {"position_accuracy", "Position Accuracy", "m", false, "logic", "Expected error of the position",
+       "om_gps_accuracy", "GPS Accuracy"},
+      {"blade_temp", "Blade Motor Temp", "deg.C", false, "logic", "Temperature of the blade motor",
+       "om_mow_motor_temp", "Mow Motor Temp"},
+      {"drive_left_temp", "Left Drive Temp", "deg.C", false, "logic", "Temperature of the left motor board",
+       "om_left_esc_temp", "Left ESC Temp"},
+      {"drive_right_temp", "Right Drive Temp", "deg.C", false, "logic", "Temperature of the right motor board",
+       "om_right_esc_temp", "Right ESC Temp"},
       {"battery_temp", "Battery Temp", "deg.C", false, "logic", "Temperature of the battery from its BMS"},
       {"os_correction_age", "RTK Correction Age", "s", false, "gnss", "Age of the last RTK correction"},
       {"os_ntrip_state", "NTRIP", "", true, "ntrip", "State of the connection to the caster"},
@@ -1349,6 +1370,13 @@ const std::vector<SensorEntry>& Sensors() {
 const SensorEntry* FindSensor(const std::string& id) {
   for (const auto& sensor : Sensors()) {
     if (sensor.id == id) return &sensor;
+  }
+  return nullptr;
+}
+
+const SensorEntry* FindOpenMowerSensor(const std::string& openmower_id) {
+  for (const auto& sensor : Sensors()) {
+    if (!sensor.openmower_id.empty() && sensor.openmower_id == openmower_id) return &sensor;
   }
   return nullptr;
 }

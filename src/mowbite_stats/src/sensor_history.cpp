@@ -6,6 +6,8 @@
 #include <cstdlib>
 #include <iterator>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_stats {
 
 namespace {
@@ -125,8 +127,13 @@ void SensorHistory::Load(int64_t hour, const std::string& text) {
         Series* series = nullptr;
         const bool texts = entry.is_array() && entry.size() == 3 && entry[0].is_string() && entry[1].is_string() &&
                            entry[2].is_string();
-        const std::string id = texts ? entry[0].get<std::string>() : "";
-        const std::string name = texts ? entry[1].get<std::string>() : "";
+        std::string id = texts ? entry[0].get<std::string>() : "";
+        std::string name = texts ? entry[1].get<std::string>() : "";
+        // Files from before the own ids: the series goes on under the own id.
+        if (const auto* own = mowbite_api::FindOpenMowerSensor(id)) {
+          id = own->id;
+          name = own->name;
+        }
         const std::string unit = texts ? entry[2].get<std::string>() : "";
         if (!id.empty() && TextFits(id) && TextFits(name) && TextFits(unit)) {
           const bool known = series_.count(id) > 0;
@@ -274,7 +281,8 @@ json SensorHistory::Answer(const std::set<std::string>* ids, int64_t step, int64
       }
       points.push_back(json::array({t, Rounded(min), Rounded(Mean(sum, n, min, max)), Rounded(max)}));
     }
-    sensors.push_back({{"sensor_id", id}, {"name", series.name}, {"unit", series.unit}, {"points", points}});
+    sensors.push_back(
+        {{"sensor_id", id}, {"key", id}, {"name", series.name}, {"unit", series.unit}, {"points", points}});
   }
   return {{"step", step}, {"from", from}, {"to", to}, {"truncated", false}, {"sensors", sensors}};
 }

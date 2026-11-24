@@ -36,6 +36,7 @@
 #include "mowbite_msgs/msg/action_list.hpp"
 #include "mowbite_msgs/msg/hardware_capabilities.hpp"
 #include "mowbite_msgs/msg/mqtt_publish.hpp"
+#include "mowbite_msgs/msg/reason_change.hpp"
 #include "mowbite_msgs/msg/robot_pose.hpp"
 #include "mowbite_msgs/msg/robot_state.hpp"
 #include "mowbite_msgs/msg/rpc_error.hpp"
@@ -146,6 +147,7 @@ RobotStateView View(const msg::RobotState& m) {
   v.emergency_reason = m.emergency_reason;
   v.is_charging = m.is_charging;
   v.rain_detected = m.rain_detected;
+  v.hardware = m.hardware;
   v.x = m.pose_x;
   v.y = m.pose_y;
   v.heading = m.pose_heading;
@@ -227,7 +229,8 @@ class BridgeNode : public rclcpp::Node {
         data_dir_(declare_parameter("data_dir", std::string())),
         core_(BridgeConfig{declare_parameter("software_version", std::string()),
                            declare_parameter("params_json", std::string("{}")),
-                           declare_parameter("update_path", std::string())}),
+                           declare_parameter("update_path", std::string()), nullptr,
+                           declare_parameter("openmower_names", true)}),
         events_(JoinPath(data_dir_, "event_history"),
                 static_cast<std::size_t>(std::max<int64_t>(0, declare_parameter("event_history_days", 60))),
                 static_cast<std::uintmax_t>(std::max(0.0, declare_parameter("event_history_max_mb", 20.0)) * 1e6)),
@@ -260,6 +263,9 @@ class BridgeNode : public rclcpp::Node {
 
     Subscribe<msg::RobotState>("bridge/robot_state", rclcpp::QoS(10), [this](const msg::RobotState& m) {
       core_.OnRobotState(View(m));
+    });
+    Subscribe<msg::ReasonChange>("bridge/reason_change", rclcpp::QoS(50), [this](const msg::ReasonChange& m) {
+      core_.OnReasonChange(m.before, m.after);
     });
     SubscribeFrom<msg::SensorSpec>(kSensorInfoTopic, Latched(100),
                                    [this](const msg::SensorSpec& m, const std::string& provider) {

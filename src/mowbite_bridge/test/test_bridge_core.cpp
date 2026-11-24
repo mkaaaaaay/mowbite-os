@@ -98,7 +98,7 @@ TEST(BridgeCoreConnection, AfterEachConnectTheRetainedTextsInTheirOrder) {
     EXPECT_EQ(m.qos, 1);
   }
   EXPECT_EQ(Find(out, "version/json")->payload, R"({"version":"UNKNOWN VERSION"})");
-  EXPECT_EQ(Find(out, "params/json")->payload, R"({"/a/b":1})");
+  EXPECT_EQ(Find(out, "params/json")->payload, R"({"/a/b":1,"/ll/board":"MowBite"})");
   EXPECT_EQ(Find(out, "actions/json")->payload, "[]");
 
   core.OnPublish("map_overlay/json", R"({"o":1})", true);
@@ -227,7 +227,8 @@ TEST_F(Core, LocalMethods) {
   EXPECT_EQ(info.dump(), R"({"name":"mowbite-os","version":"1.2.3","platform":"","schema":)" +
                              std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                              R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
-                             R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null})");
+                             R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,)"
+                             R"("names":"openmower"})");
   core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0), BladeHeight(true, 30, 90, 60));
   const Json tron = Call(core_, "system.info")["result"];
   EXPECT_EQ(tron["platform"], "airseekers_tron");
@@ -730,10 +731,10 @@ TEST_F(Core, RobotStateLiveWithoutRetain) {
 // B13
 TEST_F(Core, SensorsInfosOnChangeValuesLiveAndTheList) {
   SensorDescription battery;
-  battery.id = "om_v_battery";
+  battery.id = "battery_voltage";
   battery.meaning = Meaning::kVoltage;
   SensorDescription state;
-  state.id = "om_charge_state";
+  state.id = "charge_state";
   state.is_text = true;
   core_.OnSensor(battery);
   core_.OnSensor(battery);
@@ -741,10 +742,16 @@ TEST_F(Core, SensorsInfosOnChangeValuesLiveAndTheList) {
   Outbox out = core_.Take();
   ASSERT_EQ(Topics(out), (std::vector<std::string>{"sensor_infos/json", "sensor_infos/json"}));
   EXPECT_TRUE(out.mqtt[1].retain);
-  EXPECT_EQ(Json::parse(out.mqtt[1].payload)[0]["sensor_id"], "om_charge_state");
+  // With openmower_names under the ids and names of OpenMower, the own id as key.
+  const Json infos = Json::parse(out.mqtt[1].payload);
+  EXPECT_EQ(infos[0]["sensor_id"], "om_charge_state");
+  EXPECT_EQ(infos[0]["key"], "charge_state");
+  EXPECT_EQ(infos[1]["sensor_id"], "om_v_battery");
+  EXPECT_EQ(infos[1]["sensor_name"], "V Battery");
+  EXPECT_EQ(infos[1]["key"], "battery_voltage");
 
-  core_.OnSensorValue("om_v_battery", 24.5, 10.0);
-  core_.OnSensorValue("om_charge_state", "Fast Charge", 11.0);
+  core_.OnSensorValue("battery_voltage", 24.5, 10.0);
+  core_.OnSensorValue("charge_state", "charging", 11.0);
   out = core_.Take();
   ASSERT_EQ(out.mqtt.size(), 2u);
   EXPECT_EQ(out.mqtt[0].topic, "sensors/om_v_battery/data");
@@ -756,8 +763,84 @@ TEST_F(Core, SensorsInfosOnChangeValuesLiveAndTheList) {
   ASSERT_EQ(list.size(), 1u);
   EXPECT_EQ(list[0]["value"], 24.5);
   EXPECT_EQ(list[0]["stamp"], 10.0);
+  EXPECT_EQ(Call(core_, "sensors.list", Json{{"ids", {"charge_state"}}})["result"][0]["value"], "Fast Charge");
   const Json bad = Call(core_, "sensors.list", Json{{"ids", "om_v_battery"}});
   EXPECT_EQ(bad["error"]["code"], kInvalidParams);
+}
+
+// FP26: without openmower_names only the own names.
+TEST(BridgeCoreNames, OwnNamesOnly) {
+  BridgeConfig config{"1.2.3", "{}"};
+  config.openmower_names = false;
+  BridgeCore core(config);
+  core.Connected();
+  Outbox out = core.Take();
+  EXPECT_EQ(Find(out, "params/json")->payload, "{}");
+  EXPECT_EQ(Call(core, "system.info")["result"]["names"], "own");
+  SensorDescription state;
+  state.id = "charge_state";
+  state.name = "Charge State (derived)";
+  state.is_text = true;
+  core.OnSensor(state);
+  core.OnSensorValue("charge_state", "charging", 1.0);
+  out = core.Take();
+  ASSERT_EQ(Topics(out), (std::vector<std::string>{"sensor_infos/json", "sensors/charge_state/data"}));
+  const Json infos = Json::parse(out.mqtt[0].payload);
+  EXPECT_EQ(infos[0]["sensor_id"], "charge_state");
+  EXPECT_EQ(infos[0]["key"], "charge_state");
+  EXPECT_EQ(infos[0]["sensor_name"], "Charge State (derived)");
+  EXPECT_EQ(out.mqtt[1].payload, "charging");
+
+  core.OnReasonChange(0, 9);
+  core.OnReasonChange(9, 0);
+  out = core.Take();
+  ASSERT_EQ(out.logs.size(), 2u);
+  EXPECT_EQ(out.logs[0].level, kLogWarn);
+  EXPECT_EQ(out.logs[0].text, "Emergency reasons now 'LATCH, LIFT', before ''");
+  EXPECT_EQ(out.logs[1].level, kLogInfo);
+  EXPECT_EQ(out.logs[1].text, "Emergency cleared");
+}
+
+// FP26: the line of the reasons the app reads with openmower_names.
+TEST_F(Core, EmergencyReasonLineAsTheAppReadsIt) {
+  core_.OnReasonChange(0, 9);
+  core_.OnReasonChange(9, 1);
+  core_.OnReasonChange(1, 0);
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.logs.size(), 3u);
+  EXPECT_EQ(out.logs[0].level, kLogWarn);
+  EXPECT_EQ(out.logs[0].text, "Emergency reason changed from: '' to: 'LATCH, LIFT'");
+  EXPECT_EQ(out.logs[1].text, "Emergency reason changed from: 'LATCH, LIFT' to: 'LATCH'");
+  EXPECT_EQ(out.logs[2].level, kLogInfo);
+  EXPECT_EQ(out.logs[2].text, "Emergency cleared");
+}
+
+// FP26: sensors.history asks the node with own ids and answers with the ids of sensor_infos/json.
+TEST_F(Core, SensorsHistoryUnderTheIdsShown) {
+  core_.OnRpcMethods("mowbite_stats", {"sensors.history"});
+  core_.Take();
+  core_.OnMqtt("rpc/request",
+               Json{{"jsonrpc", "2.0"}, {"method", "sensors.history"}, {"id", 4},
+                    {"params", {{"sensor_ids", {"om_v_battery", "battery_temp", "blade_rpm"}}}}}
+                   .dump(),
+               false);
+  Outbox out = core_.Take();
+  ASSERT_EQ(out.requests.size(), 1u);
+  EXPECT_EQ(Json::parse(out.requests[0].params)["sensor_ids"],
+            Json::array({"battery_voltage", "battery_temp", "blade_rpm"}));
+  core_.OnRpcResponse(out.requests[0].id,
+                      R"({"step":60,"sensors":[{"sensor_id":"battery_voltage","key":"battery_voltage",)"
+                      R"("name":"Battery Voltage","unit":"V","points":[]},)"
+                      R"({"sensor_id":"battery_temp","key":"battery_temp","name":"Battery Temp","unit":"deg.C",)"
+                      R"("points":[]}]})");
+  out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  const Json sensors = Json::parse(out.mqtt[0].payload)["result"]["sensors"];
+  EXPECT_EQ(sensors[0]["sensor_id"], "om_v_battery");
+  EXPECT_EQ(sensors[0]["key"], "battery_voltage");
+  EXPECT_EQ(sensors[0]["name"], "V Battery");
+  EXPECT_EQ(sensors[1]["sensor_id"], "battery_temp");
+  EXPECT_EQ(sensors[1]["name"], "Battery Temp");
 }
 
 // B14
@@ -781,7 +864,7 @@ TEST_F(Core, ParamsOnlyOnChange) {
   const Outbox out = core_.Take();
   ASSERT_EQ(out.mqtt.size(), 1u);
   EXPECT_EQ(out.mqtt[0].topic, "params/json");
-  EXPECT_EQ(out.mqtt[0].payload, R"({"/n/a":1})");
+  EXPECT_EQ(out.mqtt[0].payload, R"({"/ll/board":"MowBite","/n/a":1})");
   EXPECT_TRUE(out.mqtt[0].retain);
   EXPECT_EQ(out.mqtt[0].qos, 1);
 }
@@ -1029,7 +1112,7 @@ TEST_F(Timed, AProviderMissingTwiceInARowIsGone) {
   core_.OnRpcMethods("mowbite_camera", {"camera.list", "camera.stream"}, "aa");
   core_.OnRpcMethods("mowbite_logic", {"params.set"}, "bb");
   core_.OnSensor(TextSensor("vision_state"), "cc");
-  core_.OnSensor(TextSensor("om_charge_state"), "bb");
+  core_.OnSensor(TextSensor("charge_state"), "bb");
   core_.OnSensor(TextSensor("from_a_test"));
   core_.OnSensorValue("vision_state", "running", 1.0);
   ASSERT_EQ(After(1.0).size(), 1u);

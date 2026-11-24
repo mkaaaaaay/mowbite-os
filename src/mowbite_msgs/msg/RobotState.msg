@@ -10,6 +10,8 @@ bool emergency
 uint32 emergency_reason
 bool is_charging
 bool rain_detected
+# The driver of the platform reports (hw/status is recent).
+bool hardware
 # While mowing: the area, the path of its plan and the pose in it; otherwise -1.
 int32 current_area
 int32 current_path

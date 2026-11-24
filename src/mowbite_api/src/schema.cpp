@@ -307,8 +307,13 @@ Json BuildSchema(const Json& planner) {
                      {"items", action}};
   Json sensors = Json::object();
   for (const auto& sensor : Sensors()) {
-    sensors[sensor.id] = {{"name", sensor.name}, {"unit", sensor.unit}, {"kind", sensor.text ? "text" : "number"},
-                          {"source", sensor.source}, {"description", sensor.description}};
+    const auto entry = [&sensor](const std::string& name) {
+      return Json{{"name", name},           {"unit", sensor.unit},
+                  {"kind", sensor.text ? "text" : "number"}, {"source", sensor.source},
+                  {"description", sensor.description},       {"key", sensor.id}};
+    };
+    sensors[sensor.id] = entry(sensor.name);
+    if (!sensor.openmower_id.empty()) sensors[sensor.openmower_id] = entry(sensor.openmower_name);
   }
   Json settings = Json::object();
   for (const auto& setting : LogicSettings()) {
@@ -376,7 +381,8 @@ Json BuildSchema(const Json& planner) {
                   "x-texts), x-emergency-bits the bits of "
                   "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
-                  "sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set "
+                  "sim.* only in the simulation), x-sensors the sensors by id and key (an id with "
+                  "openmower_names has the key of its own id), x-settings the settings of params.set "
                   "with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of "
                   "schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api "
                   "counts every change, "

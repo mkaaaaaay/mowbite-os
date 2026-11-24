@@ -97,12 +97,7 @@ ParamsResult LogicParams::Set(const json& request) {
   json applied = json::object();
   for (const auto& item : request["params"].items()) {
     const std::string& full = item.key();
-    if (full.rfind(prefix, 0) != 0) {
-      // As OpenMower answers for a node without settings.
-      result.message = "No dynamic_reconfigure server found for " + full;
-      return result;
-    }
-    const ParamSpec* spec = FindSpec(full.substr(prefix.size()));
+    const ParamSpec* spec = full.rfind(prefix, 0) == 0 ? FindSpec(full.substr(prefix.size())) : nullptr;
     if (!spec) {
       result.message = full + " is not a setting of MowBite OS";
       return result;

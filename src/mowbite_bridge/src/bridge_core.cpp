@@ -6,6 +6,7 @@
 #include <ctime>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_bridge/compat.h"
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_bridge/text.h"
 
@@ -26,6 +27,8 @@ constexpr std::size_t kMaxDataDepth = 64;
 constexpr std::size_t kMaxHostMethods = 32;
 constexpr std::size_t kMaxMethodBytes = 64;
 constexpr double kNulLogPeriodS = 60;
+// The method whose sensor ids the bridge shows as compat.h does.
+constexpr char kSensorsHistory[] = "sensors.history";
 
 }  // namespace
 
@@ -71,7 +74,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["rpc.methods"] = [this](const Json&) { return Json(methods_.All()); };
   local_["system.info"] = [this](const Json&) {
     return SystemInfo(config_.software_version, platform_, mqtt_version_, stop_release_, blade_height_,
-                      config_.update_path);
+                      config_.update_path, config_.openmower_names);
   };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {
@@ -86,6 +89,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
                  "actions/json",      "map/json",     kBridgeStatusTopic};
   Keep("capabilities/json", CapabilitiesText());
   Keep("version/json", VersionText(config_.software_version));
+  if (config_.openmower_names) params_.Apply(BoardParams());
   Keep("params/json", params_.Text());
   Keep("actions/json", ActionsText(actions_));
   Keep(kBridgeStatusTopic, BridgeStatusText(true));
@@ -263,7 +267,8 @@ void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
       }
       const bool open = !call.id.is_null() || to.topic != kResponseTopic;
       const std::string id = open ? Open(call.id, call.method, to) : "";
-      out_.requests.push_back({call.method, call.params.is_null() ? "" : call.params.dump(), id});
+      const Json params = call.method == kSensorsHistory ? OwnHistoryParams(call.params) : call.params;
+      out_.requests.push_back({call.method, params.is_null() ? "" : params.dump(), id});
       return;
     }
     case Route::kHost: return;
@@ -288,8 +293,16 @@ void BridgeCore::OnRobotState(const RobotStateView& state) {
   Guard("robot state", [&] { Send("robot_state/json", RobotStateText(state), false); });
 }
 
-void BridgeCore::OnSensor(const SensorDescription& sensor, const std::string& provider) {
+void BridgeCore::OnReasonChange(uint32_t before, uint32_t after) {
+  Guard("reason change", [&] {
+    const ReasonLine line = EmergencyReasonLine(before, after, config_.openmower_names);
+    Log(line.warn ? kLogWarn : kLogInfo, line.text);
+  });
+}
+
+void BridgeCore::OnSensor(const SensorDescription& own, const std::string& provider) {
   Guard("sensor", [&] {
+    const SensorDescription sensor = ShownSensor(own, config_.openmower_names);
     sensor_provider_[sensor.id] = provider;
     const auto known = sensors_.find(sensor.id);
     if (known != sensors_.end() && SensorInfo(known->second) == SensorInfo(sensor)) return;
@@ -298,8 +311,10 @@ void BridgeCore::OnSensor(const SensorDescription& sensor, const std::string& pr
   });
 }
 
-void BridgeCore::OnSensorValue(const std::string& id, const Json& value, double stamp) {
+void BridgeCore::OnSensorValue(const std::string& own_id, const Json& own_value, double stamp) {
   Guard("sensor value", [&] {
+    const std::string id = ShownSensorId(own_id, config_.openmower_names);
+    const Json value = ShownSensorValue(own_id, own_value, config_.openmower_names);
     readings_[id] = {value, stamp};
     const std::string text = value.is_string() ? value.get<std::string>() : SensorNumberText(value.get<double>());
     Send("sensors/" + id + "/data", text, false);
@@ -456,7 +471,16 @@ void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
   Guard("rpc response", [&] {
     Json client_id;
     Reply to;
-    if (Close(id, &client_id, &to)) SendResult(to, client_id, ResultReplyFromText(client_id, result));
+    std::string method;
+    if (!Close(id, &client_id, &to, &method)) return;
+    if (method == kSensorsHistory && config_.openmower_names && NestingDepth(result) <= kMaxDataDepth) {
+      const Json shown = ShownHistory(Json::parse(result.begin(), result.end(), nullptr, false), true);
+      if (!shown.is_discarded()) {
+        SendResult(to, client_id, ResultReply(client_id, shown));
+        return;
+      }
+    }
+    SendResult(to, client_id, ResultReplyFromText(client_id, result));
   });
 }
 
@@ -584,7 +608,7 @@ std::map<uint64_t, BridgeCore::OpenCall>::iterator BridgeCore::EndCall(std::map<
   return open_.erase(call);
 }
 
-bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to) {
+bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to, std::string* method) {
   if (node_id.empty()) {
     *id = nullptr;
     *to = {kResponseTopic, std::nullopt};
@@ -604,6 +628,7 @@ bool BridgeCore::Close(const std::string& node_id, Json* id, Reply* to) {
   }
   *id = std::move(open->second.id);
   *to = std::move(open->second.to);
+  if (method) *method = std::move(open->second.method);
   open_.erase(open);
   return true;
 }

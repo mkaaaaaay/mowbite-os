@@ -18,6 +18,7 @@ std::string Bson(const Json& j) {
 std::map<std::string, SensorDescription> TwoSensors() {
   SensorDescription battery;
   battery.id = "om_v_battery";
+  battery.key = "battery_voltage";
   battery.name = "Battery";
   battery.meaning = Meaning::kVoltage;
   battery.unit = "V";
@@ -70,7 +71,8 @@ TEST(RobotState, FieldsInTheOrderOfTheAppWithSwitchesAsNumbers) {
             R"({"battery_percentage":0.5,"gps_percentage":0.25,"current_action_progress":0.0,"current_state":"IDLE",)"
             R"("current_sub_state":"","current_area":-1,"current_path":-1,"current_path_index":-1,"task_index":-1,)"
             R"("task_count":-1,"pause_reason":"","pause_kind":"","emergency":0,)"
-            R"("emergency_reason":4,"is_charging":1,"rain_detected":0,"pose":{"x":1.5,"y":0.0,"heading":0.0,)"
+            R"("emergency_reason":4,"is_charging":1,"rain_detected":0,"hardware":0,)"
+            R"("pose":{"x":1.5,"y":0.0,"heading":0.0,)"
             R"("pos_accuracy":0.0,"heading_accuracy":0.0,"heading_valid":1}})");
 }
 
@@ -101,10 +103,12 @@ TEST(Sensors, InfosSortedByIdWithSwitchesAndZerosForMissingLimits) {
   EXPECT_EQ(SensorInfosText(TwoSensors()),
             R"([{"sensor_id":"om_charge_state","sensor_name":"Charge state","value_type":"STRING",)"
             R"("value_description":"UNKNOWN","unit":"","has_min_max":0,"min_value":0.0,"max_value":0.0,)"
-            R"("has_critical_low":0,"lower_critical_value":0.0,"has_critical_high":0,"upper_critical_value":0.0},)"
+            R"("has_critical_low":0,"lower_critical_value":0.0,"has_critical_high":0,"upper_critical_value":0.0,)"
+            R"("key":"om_charge_state"},)"
             R"({"sensor_id":"om_v_battery","sensor_name":"Battery","value_type":"DOUBLE",)"
             R"("value_description":"VOLTAGE","unit":"V","has_min_max":1,"min_value":20.0,"max_value":30.0,)"
-            R"("has_critical_low":1,"lower_critical_value":21.0,"has_critical_high":0,"upper_critical_value":0.0}])");
+            R"("has_critical_low":1,"lower_critical_value":21.0,"has_critical_high":0,"upper_critical_value":0.0,)"
+            R"("key":"battery_voltage"}])");
   EXPECT_EQ(SensorInfosText({}), "[]");
 }
 
@@ -131,9 +135,9 @@ TEST(Sensors, ListGivesEveryEntryWithValueAndStamp) {
   EXPECT_DOUBLE_EQ(all[1]["value"].get<double>(), 24.5);
   EXPECT_DOUBLE_EQ(all[1]["stamp"].get<double>(), 1793290000.25);
   // The fields of sensor_infos/json first, then value and stamp.
-  ASSERT_EQ(all[1].size(), 14u);
-  EXPECT_EQ(std::next(all[1].begin(), 12).key(), "value");
-  EXPECT_EQ(std::next(all[1].begin(), 13).key(), "stamp");
+  ASSERT_EQ(all[1].size(), 15u);
+  EXPECT_EQ(std::next(all[1].begin(), 13).key(), "value");
+  EXPECT_EQ(std::next(all[1].begin(), 14).key(), "stamp");
   EXPECT_TRUE(all[0]["value"].is_null());
   EXPECT_TRUE(all[0]["stamp"].is_null());
   EXPECT_EQ(SensorList(TwoSensors(), readings, Json::object()), all);
@@ -145,6 +149,10 @@ TEST(Sensors, ListOnlyTheIdsAskedFor) {
   const Json some = SensorList(TwoSensors(), {}, Json{{"ids", {"om_charge_state", "no_such_sensor"}}});
   ASSERT_EQ(some.size(), 1u);
   EXPECT_EQ(some[0]["sensor_id"], "om_charge_state");
+  // By the key as well.
+  const Json by_key = SensorList(TwoSensors(), {}, Json{{"ids", {"battery_voltage"}}});
+  ASSERT_EQ(by_key.size(), 1u);
+  EXPECT_EQ(by_key[0]["sensor_id"], "om_v_battery");
   EXPECT_TRUE(SensorList(TwoSensors(), {}, Json{{"ids", Json::array()}}).empty());
   for (const Json& bad : {Json{{"ids", "om_v_battery"}}, Json{{"ids", {1, 2}}}, Json{{"ids", nullptr}},
                           Json::array({"om_v_battery"}), Json("om_v_battery")}) {
@@ -185,7 +193,8 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
             R"({"name":"mowbite-os","version":"UNKNOWN VERSION","platform":"airseekers_tron","schema":)" +
                 std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                 R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
-                R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null})");
+                R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,"names":"openmower"})");
+  EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "", false)["names"], "own");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["mqtt"], 3);
   EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "native")["update_path"], "native");

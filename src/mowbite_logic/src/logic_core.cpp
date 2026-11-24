@@ -713,6 +713,7 @@ RobotStateData LogicCore::RobotState() const {
   s.emergency_reason = reason_;
   s.is_charging = hw_.battery_ok && hw_.dock_contact;
   s.rain_detected = hw_.telemetry_ok && hw_.rain;
+  s.hardware = hw_.telemetry_ok;
   if (hw_.battery_ok) {
     s.battery_percentage = std::clamp(static_cast<float>(hw_.battery_percentage) / 100.0f, 0.0f, 1.0f);
   }

@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 55;
+constexpr int kApi = 56;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -142,7 +142,8 @@ struct Method {
   std::string offered;
 };
 
-// A sensor of sensor_infos/json and sensors.list: its id, name and unit; ranges depend on the platform.
+// A sensor of sensor_infos/json and sensors.list: its own id (the key there), name and unit; ranges depend on the
+// platform.
 struct SensorEntry {
   std::string id;
   std::string name;
@@ -152,6 +153,9 @@ struct SensorEntry {
   // What sends it: logic, gnss (the GNSS driver of the platform) or ntrip.
   std::string source;
   std::string description;
+  // Id and name the bridge shows with openmower_names; empty where the app of OpenMower knows no such sensor.
+  std::string openmower_id = "";
+  std::string openmower_name = "";
 };
 
 // A setting of /mower_logic for params.set; a value outside the range is set to the bound.
@@ -209,7 +213,10 @@ const std::vector<Method>& Methods();
 // The node that answers a command or method, empty for a name the catalog does not know.
 std::string NodeOf(const std::string& method);
 const std::vector<SensorEntry>& Sensors();
+// By its own id.
 const SensorEntry* FindSensor(const std::string& id);
+// By its id with openmower_names; null for an own id.
+const SensorEntry* FindOpenMowerSensor(const std::string& openmower_id);
 // The settings of /mower_logic in the order of the app's groups.
 const std::vector<SettingEntry>& LogicSettings();
 // The keys of the geometry in the order of the answers; robot_outline is the only list the user sets.

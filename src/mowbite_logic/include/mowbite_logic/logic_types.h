@@ -202,6 +202,8 @@ struct RobotStateData {
   bool emergency = false;
   bool is_charging = false;
   bool rain_detected = false;
+  // The driver reports: hw/status is recent.
+  bool hardware = false;
   // 1 at perfect accuracy, 0 at max_position_accuracy or worse, without a recent pose or without a heading.
   // OpenMower sends -1 for a bad position with a valid heading; a negative percentage is not shown here.
   float gps_percentage = 0;

@@ -225,7 +225,17 @@ TEST(Schema, HeadMethodsAndOrder) {
     EXPECT_TRUE(schema["$defs"].contains(method.name + ".result")) << method.name;
   }
   EXPECT_EQ(schema["x-methods"].size(), Commands().size() + Methods().size());
-  EXPECT_EQ(schema["x-sensors"].size(), Sensors().size());
+  // Each sensor under its own id, and under its id of OpenMower until the next break; both lead to the key.
+  size_t shown = 0;
+  for (const auto& sensor : Sensors()) {
+    EXPECT_EQ(schema["x-sensors"][sensor.id]["key"], sensor.id);
+    EXPECT_EQ(schema["x-sensors"][sensor.id]["name"], sensor.name);
+    if (sensor.openmower_id.empty()) continue;
+    shown++;
+    EXPECT_EQ(schema["x-sensors"][sensor.openmower_id]["key"], sensor.id);
+    EXPECT_EQ(schema["x-sensors"][sensor.openmower_id]["name"], sensor.openmower_name);
+  }
+  EXPECT_EQ(schema["x-sensors"].size(), Sensors().size() + shown);
   EXPECT_EQ(schema["x-sensors"]["os_ntrip_state"]["kind"], "text");
   EXPECT_EQ(schema["x-settings"]["undock_distance"]["min"], 0.5);
   EXPECT_EQ(schema["x-settings"]["docking_retry_count"]["type"], "integer");

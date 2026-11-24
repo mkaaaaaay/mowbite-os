@@ -203,13 +203,16 @@ TEST(Logic, OwnReasonBitsReachTheRobotState) {
 TEST(Logic, TelemetryTimeoutIsEmergency) {
   TestCore core{LogicConfig{}};
   core.OnMapStatus(MapDatum::kMatch, "");
+  EXPECT_FALSE(core.RobotState().hardware);
   core.OnHardwareStatus(Healthy());
+  EXPECT_TRUE(core.RobotState().hardware);
   core.OnHardwareTimeout();
   EXPECT_TRUE(core.RobotState().emergency);
+  EXPECT_FALSE(core.RobotState().hardware);
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["reason"], kEmergencyTimeoutInputs);
-  EXPECT_TRUE(core.Readings().empty() || Find(core.Readings(), "om_v_battery") == nullptr);
+  EXPECT_TRUE(core.Readings().empty() || Find(core.Readings(), "battery_voltage") == nullptr);
 }
 
 TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
@@ -410,20 +413,18 @@ TEST(Logic, RobotStateAndSensors) {
   EXPECT_TRUE(state.is_charging);
   EXPECT_TRUE(state.rain_detected);
   auto readings = core.Readings();
-  ASSERT_TRUE(Find(readings, "om_v_charge"));
-  EXPECT_DOUBLE_EQ(Find(readings, "om_v_charge")->value, 28.0);
-  EXPECT_DOUBLE_EQ(Find(readings, "om_charge_current")->value, 3.0);
-  EXPECT_EQ(Find(readings, "om_charge_state")->text, "Fast Charge");
-  EXPECT_DOUBLE_EQ(Find(readings, "om_left_esc_temp")->value, 31.0);
+  ASSERT_TRUE(Find(readings, "charge_voltage"));
+  EXPECT_DOUBLE_EQ(Find(readings, "charge_voltage")->value, 28.0);
+  EXPECT_DOUBLE_EQ(Find(readings, "charge_current")->value, 3.0);
+  EXPECT_EQ(Find(readings, "charge_state")->text, "charging");
+  EXPECT_DOUBLE_EQ(Find(readings, "drive_left_temp")->value, 31.0);
   EXPECT_DOUBLE_EQ(Find(readings, "battery_temp")->value, 27.0);
-  // One temperature per motor board: no mow ESC value that would only repeat the motor's.
-  EXPECT_EQ(Find(readings, "om_mow_esc_temp"), nullptr);
 
   auto full = docked;
   full.battery_current = 0.0f;
   full.battery_percentage = 100;
   core.OnHardwareStatus(full);
-  EXPECT_EQ(Find(core.Readings(), "om_charge_state")->text, "Done");
+  EXPECT_EQ(Find(core.Readings(), "charge_state")->text, "done");
 }
 
 TEST(Logic, SensorDefinitionsMatchTheApp) {
@@ -431,14 +432,15 @@ TEST(Logic, SensorDefinitionsMatchTheApp) {
   core.OnMapStatus(MapDatum::kMatch, "");
   auto sensors = core.Sensors();
   for (const char* id :
-       {"om_v_battery", "om_v_charge", "om_charge_current", "om_charge_state", "om_mow_motor_rpm",
-        "om_mow_motor_current", "om_mow_motor_temp", "om_left_esc_temp", "om_right_esc_temp", "battery_temp",
-        "om_gps_accuracy"}) {
+       {"battery_voltage", "charge_voltage", "charge_current", "charge_state", "blade_rpm",
+        "blade_current", "blade_temp", "drive_left_temp", "drive_right_temp", "battery_temp",
+        "position_accuracy"}) {
     EXPECT_TRUE(std::any_of(sensors.begin(), sensors.end(), [&](const SensorDefinition& s) { return s.id == id; }))
         << id;
   }
-  EXPECT_FALSE(std::any_of(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_mow_esc_temp"; }));
-  auto battery = std::find_if(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "om_v_battery"; });
+  // One temperature per motor board: no value of the blade's board that would only repeat the motor's.
+  EXPECT_EQ(sensors.size(), 11u);
+  auto battery = std::find_if(sensors.begin(), sensors.end(), [](const auto& s) { return s.id == "battery_voltage"; });
   // The app derives the cell count from max_value: 25.2 V / 4.2 V = 6.
   EXPECT_DOUBLE_EQ(battery->max, 25.2);
 }
@@ -467,7 +469,7 @@ TEST(Logic, WithoutPoseAccuracyIsNeverPerfect) {
   EXPECT_FLOAT_EQ(state.heading_accuracy, 999.0f);
   EXPECT_FLOAT_EQ(state.gps_percentage, 0.0f);
   EXPECT_FALSE(state.heading_valid);
-  EXPECT_EQ(Find(core.Readings(), "om_gps_accuracy"), nullptr);
+  EXPECT_EQ(Find(core.Readings(), "position_accuracy"), nullptr);
 }
 
 TEST(Logic, PoseFillsRobotStateAndGpsPercentage) {
@@ -484,7 +486,7 @@ TEST(Logic, PoseFillsRobotStateAndGpsPercentage) {
   EXPECT_TRUE(state.heading_valid);
   // 1 - 0.02 / 0.1
   EXPECT_NEAR(state.gps_percentage, 0.8f, 1e-6);
-  EXPECT_FLOAT_EQ(static_cast<float>(Find(core.Readings(), "om_gps_accuracy")->value), 0.02f);
+  EXPECT_FLOAT_EQ(static_cast<float>(Find(core.Readings(), "position_accuracy")->value), 0.02f);
 }
 
 TEST(Logic, GpsPercentageIsZeroWhenTooInaccurateOrWithoutHeading) {
@@ -510,7 +512,7 @@ TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
   auto state = core.RobotState();
   EXPECT_FLOAT_EQ(state.pos_accuracy, 999.0f);
   EXPECT_FLOAT_EQ(state.gps_percentage, 0.0f);
-  EXPECT_EQ(Find(core.Readings(), "om_gps_accuracy"), nullptr);
+  EXPECT_EQ(Find(core.Readings(), "position_accuracy"), nullptr);
   core.OnAction("mower_logic:idle/start_area_recording");
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);

@@ -9349,6 +9349,10 @@
           "description": "Quality of the position from 0 to 1, 0 without a recent pose or heading",
           "type": "number"
         },
+        "hardware": {
+          "description": "1 while the driver of the platform reports, 0 without a platform or while it is silent",
+          "type": "integer"
+        },
         "is_charging": {
           "description": "1 while the mower charges on the docking station",
           "type": "integer"
@@ -9435,6 +9439,7 @@
         "emergency_reason",
         "is_charging",
         "rain_detected",
+        "hardware",
         "pose"
       ],
       "type": "object"
@@ -10214,7 +10219,7 @@
           "x-unit": "unix s"
         },
         "sensor_ids": {
-          "description": "Sensor ids, none for all; ids the history does not know are left out",
+          "description": "Sensor ids or keys, none for all; ids the history does not know are left out",
           "items": {
             "description": "One item",
             "type": "string"
@@ -10252,6 +10257,10 @@
             "additionalProperties": false,
             "description": "One item",
             "properties": {
+              "key": {
+                "description": "Own id of the sensor, the same as sensor_id without openmower_names",
+                "type": "string"
+              },
               "name": {
                 "description": "Name to show",
                 "type": "string"
@@ -10275,6 +10284,7 @@
             },
             "required": [
               "sensor_id",
+              "key",
               "name",
               "unit",
               "points"
@@ -10314,7 +10324,7 @@
       "description": "The params of sensors.list: None for all",
       "properties": {
         "ids": {
-          "description": "Sensor ids of x-sensors",
+          "description": "Sensor ids or keys of x-sensors",
           "items": {
             "description": "One item",
             "type": "string"
@@ -10342,6 +10352,10 @@
           "has_min_max": {
             "description": "1 with a range",
             "type": "integer"
+          },
+          "key": {
+            "description": "Own id of the sensor (key of x-sensors), the same as sensor_id without openmower_names",
+            "type": "string"
           },
           "lower_critical_value": {
             "description": "Below this the value is critical, 0 without one",
@@ -10415,6 +10429,7 @@
           "lower_critical_value",
           "has_critical_high",
           "upper_critical_value",
+          "key",
           "value",
           "stamp"
         ],
@@ -12495,6 +12510,14 @@
           "description": "Always mowbite-os",
           "type": "string"
         },
+        "names": {
+          "description": "openmower: sensor ids, /ll/board and the line of emergency reasons in the log as the app of OpenMower knows them, each sensor with its own id as key; own: only the own ids",
+          "enum": [
+            "openmower",
+            "own"
+          ],
+          "type": "string"
+        },
         "platform": {
           "description": "The platform its driver reports, empty until it did",
           "type": "string"
@@ -12557,7 +12580,8 @@
         "schema",
         "api",
         "api_break",
-        "mqtt"
+        "mqtt",
+        "names"
       ],
       "type": "object"
     },
@@ -16619,11 +16643,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:55",
+  "$id": "urn:mowbite-os:api:56",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id, x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
+  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 55,
+  "x-api": 56,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -22990,20 +23014,95 @@
   "x-sensors": {
     "battery_temp": {
       "description": "Temperature of the battery from its BMS",
+      "key": "battery_temp",
       "kind": "number",
       "name": "Battery Temp",
       "source": "logic",
       "unit": "deg.C"
     },
+    "battery_voltage": {
+      "description": "Voltage of the battery",
+      "key": "battery_voltage",
+      "kind": "number",
+      "name": "Battery Voltage",
+      "source": "logic",
+      "unit": "V"
+    },
+    "blade_current": {
+      "description": "Current of the blade motor",
+      "key": "blade_current",
+      "kind": "number",
+      "name": "Blade Current",
+      "source": "logic",
+      "unit": "A"
+    },
+    "blade_rpm": {
+      "description": "Speed of the blade motor",
+      "key": "blade_rpm",
+      "kind": "number",
+      "name": "Blade Speed",
+      "source": "logic",
+      "unit": "rpm"
+    },
+    "blade_temp": {
+      "description": "Temperature of the blade motor",
+      "key": "blade_temp",
+      "kind": "number",
+      "name": "Blade Motor Temp",
+      "source": "logic",
+      "unit": "deg.C"
+    },
+    "charge_current": {
+      "description": "Current into the battery",
+      "key": "charge_current",
+      "kind": "number",
+      "name": "Charge Current",
+      "source": "logic",
+      "unit": "A"
+    },
+    "charge_state": {
+      "description": "idle, charging or done, derived from contact, current and charge; under om_charge_state Not Charging, Fast Charge or Done",
+      "key": "charge_state",
+      "kind": "text",
+      "name": "Charge State (derived)",
+      "source": "logic",
+      "unit": ""
+    },
+    "charge_voltage": {
+      "description": "The charge voltage while on the contacts, else 0; derived, the board reports none",
+      "key": "charge_voltage",
+      "kind": "number",
+      "name": "Charge Voltage (derived)",
+      "source": "logic",
+      "unit": "V"
+    },
+    "drive_left_temp": {
+      "description": "Temperature of the left motor board",
+      "key": "drive_left_temp",
+      "kind": "number",
+      "name": "Left Drive Temp",
+      "source": "logic",
+      "unit": "deg.C"
+    },
+    "drive_right_temp": {
+      "description": "Temperature of the right motor board",
+      "key": "drive_right_temp",
+      "kind": "number",
+      "name": "Right Drive Temp",
+      "source": "logic",
+      "unit": "deg.C"
+    },
     "om_charge_current": {
       "description": "Current into the battery",
+      "key": "charge_current",
       "kind": "number",
       "name": "Charge Current",
       "source": "logic",
       "unit": "A"
     },
     "om_charge_state": {
-      "description": "Not Charging, Fast Charge or Done, derived from contact, current and charge",
+      "description": "idle, charging or done, derived from contact, current and charge; under om_charge_state Not Charging, Fast Charge or Done",
+      "key": "charge_state",
       "kind": "text",
       "name": "Charge State (derived)",
       "source": "logic",
@@ -23011,6 +23110,7 @@
     },
     "om_gps_accuracy": {
       "description": "Expected error of the position",
+      "key": "position_accuracy",
       "kind": "number",
       "name": "GPS Accuracy",
       "source": "logic",
@@ -23018,6 +23118,7 @@
     },
     "om_left_esc_temp": {
       "description": "Temperature of the left motor board",
+      "key": "drive_left_temp",
       "kind": "number",
       "name": "Left ESC Temp",
       "source": "logic",
@@ -23025,6 +23126,7 @@
     },
     "om_mow_motor_current": {
       "description": "Current of the blade motor",
+      "key": "blade_current",
       "kind": "number",
       "name": "Mow Motor Current",
       "source": "logic",
@@ -23032,6 +23134,7 @@
     },
     "om_mow_motor_rpm": {
       "description": "Speed of the blade motor",
+      "key": "blade_rpm",
       "kind": "number",
       "name": "Mow Motor Revolutions",
       "source": "logic",
@@ -23039,6 +23142,7 @@
     },
     "om_mow_motor_temp": {
       "description": "Temperature of the blade motor",
+      "key": "blade_temp",
       "kind": "number",
       "name": "Mow Motor Temp",
       "source": "logic",
@@ -23046,6 +23150,7 @@
     },
     "om_right_esc_temp": {
       "description": "Temperature of the right motor board",
+      "key": "drive_right_temp",
       "kind": "number",
       "name": "Right ESC Temp",
       "source": "logic",
@@ -23053,6 +23158,7 @@
     },
     "om_v_battery": {
       "description": "Voltage of the battery",
+      "key": "battery_voltage",
       "kind": "number",
       "name": "V Battery",
       "source": "logic",
@@ -23060,6 +23166,7 @@
     },
     "om_v_charge": {
       "description": "The charge voltage while on the contacts, else 0; derived, the board reports none",
+      "key": "charge_voltage",
       "kind": "number",
       "name": "V Charge (dock contact)",
       "source": "logic",
@@ -23067,6 +23174,7 @@
     },
     "os_correction_age": {
       "description": "Age of the last RTK correction",
+      "key": "os_correction_age",
       "kind": "number",
       "name": "RTK Correction Age",
       "source": "gnss",
@@ -23074,10 +23182,19 @@
     },
     "os_ntrip_state": {
       "description": "State of the connection to the caster",
+      "key": "os_ntrip_state",
       "kind": "text",
       "name": "NTRIP",
       "source": "ntrip",
       "unit": ""
+    },
+    "position_accuracy": {
+      "description": "Expected error of the position",
+      "key": "position_accuracy",
+      "kind": "number",
+      "name": "Position Accuracy",
+      "source": "logic",
+      "unit": "m"
     }
   },
   "x-settings": {

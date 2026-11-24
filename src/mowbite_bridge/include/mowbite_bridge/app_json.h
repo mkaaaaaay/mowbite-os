@@ -37,6 +37,7 @@ struct RobotStateView {
   long long emergency_reason = 0;
   bool is_charging = false;
   bool rain_detected = false;
+  bool hardware = false;
   double x = 0.0;
   double y = 0.0;
   double heading = 0.0;
@@ -64,6 +65,8 @@ const char* MeaningName(Meaning meaning);
 
 struct SensorDescription {
   std::string id;
+  // The own id of the sensor; empty: the id.
+  std::string key;
   std::string name;
   bool is_text = false;
   Meaning meaning = Meaning::kUnknown;
@@ -89,7 +92,8 @@ struct SensorReading {
   double stamp = 0.0;
 };
 
-// sensors.list: sensor_infos/json entries with value and stamp; params {"ids": [...]} select, other shapes throw.
+// sensors.list: sensor_infos/json entries with value and stamp; params {"ids": [...]} select by id or key, other
+// shapes throw.
 Json SensorList(const std::map<std::string, SensorDescription>& sensors,
                 const std::map<std::string, SensorReading>& readings, const Json& params);
 
@@ -111,10 +115,10 @@ std::string CapabilitiesText();
 std::string VersionText(const std::string& version);
 
 // system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height,
-// update_path where it is empty.
+// update_path where it is empty; names openmower or own.
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
                 const Json& stop_release = Json(), const Json& blade_height = Json(),
-                const std::string& update_path = "");
+                const std::string& update_path = "", bool openmower_names = true);
 
 // stop_release of system.info from the times of hw/capabilities: null without a free time.
 Json StopRelease(double free_s, double hold_s, double max_hold_s);

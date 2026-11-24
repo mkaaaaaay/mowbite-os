@@ -189,6 +189,18 @@ TEST(SensorHistory, FilesLoadBack) {
   EXPECT_EQ(back.TakeFiles(kNow + 5460).size(), 1u);
 }
 
+// Files from before the own sensor ids go on under the own id, with its name.
+TEST(SensorHistory, AnIdOfOpenMowerLoadsUnderTheOwnId) {
+  SensorHistory h;
+  h.Load(kT, "{\"schema\":1,\"sensors\":[[\"om_v_battery\",\"V Battery\",\"V\"]]}\n[1794700800,0,24,25,26,3]\n");
+  const json answer = h.Query({}, kT + 60);
+  ASSERT_EQ(answer["sensors"].size(), 1u);
+  EXPECT_EQ(answer["sensors"][0]["sensor_id"], "battery_voltage");
+  EXPECT_EQ(answer["sensors"][0]["key"], "battery_voltage");
+  EXPECT_EQ(answer["sensors"][0]["name"], "Battery Voltage");
+  EXPECT_EQ(answer["sensors"][0]["points"], json::parse("[[1794700800, 24, 25, 26]]"));
+}
+
 TEST(SensorHistory, FileWithABrokenEndLoadsTheRest) {
   SensorHistory h = WithVoltage();
   for (int m = 0; m < 3; ++m) h.Add("v", m, kNow + m * 60);

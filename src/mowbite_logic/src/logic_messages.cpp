@@ -130,6 +130,7 @@ mowbite_msgs::msg::RobotState ToMessage(const RobotStateData& state) {
   msg.emergency_reason = static_cast<uint32_t>(state.emergency_reason);
   msg.is_charging = state.is_charging;
   msg.rain_detected = state.rain_detected;
+  msg.hardware = state.hardware;
   msg.gps_percentage = state.gps_percentage;
   msg.pose_x = state.pose_x;
   msg.pose_y = state.pose_y;

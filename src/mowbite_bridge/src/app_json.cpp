@@ -1,5 +1,6 @@
 #include "mowbite_bridge/app_json.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
@@ -50,6 +51,7 @@ std::string RobotStateText(const RobotStateView& s) {
                    {"emergency_reason", s.emergency_reason},
                    {"is_charging", Switch(s.is_charging)},
                    {"rain_detected", Switch(s.rain_detected)},
+                   {"hardware", Switch(s.hardware)},
                    {"pose",
                     {{"x", s.x},
                      {"y", s.y},
@@ -95,7 +97,8 @@ Json SensorInfo(const SensorDescription& s) {
               {"has_critical_low", Switch(s.critical_low.has_value())},
               {"lower_critical_value", s.critical_low.value_or(0.0)},
               {"has_critical_high", Switch(s.critical_high.has_value())},
-              {"upper_critical_value", s.critical_high.value_or(0.0)}};
+              {"upper_critical_value", s.critical_high.value_or(0.0)},
+              {"key", s.key.empty() ? s.id : s.key}};
 }
 
 std::string SensorInfosText(const std::map<std::string, SensorDescription>& sensors) {
@@ -132,7 +135,11 @@ Json SensorList(const std::map<std::string, SensorDescription>& sensors,
     if (!id.is_string()) throw std::invalid_argument("ids must be a list of sensor ids");
   }
   for (const auto& id : *ids) {
-    const auto sensor = sensors.find(id.get<std::string>());
+    const std::string& wanted = id.get_ref<const std::string&>();
+    auto sensor = sensors.find(wanted);
+    if (sensor == sensors.end()) {
+      sensor = std::find_if(sensors.begin(), sensors.end(), [&](const auto& s) { return s.second.key == wanted; });
+    }
     if (sensor != sensors.end()) out.push_back(entry(sensor->second));
   }
   return out;
@@ -159,7 +166,7 @@ std::string VersionText(const std::string& version) {
 }
 
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release,
-                const Json& blade_height, const std::string& update_path) {
+                const Json& blade_height, const std::string& update_path, bool openmower_names) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
@@ -169,7 +176,8 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
               {"mqtt", mqtt_version},
               {"stop_release", stop_release},
               {"blade_height", blade_height},
-              {"update_path", update_path.empty() ? Json() : Json(update_path)}};
+              {"update_path", update_path.empty() ? Json() : Json(update_path)},
+              {"names", openmower_names ? "openmower" : "own"}};
 }
 
 Json StopRelease(double free_s, double hold_s, double max_hold_s) {

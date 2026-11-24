@@ -107,6 +107,12 @@ Duties:
   `DockMarker.msg`. What the mower drives with it and when it stops is up to the logic. The Tron's process is
   `tron_rear` (`tron_vision`, section 8). The stamp is the time the image was taken, on the clock of the host: the
   localization fuses each image at that moment and drops it when it arrives more than `marker_max_age` late.
+- Sensors of its own for the app (temperatures, states of a board) go over `bridge/sensor_info` and
+  `bridge/sensor_value` under ids in the words of the OS (`stereo_state`, not names of another system). The
+  battery, charging, blade, drive and position values come from the logic out of `hw/status`; a driver does not send
+  them again. The bridge shows every sensor with its id as `key`; with `openmower_names` (the default) it shows the
+  ten sensors of the logic the app of OpenMower knows under their `om_*` ids, from the table of the catalog
+  (`openmower_id` in `mowbite_api/src/catalog.cpp`). A new platform adds nothing there.
 
 ## 2. Fake board
 

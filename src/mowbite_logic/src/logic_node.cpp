@@ -98,14 +98,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   // recording, the follower while driving (LogicCore decides), stops of the logic.
   drive_pub_ = create_publisher<mowbite_msgs::msg::DriveCommand>("safety/drive", 10);
 
-  // The app container rates the battery by /ll/board; any value except YardForce makes it show battery_percentage,
-  // which the logic sends on every platform.
-  params_pub_ = create_publisher<std_msgs::msg::String>("bridge/params",
-                                                        rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local());
-  std_msgs::msg::String board_msg;
-  board_msg.data = nlohmann::json{{"node", "/ll"}, {"params", {{"board", "MowBite"}}}}.dump();
-  params_pub_->publish(board_msg);
-  // Publishers of their own, so a run of params.set never pushes /ll/board out of the history above.
+  // Each change of the reasons of the emergency; the bridge writes its log line.
+  reason_change_pub_ = create_publisher<mowbite_msgs::msg::ReasonChange>("bridge/reason_change", 50);
   logic_params_pub_ = create_publisher<std_msgs::msg::String>(
       "bridge/params", rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
   // The dimensions of the mower for the planner and the localization, latched: whoever starts later gets the last.
@@ -2264,13 +2258,10 @@ void LogicNode::Record(const std::vector<Effect>& effects) {
     if (const auto* notice = std::get_if<Notice>(&effect)) {
       RCLCPP_INFO(get_logger(), "%s", notice->line.c_str());
     } else if (const auto* change = std::get_if<ReasonChange>(&effect)) {
-      // The app shows the reasons of an active emergency from this line, like with mower_comms_v2 of OpenMower.
-      if (change->to == 0) {
-        RCLCPP_INFO(get_logger(), "Emergency cleared");
-      } else {
-        RCLCPP_WARN(get_logger(), "Emergency reason changed from: '%s' to: '%s'",
-                    EmergencyReasonNames(change->from).c_str(), EmergencyReasonNames(change->to).c_str());
-      }
+      mowbite_msgs::msg::ReasonChange msg;
+      msg.before = static_cast<uint32_t>(change->from);
+      msg.after = static_cast<uint32_t>(change->to);
+      reason_change_pub_->publish(msg);
     }
   }
   for (const auto& effect : effects) {
