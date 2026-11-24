@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import sys
+import time
 
 import pytest
 
@@ -58,7 +59,10 @@ def tree(folder, skip_kept_out=True):
 
 
 def schema_of(data_dir):
-    return json.loads(read(os.path.join(data_dir, "data_schema.json")))
+    """data_schema.json without the digests of the map an update leaves."""
+    state = json.loads(read(os.path.join(data_dir, "data_schema.json")))
+    state.pop("map", None)
+    return state
 
 
 def garden(data_dir, label="a"):
@@ -210,9 +214,54 @@ def test_newer_data_goes_back_to_the_backup_of_the_update(data_dir):
     assert read(os.path.join(data_dir, "safety_lock.json")) == '{"failures": 1}'
     assert stat.S_IMODE(os.stat(os.path.join(data_dir, "ntrip.yaml")).st_mode) == 0o600
     assert data_store.backups(data_dir) == [2, 3]
-    # The note lasts until the next start.
+    # The map changed since the update: mowing waits for the confirmation, the note stays over the next start.
+    assert note["confirm"] is True
     assert start(data_dir, 2) is None
-    assert not os.path.exists(os.path.join(data_dir, "data_rollback.json"))
+    assert json.loads(read(os.path.join(data_dir, "data_rollback.json")))["confirm"] is True
+
+
+def test_a_way_back_without_a_change_of_the_map_asks_for_nothing(data_dir):
+    garden(data_dir, "old")
+    write(os.path.join(data_dir, "map_datum.json"), '{"lat": 52}')
+    start(data_dir, 2)
+    start(data_dir, 3)
+    assert set(json.loads(read(os.path.join(data_dir, "data_schema.json")))["map"]) == set(data_store.MAP_FILES)
+    # Other data changed, the backup is old: the map is the one of the update all the same.
+    write(os.path.join(data_dir, "params", "mower_logic.json"), '{"p": "new"}')
+    os.utime(os.path.join(data_dir, "backup-2"), (1767225600, 1767225600))
+    assert start(data_dir, 2)["confirm"] is False
+    # The settings of the planner are part of it.
+    start(data_dir, 3)
+    write(os.path.join(data_dir, "planner", "mowbite_planner_settings.json"), '{"angle": 1}')
+    assert start(data_dir, 2)["confirm"] is True
+
+
+def test_without_the_digests_of_the_update_the_age_of_the_backup_decides(data_dir):
+    garden(data_dir, "old")
+    start(data_dir, 2)
+    start(data_dir, 3)
+    # An update by an image before the digests.
+    write(os.path.join(data_dir, "data_schema.json"), '{"schema": 3, "by": "v3"}')
+    assert start(data_dir, 2)["confirm"] is False
+    start(data_dir, 3)
+    write(os.path.join(data_dir, "data_schema.json"), '{"schema": 3, "by": "v3"}')
+    os.utime(os.path.join(data_dir, "backup-2"), (time.time() - 3700,) * 2)
+    assert start(data_dir, 2)["confirm"] is True
+
+
+def test_an_open_note_stays_open_and_an_update_takes_it_away(data_dir):
+    garden(data_dir, "old")
+    start(data_dir, 2)
+    start(data_dir, 3)
+    write(os.path.join(data_dir, "map.json"), '{"map": "new"}')
+    assert start(data_dir, 2)["confirm"] is True
+    note = os.path.join(data_dir, "data_rollback.json")
+    # Forward again: the note goes.
+    start(data_dir, 3)
+    assert not os.path.exists(note)
+    # Back once more without a change, but a note of an earlier way back still open: it stays open.
+    write(note, '{"confirm": true}')
+    assert start(data_dir, 2)["confirm"] is True
 
 
 def test_newer_data_without_a_backup_halts(data_dir):

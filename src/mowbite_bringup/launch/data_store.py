@@ -7,7 +7,8 @@ Data from before the file counts as schema 1. On start:
   2. Leftovers of a crash go: *.tmp; backup-N.old comes back when backup-N is missing, else it goes.
   3. An operation the crash cut off (pending in data_schema.json) starts over from the backup it made first.
   4. Data older than the image: backup-D, then the steps D -> D+1 -> ... -> S. Newer data with backup-S of an earlier
-     update: backup-D of it, then backup-S back, and a note for the bridge. Newer data without backup-S: halt.
+     update: backup-D of it, then backup-S back, and a note for the logic and the bridge. Newer data without backup-S:
+     halt. The note stays until the user confirms it in the app or an update takes the data forward again.
   5. At most two backups, the lowest number goes first, but never the one just made (needed to go back).
 Every change is a copy made to a .tmp first and renamed when complete, so a crash at any point leaves data the next
 start can go on from. data_schema.json is written last.
@@ -18,6 +19,7 @@ Run as a script to compare the FILES_VERSION of the installed planner with the t
 import ast
 import errno
 import fcntl
+import hashlib
 import importlib.util
 import json
 import os
@@ -30,8 +32,13 @@ SCHEMA_FILE = "data_schema.json"
 LOCK_FILE = ".lock"
 # Written by the logic for system.hold; it outlives an update and a way back.
 HOLD_FILE = "hold.json"
-# For the bridge: a way back took the data since the update away and left it in a backup.
+# For the logic and the bridge: a way back took the data since the update away and left it in a backup; with confirm
+# the logic mows only after the user confirmed the map (data.rollback.confirm).
 ROLLBACK_NOTE = "data_rollback.json"
+# What the mower mows by: their digests at the end of an update tell whether a way back loses a change of them.
+MAP_FILES = ("map.json", "map_datum.json", os.path.join("planner", "mowbite_planner_settings.json"))
+# Without those digests a backup older than this (s) asks for the confirmation.
+CONFIRM_AGE = 3600
 # Written by the logic (mowbite_hold/restart.h): the restart hold and the session it is judged from outlive an update
 # and a way back.
 RESTART_HOLD_FILE = "restart-hold.json"
@@ -168,6 +175,40 @@ def free_space(path):
     return info.f_bavail * info.f_frsize
 
 
+def map_digests(data_dir):
+    """sha256 of each of MAP_FILES, None for one that is missing."""
+    digests = {}
+    for name in MAP_FILES:
+        try:
+            with open(os.path.join(data_dir, name), "rb") as f:
+                digests[name] = hashlib.sha256(f.read()).hexdigest()
+        except FileNotFoundError:
+            digests[name] = None
+    return digests
+
+
+def needs_confirm(data_dir, state, backup_of):
+    """Whether a way back from data_dir loses a change of the map since the update; by the age of the backup when the
+    update left no digests or they cannot be read."""
+    at_update = state.get("map") if state else None
+    try:
+        if isinstance(at_update, dict) and set(at_update) == set(MAP_FILES):
+            return map_digests(data_dir) != at_update
+    except OSError:
+        pass
+    return time.time() - backup_of > CONFIRM_AGE
+
+
+def read_note(data_dir):
+    """The note of an earlier way back, None without one or when it cannot be read."""
+    try:
+        with open(os.path.join(data_dir, ROLLBACK_NOTE)) as f:
+            note = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return note if isinstance(note, dict) else None
+
+
 def write_json(data_dir, name, value):
     path = os.path.join(data_dir, name)
     temp = path + TEMP
@@ -288,7 +329,6 @@ def prepare(data_dir, schema, version="unknown", steps=None, wait=LOCK_WAIT, bes
 
 def _prepare(data_dir, schema, version, steps, besides=()):
     clean(data_dir)
-    remove(os.path.join(data_dir, ROLLBACK_NOTE))
     state = read_schema(data_dir)
     if state and "pending" in state:
         # An update or a way back was cut off after its backup was complete: back to that backup, then on as usual.
@@ -296,7 +336,7 @@ def _prepare(data_dir, schema, version, steps, besides=()):
         if start not in backups(data_dir):
             raise Halt("DATA_ERROR", f"An operation on {data_dir} was cut off and {BACKUP}{start} is missing.", start)
         restore(data_dir, start)
-        state = {"schema": start, "by": state.get("by", "unknown")}
+        state = {key: value for key, value in state.items() if key != "pending"}
         write_json(data_dir, SCHEMA_FILE, state)
     if state is None:
         current = 1 if has_data(data_dir, besides) else schema
@@ -313,6 +353,7 @@ def _prepare(data_dir, schema, version, steps, besides=()):
                                            "pending": {"to": schema}})
         for n in range(current, schema):
             steps[n](data_dir)
+        remove(os.path.join(data_dir, ROLLBACK_NOTE))
     elif current > schema:
         if schema not in backups(data_dir):
             raise Halt("SCHEMA_NEWER", f"The data is newer than this image and there is no {BACKUP}{schema} "
@@ -320,15 +361,19 @@ def _prepare(data_dir, schema, version, steps, besides=()):
         need_room(data_dir, max(data_size(data_dir), data_size(backup_path(data_dir, schema))), current)
         # When the backup that comes back was made: it may be months old, with the map of then.
         backup_of = int(os.path.getmtime(backup_path(data_dir, schema)))
+        # A note not confirmed yet stays open: the map of then is still the one in data_dir.
+        earlier = read_note(data_dir)
+        confirm = needs_confirm(data_dir, state, backup_of) or bool(earlier and earlier.get("confirm") is True)
         make_backup(data_dir, current)
-        write_json(data_dir, SCHEMA_FILE, {"schema": current, "by": state.get("by", "unknown"),
-                                           "pending": {"to": schema}})
+        write_json(data_dir, SCHEMA_FILE, {**state, "pending": {"to": schema}})
         restore(data_dir, schema)
         # Before the schema, so that a cut in between does the way back once more, note included.
         note = {"from": current, "to": schema, "backup": f"{BACKUP}{current}", "t": time.time(),
-                "backup_of": backup_of}
+                "backup_of": backup_of, "confirm": confirm}
         write_json(data_dir, ROLLBACK_NOTE, note)
-    if state is None or current != schema:
+    if current < schema:
+        write_json(data_dir, SCHEMA_FILE, {"schema": schema, "by": version, "map": map_digests(data_dir)})
+    elif state is None or current != schema:
         write_json(data_dir, SCHEMA_FILE, {"schema": schema, "by": version})
     if current != schema:
         prune(data_dir, current)
