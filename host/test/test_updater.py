@@ -897,6 +897,14 @@ class FlowTest(Base):
         self.assertEqual((last["result"], last["reason"]), ("refused", bundle.PLATFORM_MISMATCH))
         self.assertEqual(self.install(C, platforms=["xcore", "tron"])["result"], "installed")
 
+    # Without MOWBITE_PLATFORM the mower chosen in the app (platform.json of data_dir) counts before the running OS.
+    def test_platform_chosen_in_the_app(self):
+        self.write(self.paths.env_files[0], "MOWBITE_HARDWARE=false\n")
+        self.write(self.paths.platform_note, '{"platform": "xcore", "t": 1}\n')
+        last = self.install(A, platforms=["tron"])
+        self.assertEqual((last["result"], last["reason"]), ("refused", bundle.PLATFORM_MISMATCH))
+        self.assertEqual(self.install(B, platforms=["xcore"])["result"], "installed")
+
     # Bundles built before platforms and mowers without MOWBITE_PLATFORM take any bundle.
     def test_platform_unknown_installs(self):
         self.write(self.paths.env_files[0], "MOWBITE_PLATFORM=tron\n")

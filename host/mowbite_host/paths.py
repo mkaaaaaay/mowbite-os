@@ -61,6 +61,8 @@ class Paths:
         self.hold = data + "/hold.json"
         self.exit_note = data + "/container_exit.json"
         self.checkpoint = data + "/checkpoint.json"
+        # The platform the setup program chose (stack.py, PLATFORM_NOTE), where the device does not fix one.
+        self.platform_note = data + "/platform.json"
         self.halt = p + (self.env().get("MOWBITE_HALT_FILE") or "/run/mowbite-os/halt")
 
     # KEY=value of the environment files of the OS service, read as systemd reads EnvironmentFile: comments with # or

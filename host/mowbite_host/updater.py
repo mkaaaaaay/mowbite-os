@@ -165,12 +165,15 @@ class Updater:
     def _running_meta(self):
         return os_meta(self.paths)
 
-    # The platform of this mower: MOWBITE_PLATFORM of the device, else the one its running OS is built for alone; None
-    # when neither names one.
+    # The platform of this mower: MOWBITE_PLATFORM of the device, else the one chosen in the app (platform.json of
+    # data_dir), else the one its running OS is built for alone; None when none names one.
     def _platform(self):
         named = self.paths.env().get("MOWBITE_PLATFORM")
         if named:
             return named
+        chosen = files.read_json(self.paths.platform_note)
+        if isinstance(chosen, dict) and isinstance(chosen.get("platform"), str) and chosen["platform"]:
+            return chosen["platform"]
         platforms = self._running_meta().get("platforms")
         return platforms[0] if isinstance(platforms, list) and len(platforms) == 1 else None
 
