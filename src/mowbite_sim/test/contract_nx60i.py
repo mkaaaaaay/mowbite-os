@@ -4,7 +4,7 @@ import math
 import struct
 
 from sim_common import XCORE_DATA as DATA, XCORE_DIFF_DRIVE as DIFF_DRIVE, XCORE_MOWER as MOWER
-from sim_common import (fake_xcore, layers, loopback_group, read_json, sim_files, write_json, xcore_config,
+from sim_common import (fake_xcore, layers, log_entries, loopback_group, read_json, sim_files, write_json, xcore_config,
                         xcore_datagrams, xcore_driver)
 
 
@@ -19,6 +19,7 @@ class Case:
         self.slope, self.deadband, self.wheel_distance = (
             values["duty_slope"], values["duty_deadband"], values["wheel_distance"])
         self.cmd_vel_timeout = values["cmd_vel_timeout"]
+        self.quiet = False
 
     def board(self):
         return fake_xcore(self.group_port, "--flags", self.flags, "--log", self.log, "--log-max-mb", "20",
@@ -28,7 +29,14 @@ class Case:
         return xcore_driver(self.bind_ip, self.group_port, allow_blade=True, hold_file=self.hold_file)
 
     def inputs(self, stop=False, lift=False):
-        write_json(self.flags, {"stop": int(stop), "lift_left": int(lift)})
+        write_json(self.flags, {"stop": int(stop), "lift_left": int(lift), "quiet": int(self.quiet)})
+
+    def board_quiet(self, quiet):
+        self.quiet = quiet
+        self.inputs()
+
+    def quiet_bytes(self):
+        return sum(e["quiet_rx"] for e in log_entries(self.log) if "quiet_rx" in e)
 
     def time(self):
         return read_json(self.state)["t"]

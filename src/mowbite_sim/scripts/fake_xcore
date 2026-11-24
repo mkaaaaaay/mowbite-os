@@ -25,6 +25,7 @@ restarts the board whenever its value changes, as does a GPS configuration other
 the mower may do wrong: rpm_zero (the blade reports 0 rpm), wheel_speed (both wheels turn forward at this many m/s
 whatever the duty), zero_duty_ignored (a duty of 0, the drive timeout and an emergency leave the wheels at the last duty
 other than 0), link_down (the inner network is down: nothing goes out or comes in, as with eth0 down on the host),
+quiet (the board sends nothing, not even announcements, and logs every datagram it gets meanwhile as quiet_rx bytes),
 roll and pitch (tilt of the body in degrees, seen by the IMU), yaw_rate (rad/s the body turns, as by
 hand, seen by the IMU), foreign_host (another host claims every
 claimed service again this many seconds after this host claimed it; the board then answers it, not this host).
@@ -388,6 +389,7 @@ class Board:
         # The antenna over the last second, for the delay of the GPS.
         self.antenna_history = []
         self.link_down = False
+        self.quiet = False
         self.boot()
 
     def now(self):
@@ -445,7 +447,7 @@ class Board:
 
     def send(self, service, msg_type, arg1=0, arg2=0, payload=b"", to=None):
         to = to or service.target
-        if to is None or self.link_down:
+        if to is None or self.link_down or self.quiet:
             return
         if msg_type != ANNOUNCE:
             service.sequence = (service.sequence + 1) & 0xFFFF
@@ -478,6 +480,9 @@ class Board:
         if self.link_down:
             return
         now = self.now()
+        if self.quiet:
+            self.log.write({"t": now, "quiet_rx": len(data)})
+            return
         self.pcap.write(sender, (self.args.ip, self.port), data)
         if len(data) < HEADER.size:
             return
@@ -919,6 +924,7 @@ class Board:
         now = self.now()
         flags = self.files.flags
         self.link_down = bool(flags.get("link_down"))
+        self.quiet = bool(flags.get("quiet"))
         restart = flags.get("restart")
         if restart != self.restart_flag:
             self.restart_flag = restart

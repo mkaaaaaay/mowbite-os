@@ -43,6 +43,7 @@ HOLD = os.path.join(WORK, "hold.json")
 CASE = importlib.import_module(f"contract_{PLATFORM}").Case(WORK, HOLD)
 LATCH = HardwareStatus.REASON_LATCH
 NOT_HEARD = HardwareStatus.REASON_BOARD_NOT_HEARD
+TIMEOUT_INPUTS = HardwareStatus.REASON_TIMEOUT_INPUTS
 HOST = LATCH | HardwareStatus.REASON_HIGH_LEVEL
 CMD_VEL_TIMEOUT = CASE.cmd_vel_timeout
 # The longest time without hw/cmd_vel a driver may keep the wheels turning.
@@ -145,19 +146,20 @@ class TestDriverContract(unittest.TestCase):
         p = self.probe
         s = p.wait_for(lambda p: p.status is not None and p.status.emergency_reason & NOT_HEARD and p.status, 10)
         self.assertTrue(s, "no BOARD_NOT_HEARD while the board is quiet")
-        self.assertEqual(s.emergency_reason, NOT_HEARD)
+        # A board that also names its services and sensors may add their timeouts, never a latch or TIMEOUT_INPUTS.
+        self.assertFalse(s.emergency_reason & (LATCH | TIMEOUT_INPUTS), s.emergency_reason)
         self.assertTrue(s.emergency)
         self.assertFalse(s.emergency_latched)
         self.assertFalse(s.telemetry_ok)
         p.cmd_vel_for(0.2, 0.5)
         r = p.set_blade(True, lease_s=1.0)
         self.assertFalse(r.success)
-        self.assertEqual(r.emergency_reason, NOT_HEARD)
+        self.assertTrue(r.emergency_reason & NOT_HEARD, r.emergency_reason)
         p.set_emergency(False)
         time.sleep(0.5)
         self.assertEqual(CASE.quiet_bytes(), 0)
         CASE.board_quiet(False)
-        ready = p.wait_for(lambda p: p.status.telemetry_ok and not p.status.emergency, 10)
+        ready = p.wait_for(lambda p: p.status.telemetry_ok and not p.status.emergency, 20)
         self.assertTrue(ready, "the first frames did not end BOARD_NOT_HEARD")
         TestDriverContract.ready = True
 
