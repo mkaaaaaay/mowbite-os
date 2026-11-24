@@ -508,7 +508,8 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   `make-image.sh` writes both from the commit checked out), `mowbite_boot` under `/usr/lib/mowbite-boot` (from
   `host/boot/`, never in a bundle), the thin entry points `mowbite-host` and `mowbite-update`, the unit enabled, the
   rootfs version in `/usr/lib/mowbite/base` (raise it when a bundle needs something new of the rootfs; bundles name
-  the version they need) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
+  the version they need; `base-packages.txt`, written by `build-base.sh`, lists the packages of the base, and
+  `make-bundle.sh` refuses a bundle whose runtime packages are not in it) and `/etc/mowbite/allowed_signers` with two keys, the main one and a reserve kept apart, for
   the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner`, `mowbite-host` and `mowbite-index`.
   `host/test/test_e2e.py` runs the
   whole way with the carrier `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).

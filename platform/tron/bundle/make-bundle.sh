@@ -29,8 +29,9 @@ fi
 revision=${commit:0:12}
 here=$(dirname "$(readlink -f "$0")")
 if ! serial=$(git -C "$here" show -s --format=%ct "$commit" 2> /dev/null) ||
-   ! base=$(git -C "$here" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base" 2> /dev/null); then
-    echo "commit $commit or its usr/lib/mowbite/base is not in the repo at $here: fetch it first" >&2
+   ! base=$(git -C "$here" show "$commit:platform/tron/rootfs/files/usr/lib/mowbite/base" 2> /dev/null) ||
+   ! base_packages=$(git -C "$here" show "$commit:platform/tron/rootfs/base-packages.txt" 2> /dev/null); then
+    echo "commit $commit, its usr/lib/mowbite/base or base-packages.txt is not in the repo at $here: fetch it first" >&2
     exit 1
 fi
 source "$here/pack.sh"
@@ -51,19 +52,27 @@ if [ -f "$work/app/app.json" ]; then
 fi
 docker cp -q "$container:/ws/tools" "$work/$revision/tools"
 docker cp -q "$container:/opt/runtime-packages.txt" "$work/runtime-packages.txt"
+printf '%s\n' "$base_packages" > "$work/base-packages.txt"
 printf '%s\n' "$commit" > "$work/$revision/revision"
 git -C "$here" show "$commit:LICENSE" > "$work/$revision/LICENSE"
-fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" "$platforms" <<'PY'
+fields=$(python3 -I - "$HOST_LIB" "$work" "$revision" "$commit" "$min_app" "$serial" "$base" "$platforms" \
+         "$here/../rootfs" <<'PY'
 import glob, json, os, sys
-host, work, revision, commit, min_app, serial, base, platforms = sys.argv[1:]
+host, work, revision, commit, min_app, serial, base, platforms, rootfs = sys.argv[1:]
 sys.path.insert(0, os.path.join(host, "bundle"))
-import app_export, planner_meta
+sys.path.insert(0, rootfs)
+import app_export, base_packages, planner_meta
 tree = f"{work}/{revision}"
 # Every platform the bundle names has its package in the image, under its name in the ament index.
 for name in platforms.split():
     if not glob.glob(f"{tree}/install/*/share/ament_index/resource_index/mowbite_platform/{name}"):
         sys.exit(f"the image has no platform {name}")
 packages = sorted({line.strip() for line in open(f"{work}/runtime-packages.txt") if line.strip()})
+# A fresh rootfs of this base has to run the bundle; the host checks the packages again before installing.
+with open(f"{work}/base-packages.txt") as f:
+    lacking = base_packages.missing(packages, f.read(), base.strip())
+if lacking:
+    sys.exit(f"base {base.strip()} lacks runtime packages {' '.join(lacking)}: add them to packages.txt, build a base")
 with open(f"{tree}/install/mowbite_api/share/mowbite_api/api.schema.json") as f:
     schema = json.load(f)
 with open(f"{tree}/install/mowbite_bridge/share/mowbite_bridge/data_schema.json") as f:

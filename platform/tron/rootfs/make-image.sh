@@ -48,6 +48,10 @@ if ! cmp -s <(grep -v '^file ' "$work/inputs.base") <(grep -v '^file ' "$work/in
     echo "$BASE is out of date for packages.txt, build-base.sh or a removal under files/, build a new base" >&2
     exit 1
 fi
+# The bundles are checked against base-packages.txt, so it has to name what the tar holds.
+tar -xOf "$BASE" ./var/lib/dpkg/status > "$work/status"
+python3 -I "$HERE/base_packages.py" same "$work/status" "$HERE/base-packages.txt" \
+    || { echo "base-packages.txt is not the list of $BASE: commit the one build-base.sh wrote with it" >&2; exit 1; }
 tar -C "$HERE/files" -cf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w .
 # The broker of MowBite OS with the configuration the Compose stack of the other platforms uses.
 tar -C "$HERE/../../../docker/mower" -rf "$work/files.tar" --owner=0 --group=0 --numeric-owner --mode=go-w \

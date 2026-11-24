@@ -2,7 +2,8 @@
 # Base rootfs of MowBite OS for the Airseekers Tron as a tar: Ubuntu 24.04 arm64, ROS 2 Jazzy core, the units and
 # configuration under files/, no vendor parts, no keys. Without root: mmdebstrap in a user namespace, arm64 binaries
 # through the qemu-user binfmt handler. make-image.sh turns the tar into the image of one mower and lays the current
-# files/ over it, so only a change of packages.txt, of this script or a removal under files/ needs a new base.
+# files/ over it, so only a change of packages.txt, of this script or a removal under files/ needs a new base. It
+# rewrites base-packages.txt beside it with the packages the tar holds, the list make-bundle.sh checks bundles against.
 #   build-base.sh <new .tar>
 set -euo pipefail
 OUT=${1:?new .tar}
@@ -48,10 +49,13 @@ mmdebstrap --mode=unshare --architectures=arm64 --variant=apt --format=tar \
     --customize-hook='rm -f "$1"/etc/ssh/ssh_host_*' \
     --customize-hook='mkdir -m 755 "$1"/userdata "$1"/meta' \
     --customize-hook='ln -sf /usr/share/zoneinfo/Europe/Berlin "$1"/etc/localtime && echo Europe/Berlin > "$1"/etc/timezone' \
+    --customize-hook="download /var/lib/dpkg/status '$work/status'" \
     noble "$OUT" \
     "deb [signed-by=$UBUNTU_KEY] $PORTS noble main universe" \
     "deb [signed-by=$UBUNTU_KEY] $PORTS noble-updates main universe" \
     "deb [signed-by=$UBUNTU_KEY] $PORTS noble-security main universe" \
     "deb [signed-by=$work/ros-archive-keyring.gpg] $ROS noble main"
 built=1
-echo "base rootfs $OUT: $(stat -c %s "$OUT") B"
+python3 -I "$HERE/base_packages.py" write "$work/status" "$(cat "$HERE/files/usr/lib/mowbite/base")" "$HERE/packages.txt" \
+    > "$HERE/base-packages.txt"
+echo "base rootfs $OUT: $(stat -c %s "$OUT") B; commit base-packages.txt with it"
