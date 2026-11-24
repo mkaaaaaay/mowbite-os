@@ -648,7 +648,6 @@ TEST_F(ControlTest, WithoutExpectedVersionsTheFirmwareIsNotChecked) {
 
 TEST_F(FirmwareControlTest, BlockedUntilAVersionFrameMatches) {
   Run(0.1);
-  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
   EXPECT_FALSE(control_.Status(now_).latched);
   EXPECT_FALSE(DrivesOrMows(0.5));
   EXPECT_TRUE(control_.OnVersions(Versions(36, 34)));
@@ -693,8 +692,12 @@ TEST_F(FirmwareControlTest, ReconnectForgetsTheVersion) {
   control_.OnVersions(Versions(36, 34));
   EXPECT_TRUE(DrivesOrMows(0.3));
   control_.OnConnected(now_);
-  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
   EXPECT_FALSE(DrivesOrMows(0.8));
+  // The start time counts from the reopen, not from the first tick.
+  Run(3.2);
+  EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
+  Run(3.4);
+  EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
 }
 
 TEST_F(ControlTest, BladeRefusedByDefault) {
@@ -1696,9 +1699,8 @@ class OneVersionTest : public ControlTest {
 };
 
 TEST_F(OneVersionTest, OneExpectedVersionIsCheckedAsWell) {
-  Run(0.5);
+  EXPECT_FALSE(DrivesOrMows(3.5));
   EXPECT_TRUE(control_.Status(now_).firmware_incompatible);
-  EXPECT_FALSE(DrivesOrMows(1.0));
   VersionInfo versions;
   versions.chassis_board = {0, 6, 34};
   versions.cutter_board = {9, 9, 9};
@@ -1706,10 +1708,34 @@ TEST_F(OneVersionTest, OneExpectedVersionIsCheckedAsWell) {
   EXPECT_FALSE(control_.Status(now_).firmware_incompatible);
 }
 
-TEST_F(FirmwareControlTest, BeforeTheFirstVersionFrameTheReasonSaysFirmware) {
+TEST_F(FirmwareControlTest, AVersionFrameStillDueBlocksWithoutAnEmergency) {
+  EXPECT_FALSE(DrivesOrMows(3.0));
+  auto status = control_.Status(now_);
+  EXPECT_FALSE(status.blocked);
+  EXPECT_FALSE(status.firmware_incompatible);
+  EXPECT_EQ(status.emergency_reason, 0u);
+}
+
+TEST_F(FirmwareControlTest, WithoutAVersionFrameInTheStartTimeTheReasonSaysFirmware) {
+  Run(3.1);
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_TRUE(status.firmware_incompatible);
+  EXPECT_FALSE(status.latched);
+  EXPECT_EQ(status.emergency_reason, kReasonFirmwareIncompatible);
+  // A late matching frame lifts the block without a release.
+  EXPECT_TRUE(control_.OnVersions(Versions(36, 34)));
+  EXPECT_EQ(control_.Status(now_).emergency_reason, 0u);
+  EXPECT_TRUE(DrivesOrMows(3.3));
+}
+
+TEST_F(FirmwareControlTest, AMismatchInTheStartTimeIsReportedAtOnce) {
   Run(0.5);
-  EXPECT_TRUE(control_.Status(now_).blocked);
-  EXPECT_EQ(control_.Status(now_).emergency_reason, kReasonFirmwareIncompatible);
+  EXPECT_FALSE(control_.OnVersions(Versions(36, 35)));
+  auto status = control_.Status(now_);
+  EXPECT_TRUE(status.blocked);
+  EXPECT_TRUE(status.firmware_incompatible);
+  EXPECT_EQ(status.emergency_reason, kReasonLatch | kReasonFirmwareIncompatible);
 }
 
 TEST_F(ImuControlTest, AnImuThatNeverCameAddsItsBitToTheLatchedOnes) {

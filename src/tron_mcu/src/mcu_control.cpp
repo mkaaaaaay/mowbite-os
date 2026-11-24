@@ -231,6 +231,7 @@ void McuControl::OnConnected(double now) {
   blade_on_.reset();
   // After the port reopens the MCU might run another firmware, e.g. after an update.
   firmware_ok_.reset();
+  connected_s_ = now;
   moving_ = false;
   StartStop(now);
   stop_release_.Interrupt();
@@ -344,12 +345,12 @@ bool McuControl::StopClearReady(double now) const {
 }
 
 bool McuControl::Blocked(double now) const {
-  return silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareIncompatible();
+  return silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() || FirmwareUnconfirmed();
 }
 
-// As hw/status shows it: an IMU still due after the start blocks without an emergency.
+// As hw/status shows it: an IMU or a version frame still due after the start blocks without an emergency.
 bool McuControl::Reported(double now) const {
-  return latched_ || TelemetryStale(now) || (NoImuYet() && !ImuStarting(now)) || FirmwareIncompatible();
+  return latched_ || TelemetryStale(now) || (NoImuYet() && !ImuStarting(now)) || FirmwareIncompatible(now);
 }
 
 uint32_t McuControl::EmergencyReason(double now) const {
@@ -360,7 +361,7 @@ uint32_t McuControl::EmergencyReason(double now) const {
   if (Stop(now)) reason |= kReasonStop;
   if (Lift(now)) reason |= kReasonLift;
   if (config_.bumper_latches_emergency && Bumper(now)) reason |= kReasonCollision;
-  if (FirmwareIncompatible()) reason |= kReasonFirmwareIncompatible;
+  if (FirmwareIncompatible(now)) reason |= kReasonFirmwareIncompatible;
   if (NoImuYet() && !ImuStarting(now)) reason |= kReasonImuTimeout;
   return reason;
 }
@@ -388,9 +389,16 @@ bool McuControl::ImuStarting(double now) const {
   return NoImuYet() && (!start_s_ || now - *start_s_ <= start_time + kDeadlineSlackS);
 }
 
-bool McuControl::FirmwareIncompatible() const {
+bool McuControl::FirmwareUnconfirmed() const {
   const bool checked = !config_.expected_cutter_version.empty() || !config_.expected_chassis_version.empty();
   return checked && firmware_ok_ != true;
+}
+
+bool McuControl::FirmwareIncompatible(double now) const {
+  if (!FirmwareUnconfirmed()) return false;
+  if (firmware_ok_.has_value()) return true;
+  const std::optional<double> since = connected_s_ ? connected_s_ : start_s_;
+  return since && now - *since > kVersionStartS + kDeadlineSlackS;
 }
 
 bool McuControl::Lift(double now) const {
@@ -653,7 +661,7 @@ McuControlStatus McuControl::Status(double now) const {
   status.blade_off_reason = blade_off_reason_;
   status.dock_contact = DockContact();
   status.dock_contact_raw = dock_raw_;
-  status.firmware_incompatible = FirmwareIncompatible();
+  status.firmware_incompatible = FirmwareIncompatible(now);
   status.held = held_;
   status.latch_count = latch_count_;
   status.stop_event = stop_event_;

@@ -99,8 +99,9 @@ Duties:
   reports its wheel speeds is checked after every stop like the blade: still turning `wheel_stop_time` after the stop
   (`tron_mcu`), the driver latches `MOWER_NOT_STOPPED` and stops again. When the process ends it sends the stop and the
   blade off several times; the stop only stays out on the charging contacts without a command.
-- Start: until the first sample of a sensor it needs, a driver may refuse drive and blade without an emergency, for a
-  fixed start time at most (`tron_mcu`: `imu_start_timeout`). After it the driver accepts or reports an emergency.
+- Start: until the first sample of a sensor it needs or the first version report of the board, a driver may refuse
+  drive and blade without an emergency, for a fixed start time at most (`tron_mcu`: `imu_start_timeout`, 3 s for the
+  version). After it the driver accepts or reports an emergency; a version that does not match is reported at once.
   Whoever starts a driver waits that long before the first request.
 - Dock marker (optional): a process of its own that measures only while asked on `hw/dock_marker_request`, one
   image per message on `hw/dock_marker`, never an old or estimated pose; the times, states and reasons are in

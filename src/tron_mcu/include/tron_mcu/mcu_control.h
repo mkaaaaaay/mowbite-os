@@ -145,6 +145,9 @@ struct McuInput {
 
 // Shortest hw/silence, as in the contract.
 constexpr double kMinSilenceS = 0.2;
+// The MCU sends its version frame on its own at about 1.7 Hz. Until the first one after the port opened, motion and
+// blade are blocked; past this time without one the block is reported as FIRMWARE_INCOMPATIBLE.
+constexpr double kVersionStartS = 3.0;
 // How long an hw/silence with silence_after waits for its tick.
 constexpr double kSilenceArmS = 1.0;
 // hw/silence is taken only this soon after an active setup/motion; the setup program sends it at 4 Hz.
@@ -179,7 +182,7 @@ struct McuControlStatus {
   bool dock_contact = false;
   // The last sample, not debounced.
   bool dock_contact_raw = false;
-  // No version frame since the port opened, or one that does not match.
+  // A version frame that does not match, or none within kVersionStartS after the port opened.
   bool firmware_incompatible = false;
   // An update holds the mower: motion and blade blocked without an emergency.
   bool held = false;
@@ -303,7 +306,8 @@ class McuControl {
   bool ImuStale(double now) const;
   bool NoImuYet() const;
   bool ImuStarting(double now) const;
-  bool FirmwareIncompatible() const;
+  bool FirmwareUnconfirmed() const;
+  bool FirmwareIncompatible(double now) const;
   bool Lift(double now) const;
   bool Stop(double now) const;
   bool Bumper(double now) const;
@@ -381,6 +385,8 @@ class McuControl {
 
   // Unknown until the first version frame after the port opened.
   std::optional<bool> firmware_ok_;
+  // When the port opened; before that the first tick counts.
+  std::optional<double> connected_s_;
 
   bool held_ = false;
 
