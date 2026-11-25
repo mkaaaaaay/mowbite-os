@@ -16,6 +16,8 @@
     # RTK fixed on corrections older than max_correction_age s, or without their age in GGA, counts as float (G7);
     # mowbite_ntrip reports CORRECTIONS LOST at the same age.
     max_correction_age: 30.0
+    # Buttons of the platform held this long give HELD (its buttons node); hw/capabilities reports it. 0: no buttons.
+    button_hold_s: 0.0
     # The journal in journal_dir (launch argument): all runs of all processes together at most journal_max_mb and
     # journal_max_days (whole old runs go first); below journal_reserve_mb free on its file system nothing is written.
     # journal_platform names the platform in every run, journal_libraries the libraries of its own packages by a

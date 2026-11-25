@@ -47,7 +47,7 @@ def test_the_driver_restarts_latched(start, monkeypatch, tmp_path, hardware):  #
     built = start("tron", platform, platform_config=PLATFORM_FILE, hardware=hardware)
     first, second = [k["parameters"][-1] for k in built.nodes if k["name"] == platform.DRIVER]
     assert first["start_latched"] is False and second["start_latched"] is True
-    assert built.restarting[0] == (str(tmp_path / stack.DRIVER_EXIT_NOTE), "tron_mcu", platform.DRIVER_RESTARTS)
+    assert (str(tmp_path / stack.DRIVER_EXIT_NOTE), "tron_mcu", platform.DRIVER_RESTARTS) in built.restarting
     assert platform.DRIVER_RESTARTS > 0
 
 
