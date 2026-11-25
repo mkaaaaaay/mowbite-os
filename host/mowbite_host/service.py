@@ -80,6 +80,8 @@ class Host:
         self._setup_until = None
         self.requests = queue.Queue(maxsize=MAX_WAITING)
         self.rebooting = False
+        # The last restart into the USB mode that failed: {t, error}, None after a new try.
+        self.usb_mode_failed = None
         self._os = None
         self._shown = None
         self._update_text = None
@@ -104,15 +106,17 @@ class Host:
     def host_status(self):
         return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os,
                 "trial": trial.active(self.paths), "wifi": self.wifi.status(),
-                "setup_wifi": {"until": self._setup_until} if self._setup_until else None}
+                "setup_wifi": {"until": self._setup_until} if self._setup_until else None,
+                "usb_mode_failed": self.usb_mode_failed}
 
-    # Sends mowbite/host/status when the OS, the trial period, the WLAN change or the setup WLAN changed.
+    # Sends mowbite/host/status when the OS, the trial period, the WLAN change, the setup WLAN or a failed restart into
+    # the USB mode changed.
     def look(self):
         self._os = self.watch.read()
         if self.gesture.take():
             self._on_gesture()
         self._setup_until = self.gesture.until()
-        shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until)
+        shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until, self.usb_mode_failed)
         if shown != self._shown:
             self._shown = shown
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
@@ -238,6 +242,7 @@ class Host:
             raise Refused("UNSUPPORTED", "only a Tron has the USB mode")
         self.updater.give_way()
         self.updater.hold_for_reboot()
+        self.usb_mode_failed = None
         self.rebooting = True
         timer = threading.Timer(REBOOT_AFTER, self._reboot_loader)
         timer.daemon = True
@@ -252,6 +257,8 @@ class Host:
         if code != 0:
             print(f"usb_mode: the reboot failed: {err or code}", flush=True)
             self.updater.release_hold()
+            # The next look of the main loop sends it in mowbite/host/status.
+            self.usb_mode_failed = {"t": int(time.time()), "error": str(err or f"exit code {code}")}
             self.rebooting = False
 
     # A step of the main loop that fails (a full or read-only disk) is logged once per text; the host goes on.

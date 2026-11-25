@@ -535,6 +535,17 @@ class UsbModeTest(CallsBase):
             self.assertTrue(self.rebooted())
         self.assertFalse(os.path.exists(self.paths.hold))
         self.assertFalse(self.host.rebooting)
+        self.host.look()
+        failed = self.published.last(service.HOST_STATUS)[1]["usb_mode_failed"]
+        self.assertEqual(failed["error"], "Access denied")
+        self.assertLessEqual(abs(failed["t"] - time.time()), 5)
+        # A new try clears it.
+        self.commands.on(list(service.LOADER_REBOOT), (0, "", ""))
+        self.assertEqual(self.usb()["result"], {"rebooting": True})
+        self.assertIsNone(self.host.host_status()["usb_mode_failed"])
+
+    def test_no_failure_without_a_try(self):
+        self.assertIsNone(self.host.host_status()["usb_mode_failed"])
 
 
 KEY = "Geheim:Schl\\uessel 42"
