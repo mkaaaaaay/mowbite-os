@@ -669,6 +669,12 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"NO_JOB", {"There is no unfinished job", {}}},
       {"NO_MOWING_AREA", {"The map has no active mowing area", {}}},
       {"NO_OUTLINE", {"There is no outline yet", {}}},
+      {"NO_PASSWORD",
+       {"SSH needs a password of root first",
+        {},
+        {{"de",
+          {"Kein Passwort", "Für SSH ist noch kein Passwort vergeben.", "Ein Passwort vergeben und SSH einschalten."}},
+         {"en", {"No password", "No password is set for SSH yet.", "Set a password and turn SSH on."}}}}},
       {"NO_PLAN",
        {"The planner cannot plan this area as asked",
         {},
@@ -1975,6 +1981,12 @@ std::vector<ReasonEntry> UpdateRefusals() {
           R("UNSUPPORTED", "info", "user"),
           R("START_NOT_OK", "warning", "user"),
           R("WIFI_FAILED", "warning", "user"),
+          R("NO_PASSWORD", "info", "user"),
+          ForUpdate(NoFields(R("FAILED", "warning", "user")),
+                    {"Fehlgeschlagen", "Der Mäher konnte die Einstellung nicht übernehmen.",
+                     "Noch einmal versuchen. Bleibt es dabei, das Protokoll für eine Meldung sichern."},
+                    {"Failed", "The mower couldn't apply the setting.",
+                     "Try again. If it stays, keep the log for a report."}),
           R("INTERNAL", "error", "user")};
 }
 

@@ -542,6 +542,10 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   of a short press, `tone_device`: ALSA device for `aplay`, `unit`, `profile`: the NetworkManager profile of the
   access point, optional `button`: the id of the key the app names, the Tron `on_ok`); without the file there is no
   gesture. The host gives it as `setup_wifi_gesture` in `mowbite/host/status` and the bridge in `system.info`.
+- SSH of the owner (optional): `host.ssh` turns SSH on with a password of root the owner gives, or off; it is off
+  from the start. The host handles it only where `/etc/ssh/sshd_config.d/mowbite.conf` is (the rootfs of MowBite:
+  root with a password from private networks only) and sshd starts by `ssh.socket`; `ssh` of `mowbite/host/status`
+  is `{enabled, password}`, else null.
   Pick a key whose long press does not start anything and a code a long press never sends (the Tron: On/OK, code 25;
   held 3 s it sends 38 and cuts the power).
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS

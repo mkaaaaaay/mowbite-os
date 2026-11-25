@@ -1462,6 +1462,18 @@ const std::vector<Method>& Methods() {
        "mowers. A restart that fails gives the hold back and shows as usb_mode_failed {t (unix s), error} in "
        "mowbite/host/status until the next try",
        NoParams(), Object("result", "Answered before the restart", {Bool("rebooting", "Always true")}), kHostOffered},
+      {"host.ssh", "mowbite_host",
+       "SSH of the owner, off from the start: on with a password of root, or off. A new password needs no old one; "
+       "on without one keeps the last (NO_PASSWORD when root has none). The password is never sent back, logged or "
+       "shown. root logs in with it from private networks only. ssh in mowbite/host/status shows the state, null "
+       "where the host does not handle SSH (UNSUPPORTED); INVALID for a password out of range, FAILED when the system "
+       "did not take it",
+       Object("params", "On or off",
+              {Bool("enabled", "true: on, false: off", true),
+               Text("password", "8 to 128 characters without control characters; only with enabled true", false)}),
+       Object("result", "ssh of mowbite/host/status",
+              {Bool("enabled", "SSH is on"), Bool("password", "root has a password")}),
+       kHostOffered},
   };
   return methods;
 }

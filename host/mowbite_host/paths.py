@@ -63,6 +63,9 @@ class Paths:
         self.install_id = p + "/etc/mowbite/install-id"
         # Profiles of NetworkManager; the host writes its WLAN profiles there as mowbite-wifi-*.nmconnection.
         self.nm_connections = p + "/etc/NetworkManager/system-connections"
+        # SSH of the owner (ssh.py): only where MowBite's sshd_config.d is; the password of root in shadow.
+        self.sshd_mowbite = p + "/etc/ssh/sshd_config.d/mowbite.conf"
+        self.shadow = p + "/etc/shadow"
         # The setup WLAN of the first start, opened on a gesture of the buttons after the trial period (gesture.py).
         self.wifi_gesture = p + "/usr/lib/mowbite/wifi-gesture"
         self.input_devices = p + "/proc/bus/input/devices"

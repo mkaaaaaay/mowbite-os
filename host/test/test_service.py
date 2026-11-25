@@ -341,13 +341,15 @@ class Commands:
 
     def __init__(self):
         self.calls = []
+        self.inputs = []
         self.handlers = {}
 
     def on(self, words, answer):
         self.handlers[tuple(words)] = answer
 
-    def __call__(self, argv, timeout=30):
+    def __call__(self, argv, timeout=30, input=None):  # noqa: A002 - as command.run
         self.calls.append(list(argv))
+        self.inputs.append(input)
         for length in range(len(argv), 0, -1):
             answer = self.handlers.get(tuple(argv[:length]))
             if answer is not None:
@@ -855,6 +857,64 @@ class GestureTest(CallsBase):
         for broken in ("code=x", "unit="):
             self.write(self.paths.wifi_gesture, files.read_text(self.paths.wifi_gesture) + broken + "\n")
             self.assertIsNone(gesture.read_config(self.paths.wifi_gesture))
+
+
+class SshTest(CallsBase):
+    def setUp(self):
+        super().setUp()
+        self.write(self.paths.sshd_mowbite, "PermitRootLogin prohibit-password\n")
+        self.write(self.paths.shadow, "root:*:20000:0:99999:7:::\nmkay:!:20000::::::\n")
+        self.enabled = "disabled"
+        self.commands.on(["systemctl", "is-enabled", "ssh.socket"],
+                         lambda argv: (0 if self.enabled == "enabled" else 1, self.enabled + "\n", ""))
+        self.commands.on(["systemctl", "enable"], lambda argv: (setattr(self, "enabled", "enabled"), (0, "", ""))[1])
+        self.commands.on(["systemctl", "disable"], lambda argv: (setattr(self, "enabled", "disabled"), (0, "", ""))[1])
+        self.commands.on(["chpasswd"], lambda argv: (self.write(self.paths.shadow, "root:$6$x$y:20000::::::\n"),
+                                                     (0, "", ""))[1])
+
+    def test_off_from_the_start_and_on_with_a_password(self):
+        self.assertEqual(self.host.host_status()["ssh"], {"enabled": False, "password": False})
+        answer = self.answer("host.ssh", {"enabled": True, "password": "garden-mower"})
+        self.assertEqual(answer["result"], {"enabled": True, "password": True})
+        self.assertEqual(self.commands.ran("systemctl", "enable"), [["systemctl", "enable", "--now", "ssh.socket"]])
+        # The password only over stdin, never in argv.
+        self.assertIn("root:garden-mower\n", self.commands.inputs)
+        self.assertFalse(any("garden-mower" in " ".join(call) for call in self.commands.calls))
+        self.assertEqual(self.published.last(service.HOST_STATUS)[1]["ssh"], {"enabled": True, "password": True})
+
+    def test_off_and_on_again_keeps_the_password_and_a_new_one_needs_no_old(self):
+        self.answer("host.ssh", {"enabled": True, "password": "garden-mower"})
+        off = self.answer("host.ssh", {"enabled": False})["result"]
+        self.assertEqual(off, {"enabled": False, "password": True})
+        self.assertEqual(self.commands.ran("systemctl", "disable"),
+                         [["systemctl", "disable", "--now", "ssh.socket", "ssh.service"]])
+        self.assertEqual(self.answer("host.ssh", {"enabled": True})["result"], {"enabled": True, "password": True})
+        self.assertIn("result", self.answer("host.ssh", {"enabled": True, "password": "another-one"}))
+        self.assertEqual(len(self.commands.ran("chpasswd")), 2)
+
+    def test_on_without_any_password_is_refused(self):
+        error = self.answer("host.ssh", {"enabled": True})["error"]
+        self.assertEqual(error["data"]["reason"], "NO_PASSWORD")
+        self.assertEqual(self.commands.ran("systemctl", "enable"), [])
+
+    def test_bad_params(self):
+        for params in ({}, {"enabled": "yes"}, {"enabled": True, "password": "short"},
+                       {"enabled": True, "password": "x" * 129}, {"enabled": True, "password": "line\nbreak!"},
+                       {"enabled": False, "password": "garden-mower"}):
+            error = self.answer("host.ssh", params)["error"]
+            self.assertEqual((error["code"], error["data"]["reason"]), (service.INVALID_PARAMS, "INVALID"), params)
+        self.assertEqual(self.commands.ran("chpasswd"), [])
+
+    def test_a_failure_is_told_and_the_status_stays_true(self):
+        self.commands.on(["systemctl", "enable"], (1, "", "Unit ssh.socket not found."))
+        error = self.answer("host.ssh", {"enabled": True, "password": "garden-mower"})["error"]
+        self.assertEqual(error["data"]["reason"], "FAILED")
+        self.assertEqual(self.host.host_status()["ssh"], {"enabled": False, "password": True})
+
+    def test_not_on_a_mower_without_the_sshd_config_of_mowbite(self):
+        os.remove(self.paths.sshd_mowbite)
+        self.assertIsNone(self.host.host_status()["ssh"])
+        self.assertEqual(self.answer("host.ssh", {"enabled": True})["error"]["data"]["reason"], "UNSUPPORTED")
 
 
 class ProbeTest(unittest.TestCase):

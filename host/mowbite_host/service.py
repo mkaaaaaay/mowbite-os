@@ -12,14 +12,15 @@ import re
 import threading
 import time
 
-from mowbite_host import Refused, command, gate, gesture, trial, wifi
+from mowbite_host import Refused, command, gate, gesture, ssh, trial, wifi
 from mowbite_host.updater import COMPONENTS
 
 SCHEMA = 1
 HOST_STATUS = "mowbite/host/status"
 UPDATE_STATUS = "mowbite/update/status"
-METHODS = ("host.confirm_start", "host.restart_os", "host.usb_mode", "host.wifi_scan", "host.wifi_set", "update.abort",
-           "update.check", "update.rollback", "update.set_auto", "update.set_channel", "update.start", "update.status")
+METHODS = ("host.confirm_start", "host.restart_os", "host.ssh", "host.usb_mode", "host.wifi_scan", "host.wifi_set",
+           "update.abort", "update.check", "update.rollback", "update.set_auto", "update.set_channel", "update.start",
+           "update.status")
 OFFLINE = json.dumps({"schema": SCHEMA, "online": False})
 TICK_EVERY = 5 * 60.0
 CHECK_EVERY = 6 * 3600.0
@@ -77,6 +78,7 @@ class Host:
         self.run_command = run
         self.wifi = wifi.Wifi(paths, run)
         self.gesture = gesture.Gesture(paths, run)
+        self.ssh = ssh.Ssh(paths, run)
         self._setup_until = None
         self.requests = queue.Queue(maxsize=MAX_WAITING)
         self.rebooting = False
@@ -101,23 +103,25 @@ class Host:
             "host.wifi_scan": lambda p: self.wifi.scan(),
             "host.wifi_set": lambda p: self.wifi.set(p.get("ssid"), p.get("password"), p.get("hidden", False)),
             "host.usb_mode": self._usb_mode,
+            "host.ssh": self._ssh,
         }
 
     def host_status(self):
         return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os,
                 "trial": trial.active(self.paths), "wifi": self.wifi.status(),
                 "setup_wifi": {"until": self._setup_until} if self._setup_until else None,
-                "setup_wifi_gesture": self.gesture.describe(),
+                "setup_wifi_gesture": self.gesture.describe(), "ssh": self.ssh.status(),
                 "usb_mode_failed": self.usb_mode_failed}
 
-    # Sends mowbite/host/status when the OS, the trial period, the WLAN change, the setup WLAN or a failed restart into
-    # the USB mode changed.
+    # Sends mowbite/host/status when the OS, the trial period, the WLAN change, the setup WLAN, a failed restart into
+    # the USB mode or SSH changed.
     def look(self):
         self._os = self.watch.read()
         if self.gesture.take():
             self._on_gesture()
         self._setup_until = self.gesture.until()
-        shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until, self.usb_mode_failed)
+        shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until, self.usb_mode_failed,
+                 self.ssh.status())
         if shown != self._shown:
             self._shown = shown
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
@@ -228,6 +232,12 @@ class Host:
             raise Invalid("challenge has to be 32 to 128 hex digits")
         result = trial.confirm(self.paths, self.run_command, self.watch.read(),
                                self.updater.state.get("first") is True, challenge)
+        self.look()
+        return result
+
+    # SSH of the owner on or off (ssh.py); host/status shows it at once.
+    def _ssh(self, params):
+        result = self.ssh.set(params)
         self.look()
         return result
 

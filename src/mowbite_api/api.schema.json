@@ -7123,6 +7123,43 @@
       ],
       "type": "object"
     },
+    "host.ssh.params": {
+      "additionalProperties": false,
+      "description": "The params of host.ssh: On or off",
+      "properties": {
+        "enabled": {
+          "description": "true: on, false: off",
+          "type": "boolean"
+        },
+        "password": {
+          "description": "8 to 128 characters without control characters; only with enabled true",
+          "type": "string"
+        }
+      },
+      "required": [
+        "enabled"
+      ],
+      "type": "object"
+    },
+    "host.ssh.result": {
+      "additionalProperties": false,
+      "description": "The result of host.ssh: ssh of mowbite/host/status",
+      "properties": {
+        "enabled": {
+          "description": "SSH is on",
+          "type": "boolean"
+        },
+        "password": {
+          "description": "root has a password",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "enabled",
+        "password"
+      ],
+      "type": "object"
+    },
     "host.usb_mode.params": {
       "description": "The params of host.usb_mode: None",
       "type": "object"
@@ -17500,11 +17537,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:68",
+  "$id": "urn:mowbite-os:api:69",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 68,
+  "x-api": 69,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -18297,6 +18334,13 @@
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.restart_os.params",
       "result": "#/$defs/host.restart_os.result"
+    },
+    "host.ssh": {
+      "description": "SSH of the owner, off from the start: on with a password of root, or off. A new password needs no old one; on without one keeps the last (NO_PASSWORD when root has none). The password is never sent back, logged or shown. root logs in with it from private networks only. ssh in mowbite/host/status shows the state, null where the host does not handle SSH (UNSUPPORTED); INVALID for a password out of range, FAILED when the system did not take it",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.ssh.params",
+      "result": "#/$defs/host.ssh.result"
     },
     "host.usb_mode": {
       "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off. An update that has not begun its switch ends for it (result aborted); during a switch HOLD. UNSUPPORTED on other mowers. A restart that fails gives the hold back and shows as usb_mode_failed {t (unix s), error} in mowbite/host/status until the next try",
@@ -24276,6 +24320,25 @@
           }
         }
       },
+      "FAILED": {
+        "class": "cause",
+        "description": "It did not work",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Noch einmal versuchen. Bleibt es dabei, das Protokoll für eine Meldung sichern.",
+            "help": "Der Mäher konnte die Einstellung nicht übernehmen.",
+            "name": "Fehlgeschlagen"
+          },
+          "en": {
+            "fix": "Try again. If it stays, keep the log for a report.",
+            "help": "The mower couldn't apply the setting.",
+            "name": "Failed"
+          }
+        }
+      },
       "HOLD": {
         "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
@@ -24406,6 +24469,25 @@
             "fix": "Nothing to do.",
             "help": "MowBite OS is up to date.",
             "name": "Up to date"
+          }
+        }
+      },
+      "NO_PASSWORD": {
+        "class": "cause",
+        "description": "SSH needs a password of root first",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Ein Passwort vergeben und SSH einschalten.",
+            "help": "Für SSH ist noch kein Passwort vergeben.",
+            "name": "Kein Passwort"
+          },
+          "en": {
+            "fix": "Set a password and turn SSH on.",
+            "help": "No password is set for SSH yet.",
+            "name": "No password"
           }
         }
       },

@@ -3,10 +3,11 @@ import subprocess
 
 
 # (exit code, stdout, first line of stderr); 124 when it ran out of time. FileNotFoundError when it is not there.
-def run(argv, timeout=30):
+# input: text for stdin (a password never goes into argv), else stdin is empty.
+def run(argv, timeout=30, input=None):  # noqa: A002 - the name subprocess uses
+    stdin = {"input": input} if input is not None else {"stdin": subprocess.DEVNULL}
     try:
-        done = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout,
-                              stdin=subprocess.DEVNULL)
+        done = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout, **stdin)
     except subprocess.TimeoutExpired:
         return 124, "", f"{argv[0]} did not end within {timeout} s"
     lines = done.stderr.strip().splitlines()
