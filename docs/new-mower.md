@@ -55,6 +55,9 @@ Duties:
 - Emergency: reason bits numbered like the EMERGENCY event; stop button and lift stay latched until a release. The host
   latches only its own bits (`kHostLatchReasons` in `mowbite_hold/restart.h`). A release waits a short window for the
   flags to drop; a new reason within it ends the window without releasing.
+- A new emergency bit goes into `EmergencyBits()` of `mowbite_api/src/catalog.cpp` with its class: symptom (in
+  `ClassifiedBits`) when it only tells that a part went silent or timed out, else cause; the stop book explains a stop
+  only by a bit of class cause.
 - `latch_count` of `hw/status` goes up with every reason that latches and is never 0 once one did. A release that
   carries it is refused with `LATCH_CHANGED` when another reason latched since: so the setup program releases the
   emergency of an input it just checked and never one that came meanwhile. A driver that leaves it 0 gets no such
