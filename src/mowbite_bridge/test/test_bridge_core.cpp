@@ -251,7 +251,7 @@ TEST_F(Core, LocalMethods) {
                              std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                              R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
                              R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,)"
-                             R"("names":"openmower","data_rollback":null})");
+                             R"("names":"openmower","data_rollback":null,"setup_wifi_gesture":null})");
   core_.OnPlatform("airseekers_tron", StopRelease(2.0, 3.0, 10.0), BladeHeight(true, 30, 90, 60));
   const Json tron = Call(core_, "system.info")["result"];
   EXPECT_EQ(tron["platform"], "airseekers_tron");
@@ -359,6 +359,18 @@ TEST_F(Core, MethodsOfTheHostAreNeverAnsweredWhileItIsOnline) {
     core_.OnMqtt("mowbite/host/status", gone, false);
     EXPECT_EQ(Call(core_, "update.status", nullptr, "u")["error"]["code"], kMethodNotFound) << gone;
   }
+}
+
+TEST_F(Core, SystemInfoKeepsTheGestureOfTheLastOnlineHost) {
+  EXPECT_TRUE(Call(core_, "system.info")["result"]["setup_wifi_gesture"].is_null());
+  const Json gesture = {{"button", "on_ok"}, {"presses", 5}, {"within_s", 5.0}, {"open_s", 1800}};
+  core_.OnMqtt("mowbite/host/status", Json{{"online", true}, {"setup_wifi_gesture", gesture}}.dump(), true);
+  EXPECT_EQ(Call(core_, "system.info")["result"]["setup_wifi_gesture"], gesture);
+  // The last will of the host keeps it, an online host without a gesture takes it away.
+  core_.OnMqtt("mowbite/host/status", R"({"schema":1,"online":false})", true);
+  EXPECT_EQ(Call(core_, "system.info")["result"]["setup_wifi_gesture"], gesture);
+  core_.OnMqtt("mowbite/host/status", R"({"online":true,"setup_wifi_gesture":null})", true);
+  EXPECT_TRUE(Call(core_, "system.info")["result"]["setup_wifi_gesture"].is_null());
 }
 
 TEST_F(Core, MethodsOfTheHostAreLimitedInNumberAndLength) {

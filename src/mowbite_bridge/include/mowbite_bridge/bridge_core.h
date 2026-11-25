@@ -229,6 +229,8 @@ class BridgeCore {
   std::string platform_;
   Json stop_release_;
   Json blade_height_;
+  // From the last mowbite/host/status of an online host; an offline host leaves it as it was.
+  Json setup_wifi_gesture_;
   // current_state and current_sub_state of the last robot_state, for refused requests.
   std::string state_;
   std::string sub_state_;

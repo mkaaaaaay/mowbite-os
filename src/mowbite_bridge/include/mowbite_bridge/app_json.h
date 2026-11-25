@@ -116,10 +116,14 @@ std::string VersionText(const std::string& version);
 
 // system.info; stop_release and blade_height are null where the platform offers no release with STOP or no height,
 // update_path where it is empty; names openmower or own; data_rollback the note of the last way back of the data or
-// null.
+// null; setup_wifi_gesture as SetupWifiGesture gives it.
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version,
                 const Json& stop_release = Json(), const Json& blade_height = Json(),
-                const std::string& update_path = "", bool openmower_names = true, const Json& data_rollback = Json());
+                const std::string& update_path = "", bool openmower_names = true, const Json& data_rollback = Json(),
+                const Json& setup_wifi_gesture = Json());
+
+// setup_wifi_gesture of system.info from that of mowbite/host/status: null unless all fields are there and plausible.
+Json SetupWifiGesture(const Json& from_host);
 
 // The note data_store.py leaves after a way back (data_rollback.json) for system.info: its fields of the catalog, null
 // for no text; a text that is no object counts as a note with confirm, as the logic takes it.

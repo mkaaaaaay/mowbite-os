@@ -7,8 +7,8 @@ connected again, by host.wifi_set or because a known network is back.
 The platform names all of it in /usr/lib/mowbite/wifi-gesture (KEY=value): device, the name of the input device in
 /proc/bus/input/devices; code, the key code of a short press (counted only when it goes down); tone_device, the ALSA
 device for aplay; unit, the systemd unit of the access point, which reads the deadline (unix s) the host writes to
-/run/mowbite/setup-ap.until and removes it when it closes; profile, its NetworkManager profile. Without the file there
-is no gesture.
+/run/mowbite/setup-ap.until and removes it when it closes; profile, its NetworkManager profile; optional button, the id
+of the key for the app (the Tron: on_ok). Without the file there is no gesture.
 """
 import array
 import io
@@ -136,6 +136,13 @@ class Gesture:
                         self._asked.set()
         except OSError:
             return
+
+    # The gesture as host/status and system.info give it to the app, None without one.
+    def describe(self):
+        if not self.config:
+            return None
+        return {"button": self.config.get("button") or None, "presses": PRESSES, "within_s": WINDOW_S,
+                "open_s": OPEN_S}
 
     def take(self):
         if not self._asked.is_set():

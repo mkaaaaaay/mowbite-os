@@ -1,8 +1,9 @@
 # The gesture of the buttons that opens the setup WLAN (mowbite-host, gesture.py): the input device of init_test.ko,
 # the code of a short press of On/OK (3 s and more sends 38 and cuts the power, never counted), the speaker, and the
-# access point of the first start with its profile.
+# access point of the first start with its profile; the id of the key for the app.
 device=key input
 code=25
 tone_device=plughw:CARD=rockchipes8388
 unit=mowbite-setup-ap.service
 profile=/etc/NetworkManager/system-connections/mowbite-setup.nmconnection
+button=on_ok

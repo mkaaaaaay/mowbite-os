@@ -348,6 +348,19 @@ void MowingPart::OnCutAnswer(CoreAccess core, const CutAnswer& given) {
     DropCut(core, "the plan cannot be cut by the obstacles any more (" + answer.code + ")");
     return;
   }
+  if (!around && answer.pieces.empty()) {
+    // The circles kept cover the rest of the area: it is left out with a reason, the job never ends silently.
+    if (const JobArea* area = job_.CurrentArea()) {
+      core.AreaSkipped(*area, Reason("OBSTACLES_COVER_REST", "The obstacles kept in mind cover the rest of the area")
+                                  .With("left_out", LeftOut({})));
+    }
+    job_.SkipArea();
+    cut_.reset();
+    detour_ = false;
+    approached_ = false;
+    core.CheckpointNow();
+    return;
+  }
   cut_ = answer.pieces;
   detour_ = true;
   approached_ = false;

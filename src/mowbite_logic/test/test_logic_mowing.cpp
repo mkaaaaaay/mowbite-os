@@ -1719,6 +1719,36 @@ TEST(LogicAvoid, NothingOfThePlanLeftEndsTheArea) {
   EXPECT_NE(next.kind, JobStep::Kind::kFollow);
 }
 
+TEST(LogicAvoid, ACutAnewThatLeavesNothingSkipsTheRestOfTheAreaWithAReason) {
+  TestCore core = Avoiding();
+  ObstacleSample two = ObjectAt(2.0, 2.0);
+  two.tracks.push_back(ObjectAt(2.0, 2.6, 8).tracks[0]);
+  StandBefore(core, 100, two);
+  ASSERT_EQ(core.NextJobStep(103).kind, JobStep::Kind::kCut);
+  core.OnCutAnswer(Pieces({{0, 2, 4}, {1, 2, 4}}));
+  ASSERT_EQ(core.NextJobStep(103.1).kind, JobStep::Kind::kDetour);
+  core.OnLegEnded(LegEnd::kDone, 0, Reason("DONE", ""));
+  ASSERT_EQ(core.NextJobStep(104).kind, JobStep::Kind::kFollow);
+  // The first one ends in view, the second stays: the plan is cut anew by its circle alone.
+  core.OnObstacleStatus(two, 104.1);
+  core.OnObstacleStatus(ObjectAt(2.0, 2.6, 8), 105);
+  ASSERT_EQ(core.Circles().size(), 1u);
+  core.TakeObstacleNotes();
+  core.OnLegEnded(LegEnd::kDone, 4, Reason("DONE", ""));
+  const JobStep cut = core.NextJobStep(106);
+  ASSERT_EQ(cut.kind, JobStep::Kind::kCut);
+  EXPECT_EQ(cut.circles.size(), 1u);
+  core.TakeEvents();
+  core.OnCutAnswer(Pieces({}));
+  const auto events = core.TakeEvents();
+  const Event* skipped = Find(events, "AREA_SKIPPED");
+  ASSERT_TRUE(skipped);
+  EXPECT_EQ(skipped->details["reason"], "OBSTACLES_COVER_REST");
+  EXPECT_EQ(skipped->details["severity"], "warning");
+  EXPECT_GT(skipped->details["left_out"].get<double>(), 0.0);
+  EXPECT_NE(core.NextJobStep(107).kind, JobStep::Kind::kFollow);
+}
+
 TEST(LogicAvoid, ADetourWithoutAWayStopsAtTheObjectUntilItGoes) {
   TestCore core = Avoiding();
   StandBefore(core, 100, ObjectAt(2.0, 2.0));

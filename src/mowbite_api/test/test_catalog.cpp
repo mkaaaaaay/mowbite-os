@@ -99,7 +99,10 @@ TEST(Catalog, RateReasonAsTheTableBefore) {
                                                                // New in api 54: areas the planner cannot plan.
                                                                {"AREA_SKIPPED BODY_OUT", {"warning", "auto"}},
                                                                {"AREA_SKIPPED NO_PLAN", {"warning", "auto"}},
-                                                               {"AREA_SKIPPED START_UNREACHABLE", {"warning", "auto"}}};
+                                                               {"AREA_SKIPPED START_UNREACHABLE", {"warning", "auto"}},
+                                                               // New in api 68.
+                                                               {"AREA_SKIPPED OBSTACLES_COVER_REST",
+                                                                {"warning", "auto"}}};
   for (const char* event : {"MOWING_REFUSED", "DRIVE_REFUSED", "RECORDING_REFUSED", "CALIBRATION_REFUSED",
                             "CALIBRATION_FAILED", "STATE", "DRIVE", "POSITION_JUMP", "AREA_SKIPPED", "UNDOCKING_FAILED",
                             "DOCKING_RETRY", "DOCKING_FAILED", "EMERGENCY_RESET_REFUSED", "NOT_AN_EVENT"}) {

@@ -656,6 +656,15 @@ const std::vector<Command>& Commands() {
                          Integer("t", "When the way back was, unix s"),
                          Bool("confirm", "The map changed since the update: nothing mows by itself until "
                                          "data.rollback.confirm")},
+                        false)),
+        Nullable(Object("setup_wifi_gesture",
+                        "The gesture at the mower that opens its setup WLAN once its own WLAN is gone: presses short "
+                        "presses of button within within_s, only at rest; it stays open open_s. null or missing where "
+                        "the mower has none. A client keeps the last one, it needs it when the mower is out of reach",
+                        {Nullable(Text("button", "Id of the key: on_ok (On/OK of the Tron); null where the platform "
+                                                 "names none")),
+                         Integer("presses", "Short presses"), Number("within_s", "s", "All of them within this"),
+                         Integer("open_s", "How long the setup WLAN stays open, s")},
                         false))},
        "",
        {}},

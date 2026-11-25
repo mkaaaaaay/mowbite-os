@@ -107,6 +107,7 @@ class Host:
         return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os,
                 "trial": trial.active(self.paths), "wifi": self.wifi.status(),
                 "setup_wifi": {"until": self._setup_until} if self._setup_until else None,
+                "setup_wifi_gesture": self.gesture.describe(),
                 "usb_mode_failed": self.usb_mode_failed}
 
     # Sends mowbite/host/status when the OS, the trial period, the WLAN change, the setup WLAN or a failed restart into

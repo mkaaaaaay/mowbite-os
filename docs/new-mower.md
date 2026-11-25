@@ -540,9 +540,10 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   closes earlier once the WLAN of the mower is connected (`host.wifi_set` or a known network back). The platform
   names all of it in `/usr/lib/mowbite/wifi-gesture` (`device`: name in `/proc/bus/input/devices`, `code`: key code
   of a short press, `tone_device`: ALSA device for `aplay`, `unit`, `profile`: the NetworkManager profile of the
-  access point); without the file there is no gesture. Pick a key whose long press does not
-  start anything and a code a long press never sends (the Tron: On/OK, code 25; held 3 s it sends 38 and cuts the
-  power).
+  access point, optional `button`: the id of the key the app names, the Tron `on_ok`); without the file there is no
+  gesture. The host gives it as `setup_wifi_gesture` in `mowbite/host/status` and the bridge in `system.info`.
+  Pick a key whose long press does not start anything and a code a long press never sends (the Tron: On/OK, code 25;
+  held 3 s it sends 38 and cuts the power).
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,

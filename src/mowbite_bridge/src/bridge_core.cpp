@@ -74,7 +74,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   local_["system.info"] = [this](const Json&) {
     return SystemInfo(config_.software_version, platform_, mqtt_version_, stop_release_, blade_height_,
                       config_.update_path, config_.openmower_names,
-                      config_.data_rollback ? config_.data_rollback() : Json());
+                      config_.data_rollback ? config_.data_rollback() : Json(), setup_wifi_gesture_);
   };
   // The catalog of the interface as JSON Schema; system.info.api tells whether a client knows it already.
   local_["system.api"] = [](const Json&) {
@@ -228,8 +228,9 @@ void BridgeCore::OnHostStatus(std::string_view payload) {
   const Json status =
       NestingDepth(payload) > kMaxDataDepth ? Json() : Json::parse(payload.begin(), payload.end(), nullptr, false);
   std::vector<std::string> methods;
-  if (status.is_object() && status.value("online", Json()) == Json(true) && status.contains("methods") &&
-      status["methods"].is_array()) {
+  const bool online = status.is_object() && status.value("online", Json()) == Json(true);
+  if (online) setup_wifi_gesture_ = SetupWifiGesture(status.value("setup_wifi_gesture", Json()));
+  if (online && status.contains("methods") && status["methods"].is_array()) {
     for (const auto& method : status["methods"]) {
       if (methods.size() >= kMaxHostMethods) break;
       if (method.is_string() && method.get_ref<const std::string&>().size() <= kMaxMethodBytes) {

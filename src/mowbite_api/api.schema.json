@@ -1108,7 +1108,7 @@
     },
     "event.AREA_SKIPPED": {
       "additionalProperties": false,
-      "description": "An area was skipped",
+      "description": "An area was skipped, or the rest of it (OBSTACLES_COVER_REST)",
       "properties": {
         "area_id": {
           "description": "Id of the area",
@@ -1139,6 +1139,11 @@
           "description": "The job of mowing it belongs to",
           "type": "string"
         },
+        "left_out": {
+          "description": "The paths of the area left unmowed",
+          "type": "number",
+          "x-unit": "m"
+        },
         "message": {
           "description": "English text for the log and for apps that do not know the reason",
           "type": "string"
@@ -1150,7 +1155,8 @@
             "SCHEDULE",
             "BODY_OUT",
             "NO_PLAN",
-            "START_UNREACHABLE"
+            "START_UNREACHABLE",
+            "OBSTACLES_COVER_REST"
           ],
           "type": "string"
         },
@@ -13341,6 +13347,42 @@
           "description": "Version of the data in data_dir",
           "type": "integer"
         },
+        "setup_wifi_gesture": {
+          "additionalProperties": false,
+          "description": "The gesture at the mower that opens its setup WLAN once its own WLAN is gone: presses short presses of button within within_s, only at rest; it stays open open_s. null or missing where the mower has none. A client keeps the last one, it needs it when the mower is out of reach",
+          "properties": {
+            "button": {
+              "description": "Id of the key: on_ok (On/OK of the Tron); null where the platform names none",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "open_s": {
+              "description": "How long the setup WLAN stays open, s",
+              "type": "integer"
+            },
+            "presses": {
+              "description": "Short presses",
+              "type": "integer"
+            },
+            "within_s": {
+              "description": "All of them within this",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "button",
+            "presses",
+            "within_s",
+            "open_s"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "stop_release": {
           "additionalProperties": false,
           "description": "Releasing the emergency with STOP at the mower: free for free_s, held for hold_s, let go before max_hold_s; null or missing where the platform has no such release",
@@ -17458,11 +17500,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:67",
+  "$id": "urn:mowbite-os:api:68",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 67,
+  "x-api": 68,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -18956,6 +18998,27 @@
             "fix": "Check the shape of the area and the settings of the planner.",
             "help": "The planner cannot make a plan for this area. The area was skipped.",
             "name": "No plan"
+          }
+        }
+      },
+      "OBSTACLES_COVER_REST": {
+        "class": "cause",
+        "description": "The plan cut anew by the obstacles kept in mind leaves nothing of the area to mow: the rest of it is left out",
+        "fields": {
+          "left_out": "m"
+        },
+        "resume": "auto",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Die Hindernisse wegnehmen und die Fläche später noch einmal mähen.",
+            "help": "Gemerkte Hindernisse decken den Rest dieser Fläche ab. Der Mäher lässt ihn aus und fährt mit dem Auftrag fort.",
+            "name": "Rest der Fläche ausgelassen"
+          },
+          "en": {
+            "fix": "Take the obstacles away and mow the area again later.",
+            "help": "Obstacles kept in mind cover the rest of this area. The mower leaves it out and goes on with the job.",
+            "name": "Rest of the area left out"
           }
         }
       },

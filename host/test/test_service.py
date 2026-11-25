@@ -729,7 +729,7 @@ class GestureTest(CallsBase):
         super().setUp()
         self.profile = os.path.join(self.paths.nm_connections, "mowbite-setup.nmconnection")
         self.write(self.paths.wifi_gesture, f"# key\ndevice=key input\ncode=25\ntone_device=plughw:CARD=x\n"
-                                            f"unit=ap.service\nprofile={self.profile}\n")
+                                            f"unit=ap.service\nprofile={self.profile}\nbutton=on_ok\n")
         self.write(self.paths.input_devices, DEVICES)
         self.write(self.profile, "[connection]\n")
         self.commands.on(["nmcli", "-t", "-f", "TYPE,STATE", "device"],
@@ -838,13 +838,20 @@ class GestureTest(CallsBase):
         host.gesture.start()
         self.assertIsNone(host.gesture._thread)
         self.assertIsNone(host.host_status()["setup_wifi"])
+        self.assertIsNone(host.host_status()["setup_wifi_gesture"])
+
+    def test_the_app_learns_the_gesture(self):
+        self.assertEqual(self.host.host_status()["setup_wifi_gesture"],
+                         {"button": "on_ok", "presses": 5, "within_s": 5.0, "open_s": 1800})
+        self.host.gesture.config.pop("button")
+        self.assertIsNone(self.host.host_status()["setup_wifi_gesture"]["button"])
 
     def test_the_device_is_found_by_its_name(self):
         self.assertEqual(gesture.find_device(self.paths, "key input"), os.path.join(self.paths.dev_input, "event5"))
         self.assertIsNone(gesture.find_device(self.paths, "key"))
         self.assertEqual(gesture.read_config(self.paths.wifi_gesture),
                          {"device": "key input", "code": 25, "tone_device": "plughw:CARD=x", "unit": "ap.service",
-                          "profile": self.profile})
+                          "profile": self.profile, "button": "on_ok"})
         for broken in ("code=x", "unit="):
             self.write(self.paths.wifi_gesture, files.read_text(self.paths.wifi_gesture) + broken + "\n")
             self.assertIsNone(gesture.read_config(self.paths.wifi_gesture))

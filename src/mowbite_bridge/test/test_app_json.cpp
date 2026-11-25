@@ -194,7 +194,7 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
                 std::to_string(DataSchema()) + R"(,"api":)" + std::to_string(mowbite_api::kApi) +
                 R"(,"api_break":)" + std::to_string(mowbite_api::kApiBreak) +
                 R"(,"mqtt":5,"stop_release":null,"blade_height":null,"update_path":null,"names":"openmower",)"
-                R"("data_rollback":null})");
+                R"("data_rollback":null,"setup_wifi_gesture":null})");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3, Json(), Json(), "", false)["names"], "own");
   EXPECT_EQ(SystemInfo("1.2.3", "", 3)["platform"], "");
   EXPECT_TRUE(SystemInfo("1.2.3", "", 3)["data_rollback"].is_null());
@@ -215,4 +215,30 @@ TEST(Fixed, CapabilitiesVersionAndSystemInfo) {
   EXPECT_EQ(SystemInfo("1.2.3", "airseekers_tron", 5, Json(), BladeHeight(true, 30, 90, 60))["blade_height"].dump(),
             R"({"min_mm":30,"max_mm":90,"default_mm":60})");
   EXPECT_TRUE(BladeHeight(false, 0, 0, 0).is_null());
+}
+
+TEST(Fixed, SetupWifiGestureOnlyWhole) {
+  const Json tron = {{"button", "on_ok"}, {"presses", 5}, {"within_s", 5.0}, {"open_s", 1800}, {"x", 1}};
+  EXPECT_EQ(SetupWifiGesture(tron).dump(), R"({"button":"on_ok","presses":5,"within_s":5.0,"open_s":1800})");
+  Json no_button = tron;
+  no_button["button"] = nullptr;
+  EXPECT_TRUE(SetupWifiGesture(no_button)["button"].is_null());
+  no_button.erase("button");
+  EXPECT_TRUE(SetupWifiGesture(no_button)["button"].is_null());
+  EXPECT_EQ(SetupWifiGesture(Json{{"presses", 5}, {"within_s", 4}, {"open_s", 60}})["within_s"], 4.0);
+  for (const auto& [key, bad] : std::vector<std::pair<std::string, Json>>{{"button", ""},
+                                                                         {"button", std::string(33, 'b')},
+                                                                         {"button", 1},
+                                                                         {"presses", 0},
+                                                                         {"presses", 5.5},
+                                                                         {"within_s", 0},
+                                                                         {"within_s", "5"},
+                                                                         {"open_s", -1},
+                                                                         {"open_s", 86401}}) {
+    Json broken = tron;
+    broken[key] = bad;
+    EXPECT_TRUE(SetupWifiGesture(broken).is_null()) << key << " " << bad.dump();
+  }
+  EXPECT_TRUE(SetupWifiGesture(Json()).is_null());
+  EXPECT_TRUE(SetupWifiGesture(Json::array()).is_null());
 }

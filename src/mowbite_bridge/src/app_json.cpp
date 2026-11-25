@@ -167,7 +167,7 @@ std::string VersionText(const std::string& version) {
 
 Json SystemInfo(const std::string& version, const std::string& platform, int mqtt_version, const Json& stop_release,
                 const Json& blade_height, const std::string& update_path, bool openmower_names,
-                const Json& data_rollback) {
+                const Json& data_rollback, const Json& setup_wifi_gesture) {
   return Json{{"name", "mowbite-os"},
               {"version", version.empty() ? "UNKNOWN VERSION" : version},
               {"platform", platform},
@@ -179,7 +179,23 @@ Json SystemInfo(const std::string& version, const std::string& platform, int mqt
               {"blade_height", blade_height},
               {"update_path", update_path.empty() ? Json() : Json(update_path)},
               {"names", openmower_names ? "openmower" : "own"},
-              {"data_rollback", data_rollback}};
+              {"data_rollback", data_rollback},
+              {"setup_wifi_gesture", setup_wifi_gesture}};
+}
+
+Json SetupWifiGesture(const Json& from_host) {
+  if (!from_host.is_object()) return Json();
+  const Json button = from_host.value("button", Json());
+  const Json presses = from_host.value("presses", Json());
+  const Json within_s = from_host.value("within_s", Json());
+  const Json open_s = from_host.value("open_s", Json());
+  const bool fits = (button.is_null() || (button.is_string() && !button.get_ref<const std::string&>().empty() &&
+                                          button.get_ref<const std::string&>().size() <= 32)) &&
+                    presses.is_number_integer() && presses.get<int64_t>() >= 1 && presses.get<int64_t>() <= 20 &&
+                    within_s.is_number() && within_s.get<double>() > 0 && within_s.get<double>() <= 60 &&
+                    open_s.is_number_integer() && open_s.get<int64_t>() >= 1 && open_s.get<int64_t>() <= 86400;
+  if (!fits) return Json();
+  return Json{{"button", button}, {"presses", presses}, {"within_s", within_s.get<double>()}, {"open_s", open_s}};
 }
 
 Json DataRollbackInfo(const std::optional<std::string>& text) {
