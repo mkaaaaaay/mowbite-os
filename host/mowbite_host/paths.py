@@ -61,6 +61,14 @@ class Paths:
         self.install_id = p + "/etc/mowbite/install-id"
         # Profiles of NetworkManager; the host writes its WLAN profiles there as mowbite-wifi-*.nmconnection.
         self.nm_connections = p + "/etc/NetworkManager/system-connections"
+        # The setup WLAN of the first start, opened on a gesture of the buttons after the trial period (gesture.py).
+        self.setup_profile = self.nm_connections + "/mowbite-setup.nmconnection"
+        self.wifi_gesture = p + "/usr/lib/mowbite/wifi-gesture"
+        self.input_devices = p + "/proc/bus/input/devices"
+        self.dev_input = p + "/dev/input"
+        self.setup_ap_until = p + "/run/mowbite/setup-ap.until"
+        self.tone_opened = p + "/run/mowbite/tone-opened.wav"
+        self.tone_refused = p + "/run/mowbite/tone-refused.wav"
         # Written by MowBite OS in its data_dir (mowbite_hold, stack.py).
         data = p + data_dir
         self.data = data

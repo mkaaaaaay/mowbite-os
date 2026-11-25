@@ -524,6 +524,17 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   the namespaces `mowbite-os`, `mowbite-app`, `mowbite-planner`, `mowbite-host` and `mowbite-index`.
   `host/test/test_e2e.py` runs the
   whole way with the carrier `process` (`MOWBITE_HOST_CARRIER=process` in the environment files).
+- Setup WLAN again (optional): a mower with buttons and the setup access point of the first start lets the owner open
+  it after the trial period by a gesture, when the WLAN of the mower is gone (a new router). The host counts short
+  presses of one key on its input device (5 within 5 s, `host/mowbite_host/gesture.py`), only at rest (an OS that runs
+  idles; without a running OS always) and while the mower has no WLAN connection, writes the deadline (30 min) to
+  `/run/mowbite/setup-ap.until`, restarts `mowbite-setup-ap.service` and plays a rising tone, or a low one when it
+  refuses. `setup_wifi` of `mowbite/host/status` holds `{until}` while it is open, else null; it closes earlier once the
+  WLAN of the mower is connected (`host.wifi_set` or a known network back). The platform names the key in
+  `/usr/lib/mowbite/wifi-gesture` (`device`: name in `/proc/bus/input/devices`, `code`: key code of a short press,
+  `tone_device`: ALSA device for `aplay`); without the file there is no gesture. Pick a key whose long press does not
+  start anything and a code a long press never sends (the Tron: On/OK, code 25; held 3 s it sends 38 and cuts the
+  power).
 - The host keeps three components, each in a folder of its own with `current`, `previous` and `pending`: the OS
   (`/opt/mowbite`), the planner (`/opt/mowbite-planner`) and the app (`/opt/mowbite-app`). The OS brings a planner and
   an app along and names them in its `bundle.json` (`bundled`, `planner_interface`, `planner_files_version`, `api`,

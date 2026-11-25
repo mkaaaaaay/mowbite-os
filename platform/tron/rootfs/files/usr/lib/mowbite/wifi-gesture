@@ -1,0 +1,5 @@
+# The gesture of the buttons that opens the setup WLAN (mowbite-host, gesture.py): the input device of init_test.ko,
+# the code of a short press of On/OK (3 s and more sends 38 and cuts the power, never counted), the speaker.
+device=key input
+code=25
+tone_device=plughw:CARD=rockchipes8388

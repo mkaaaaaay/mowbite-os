@@ -1,45 +1,62 @@
 #!/bin/bash
-# Setup access point as a fallback: when wlan0 has no network a while after the start, the profile mowbite-setup of
-# the installer goes up on wlan1, so the owner reaches the mower without writing it again (a typo in the Wi-Fi key).
-# It goes down again as soon as wlan0 is connected. Only while wlan0 is not connected: next to a connected wlan0 the
-# chip puts the access point on the channel of the home network. wlan1 is unmanaged otherwise
-# (NetworkManager/conf.d/20-unused-wifi.conf) and only managed while the access point is up.
+# Setup access point: the profile mowbite-setup of the installer on wlan1, so the owner reaches the mower without
+# writing it again (a typo in the Wi-Fi key, a new router). During the trial period it goes up on its own when wlan0
+# has no network a while after the start. After it only on the gesture of the buttons: mowbite-host writes a deadline
+# (unix s) to UNTIL_FILE and restarts this unit, which raises it at once until then. Either way it goes down as soon as
+# wlan0 is connected. Only while wlan0 is not connected: next to a connected wlan0 the chip puts the access point on
+# the channel of the home network. wlan1 is unmanaged otherwise (NetworkManager/conf.d/20-unused-wifi.conf) and only
+# managed while the access point is up.
 set -uo pipefail
 PROFILE=mowbite-setup
 WAIT_S=${SETUP_AP_WAIT_S:-180}
 POLL_S=${SETUP_AP_POLL_S:-15}
+TRIAL=${SETUP_AP_TRIAL:-/etc/mowbite/probezeit}
+UNTIL_FILE=${SETUP_AP_UNTIL:-/run/mowbite/setup-ap.until}
 
 connected() { [ "$(nmcli -t -g GENERAL.STATE device show wlan0 2>/dev/null | cut -d' ' -f1)" = 100 ]; }
 log() { echo "setup-ap: $*"; }
 
+until_s=$(head -c 20 "$UNTIL_FILE" 2>/dev/null | tr -cd 0-9)
+until_s=${until_s:-0}
+if [ "$until_s" -gt "$(date +%s)" ]; then
+    WAIT_S=0
+    log "opened by the buttons until $until_s"
+elif [ -e "$TRIAL" ]; then
+    until_s=0
+else
+    log "trial period over: only the gesture of the buttons opens the access point"
+    exit 0
+fi
+# Whether the access point may stay: always in the trial period, else until the deadline.
+open() { [ "$until_s" -eq 0 ] || [ "$(date +%s)" -lt "$until_s" ]; }
+
 down() {
     nmcli connection down "$PROFILE" >/dev/null 2>&1
     nmcli device set wlan1 managed no
+    rm -f "$UNTIL_FILE"
     log "access point down"
 }
 
 waited=0
-while ! connected; do
-    if [ "$waited" -ge "$WAIT_S" ]; then
-        break
-    fi
+while ! connected && [ "$waited" -lt "$WAIT_S" ]; do
     sleep "$POLL_S"
     waited=$((waited + POLL_S))
 done
 if connected; then
+    rm -f "$UNTIL_FILE"
     log "wlan0 connected, no access point"
     exit 0
 fi
 log "wlan0 without network after ${waited} s: access point $PROFILE on wlan1"
-nmcli device set wlan1 managed yes || { log "wlan1 cannot be managed"; exit 1; }
+nmcli device set wlan1 managed yes || { rm -f "$UNTIL_FILE"; log "wlan1 cannot be managed"; exit 1; }
 trap 'down; exit 0' TERM INT
 if ! nmcli connection up "$PROFILE" ifname wlan1; then
     down
     exit 1
 fi
-while ! connected; do
+while ! connected && open; do
     sleep "$POLL_S" &
     wait $!
 done
-log "wlan0 connected"
+if connected; then log "wlan0 connected"; else log "time is up"; fi
 down

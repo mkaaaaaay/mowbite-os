@@ -38,6 +38,7 @@ for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron
          /usr/lib/udev/rules.d/60-mowbite-rear.rules \
          /etc/systemd/system/sysinit.target.wants/systemd-pstore.service /usr/lib/mowbite/vendor-files \
          /usr/lib/mowbite/setup-ap /etc/systemd/system/multi-user.target.wants/mowbite-setup-ap.service \
+         /usr/lib/mowbite/wifi-gesture \
          /usr/lib/mowbite/bluesleep-lock /etc/systemd/system/sysinit.target.wants/mowbite-bluesleep-lock.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done

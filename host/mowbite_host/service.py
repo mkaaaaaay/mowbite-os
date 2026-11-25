@@ -12,7 +12,7 @@ import re
 import threading
 import time
 
-from mowbite_host import Refused, command, gate, trial, wifi
+from mowbite_host import Refused, command, gate, gesture, trial, wifi
 from mowbite_host.updater import COMPONENTS
 
 SCHEMA = 1
@@ -76,6 +76,8 @@ class Host:
         self.paths, self.updater, self.watch, self.carrier, self.publish = paths, updater, watch, carrier, publish
         self.run_command = run
         self.wifi = wifi.Wifi(paths, run)
+        self.gesture = gesture.Gesture(paths, run)
+        self._setup_until = None
         self.requests = queue.Queue(maxsize=MAX_WAITING)
         self.rebooting = False
         self._os = None
@@ -101,15 +103,25 @@ class Host:
 
     def host_status(self):
         return {"schema": SCHEMA, "online": True, "t": int(time.time()), "methods": list(METHODS), "os": self._os,
-                "trial": trial.active(self.paths), "wifi": self.wifi.status()}
+                "trial": trial.active(self.paths), "wifi": self.wifi.status(),
+                "setup_wifi": {"until": self._setup_until} if self._setup_until else None}
 
-    # Sends mowbite/host/status when the OS, the trial period or the WLAN change changed.
+    # Sends mowbite/host/status when the OS, the trial period, the WLAN change or the setup WLAN changed.
     def look(self):
         self._os = self.watch.read()
-        shown = (self._os, trial.active(self.paths), self.wifi.status())
+        if self.gesture.take():
+            self._on_gesture()
+        self._setup_until = self.gesture.until()
+        shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until)
         if shown != self._shown:
             self._shown = shown
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
+
+    # The gesture of the buttons: the setup WLAN, with a tone whether it opened.
+    def _on_gesture(self):
+        why = self.gesture.refusal(self._os) or self.gesture.open()
+        print(f"setup WLAN not opened: {why}" if why else "setup WLAN opened by the buttons", flush=True)
+        self.gesture.tone(why is None)
 
     def update_changed(self, status):
         text = json.dumps(status)
@@ -253,6 +265,7 @@ class Host:
 
     def run(self, alive=lambda: None, stop=lambda: False):
         self.updater.on_change = self.update_changed
+        self.gesture.start()
         next_tick = time.monotonic() + TICK_EVERY
         next_check = time.monotonic()
         next_look = 0.0

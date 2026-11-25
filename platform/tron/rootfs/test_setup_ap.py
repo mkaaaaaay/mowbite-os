@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """files/usr/lib/mowbite/setup-ap against a stand-in nmcli: no access point next to a connected wlan0, up when wlan0
-stays without network, down again once wlan0 connects.
+stays without network in the trial period, down again once wlan0 connects; after the trial period only up with the
+deadline of the gesture, and down when it passed.
   python3 -I platform/tron/rootfs/test_setup_ap.py
 """
 import os
@@ -26,7 +27,11 @@ class TestSetupAp(unittest.TestCase):
         with open(os.path.join(d, "nmcli"), "w") as f:
             f.write(NMCLI)
         os.chmod(os.path.join(d, "nmcli"), 0o755)
-        self.env = dict(os.environ, PATH=f"{d}:/usr/bin:/bin", SETUP_AP_WAIT_S="1", SETUP_AP_POLL_S="1")
+        self.trial = os.path.join(d, "probezeit")
+        self.until = os.path.join(d, "setup-ap.until")
+        open(self.trial, "w").close()
+        self.env = dict(os.environ, PATH=f"{d}:/usr/bin:/bin", SETUP_AP_WAIT_S="1", SETUP_AP_POLL_S="1",
+                        SETUP_AP_TRIAL=self.trial, SETUP_AP_UNTIL=self.until)
 
     def tearDown(self):
         self.dir.cleanup()
@@ -68,6 +73,46 @@ class TestSetupAp(unittest.TestCase):
         p.terminate()
         self.assertEqual(p.wait(timeout=10), 0)
         self.assertEqual(self.calls()[-2:], ["connection down mowbite-setup", "device set wlan1 managed no"])
+
+    def test_after_the_trial_period_nothing_without_the_gesture(self):
+        os.remove(self.trial)
+        self.state("30 (disconnected)")
+        r = subprocess.run([TOOL], env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.calls(), [])
+        # A deadline that passed counts as none.
+        with open(self.until, "w") as f:
+            f.write(f"{int(time.time()) - 1}\n")
+        r = subprocess.run([TOOL], env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(self.calls(), [])
+
+    def test_the_gesture_opens_at_once_until_its_deadline(self):
+        os.remove(self.trial)
+        self.state("30 (disconnected)")
+        with open(self.until, "w") as f:
+            f.write(f"{int(time.time()) + 3}\n")
+        started = time.monotonic()
+        p = subprocess.Popen([TOOL], env=dict(self.env, SETUP_AP_WAIT_S="60"), stdout=subprocess.PIPE, text=True)
+        deadline = time.time() + 10
+        while len(self.calls()) < 2 and time.time() < deadline:
+            time.sleep(0.1)
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual(self.calls(), ["device set wlan1 managed yes", "connection up mowbite-setup ifname wlan1"])
+        out, _ = p.communicate(timeout=15)
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("time is up", out)
+        self.assertEqual(self.calls()[2:], ["connection down mowbite-setup", "device set wlan1 managed no"])
+        self.assertFalse(os.path.exists(self.until))
+
+    def test_the_gesture_next_to_a_connected_wlan0_opens_nothing(self):
+        os.remove(self.trial)
+        self.state("100 (connected)")
+        with open(self.until, "w") as f:
+            f.write(f"{int(time.time()) + 60}\n")
+        r = subprocess.run([TOOL], env=self.env, capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.calls(), [])
+        self.assertFalse(os.path.exists(self.until))
 
 
 if __name__ == "__main__":
