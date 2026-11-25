@@ -205,8 +205,8 @@ RpcOutcome CameraService::EndUnlock(const std::string& id, const UnlockReply& re
     case UnlockReply::Kind::kNoService:
       return RefuseUnlock("UNSUPPORTED", "Camera " + id + " offers no unlock service");
     case UnlockReply::Kind::kTimeout:
-      return RefuseUnlock("TIMEOUT",
-                          "The unlock service of camera " + id + " gave no answer; camera.list tells whether it worked");
+      return RefuseUnlock("TIMEOUT", "The unlock service of camera " + id +
+                                         " gave no answer; camera.list tells whether it worked");
     case UnlockReply::Kind::kAnswered: break;
   }
   const std::string message = FirstLine(reply.message, kMaxReasonBytes);

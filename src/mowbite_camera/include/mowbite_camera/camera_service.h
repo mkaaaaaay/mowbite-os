@@ -63,9 +63,9 @@ constexpr double kUnlockSeconds = 5.0;
 constexpr double kStateMaxAge = 3.0;
 constexpr double kHardwareMaxAge = 1.0;
 
-// camera.list, camera.stream and camera.unlock over the cameras of hw/cameras, the places of their viewers, and who may connect:
-// viewers of MJPEG at the HTTP server and what the stream server asks before it lets someone in. Every method may
-// be called from any thread.
+// camera.list, camera.stream and camera.unlock over the cameras of hw/cameras, the places of their viewers, and who
+// may connect: viewers of MJPEG at the HTTP server and what the stream server asks before it lets someone in. Every
+// method may be called from any thread.
 class CameraService {
  public:
   CameraService(ServiceConfig config, Clocks clocks, const RandomBytes& random = SystemRandom,

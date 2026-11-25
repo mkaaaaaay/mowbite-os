@@ -105,8 +105,8 @@ CameraEntry ToEntry(const mowbite_msgs::msg::Camera& msg) {
 }  // namespace
 
 // The cameras of the platform for the app, in a process of its own: camera.list, camera.stream and camera.unlock
-// through the bridge, CAMERA_CHANGED, and the pictures of camera/<id>/jpeg over HTTP to the viewers that hold a place. The
-// HTTP server has a thread of its own, so a slow viewer never holds up the node. Cameras with webrtc go through a
+// through the bridge, CAMERA_CHANGED, and the pictures of camera/<id>/jpeg over HTTP to the viewers that hold a place.
+// The HTTP server has a thread of its own, so a slow viewer never holds up the node. Cameras with webrtc go through a
 // stream server, a child process this node starts, configures and answers when it asks who may watch.
 class CameraNode : public rclcpp::Node {
  public:
