@@ -86,9 +86,10 @@ class Geometry {
   // missing, is none or the values break a rule.
   Geometry(std::string platform, const json& factory);
 
-  // The file written from Text(): {"version": N, "entries": {key: value}, "confirmed": {key: unix s}}. False with the
-  // reason in why if it is no JSON object, has a key that is unknown or not settable, or its values break a rule; then
-  // nothing changes.
+  // The file written from Text(): {"version": N, "entries": {key: value}, "confirmed": {key: unix s},
+  // "calibration_applied": {...}}. False with the reason in why if it is no JSON object, has a key that is unknown or
+  // not settable, or its values break a rule; then nothing changes. A calibration_applied that is no object with a
+  // result_id counts as none.
   bool Load(const std::string& text, std::string* why);
   std::string Text() const;
 
@@ -108,8 +109,8 @@ class Geometry {
   // "version", "platform"}. confirmed: unix s the user confirmed the value of a settable key, null before.
   json Get() const;
   // The "params" of the bridge/params entry: every key as it counts now (a list [] without one), version, and
-  // stored: the keys the user entered, confirmed: those the user confirmed. Without robot_shape, which is for the
-  // app alone.
+  // stored: the keys the user entered, confirmed: those the user confirmed, calibration_applied (null without one).
+  // Without robot_shape, which is for the app alone.
   json Params() const;
 
   // robot.geometry.set: {"version": N, "settings": {key: value}, "reset": [key], "confirm": [key]}. All or nothing: a
@@ -117,6 +118,14 @@ class Geometry {
   // breaks a rule changes nothing. Out-of-range values are refused, not cut to the bound. A key set or named in confirm
   // counts as confirmed by the user at now (unix s), a key reset no longer.
   GeometryChange Set(const json& request, double now = 0.0);
+  // calibration.apply: settings {key: value} of the result result_id as Set at the current version, then
+  // calibration_applied {result_id, t, keys, geometry_version (after it), values of the calibrated keys}; settings {}
+  // takes none on purpose. stored is true whenever it is ok.
+  GeometryChange ApplyCalibration(const std::string& result_id, const json& settings, double now);
+  // The last calibration.apply, null before one.
+  const json& calibration_applied() const {
+    return calibration_applied_;
+  }
 
   // properties.recorded_body of an area recorded with the body as it is now, without by: robot_width, robot_front,
   // robot_rear (m) and robot_outline ([] for the rectangle).
@@ -162,6 +171,7 @@ class Geometry {
   Entries entries_;
   // unix s by settable key the user confirmed.
   std::map<std::string, double> confirmed_;
+  json calibration_applied_;
   Values now_;
   int version_ = 0;
 };

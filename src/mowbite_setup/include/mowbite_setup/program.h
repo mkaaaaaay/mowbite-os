@@ -117,6 +117,8 @@ struct World {
   bool ntrip = false;
   // Keys of robot.geometry the user confirmed.
   std::set<std::string> confirmed;
+  // The calibration counts as taken (mowbite_api::CalibrationTaken).
+  bool calibration = false;
 };
 
 // A method that was not done: -32602 with field for a param at fault, else -32600 with the reason of SETUP_REFUSED.

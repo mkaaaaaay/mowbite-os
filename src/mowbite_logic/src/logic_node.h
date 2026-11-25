@@ -209,6 +209,7 @@ class LogicNode : public rclcpp::Node {
   void OnCalibrationCheck(const mowbite_msgs::msg::RpcRequest& request);
   void OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request);
   void OnCalibrationAbort(const mowbite_msgs::msg::RpcRequest& request);
+  void OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request);
   void SendCalibration(const CalibrationGoal& goal);
   void CancelCalibration();
   std::string LogicParamsPath() const;
@@ -226,6 +227,10 @@ class LogicNode : public rclcpp::Node {
   void OnGeometryGet(const mowbite_msgs::msg::RpcRequest& request);
   void OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request);
   bool SaveGeometry(const Geometry& geometry, std::string* error);
+  bool CommitGeometryLocked(Geometry changed, const GeometryChange& change, std::string* error);
+  void PublishGeometryRefusal(const std::string& id, const GeometryChange& change);
+  // -32600 BUSY or HOLD while the dimensions may not change; true when it was sent. Called with the mutex held.
+  bool RefuseGeometryNowLocked(const std::string& id);
   void OnPlanAnswer(uint64_t seq, const mowbite_planner_interfaces::srv::PlanCoverage::Response& response);
   void ExpirePlans();
   void PublishRpcError(const std::string& id, int code, const std::string& message, const std::string& data = "");
@@ -384,6 +389,8 @@ class LogicNode : public rclcpp::Node {
   bool hold_mirror_due_ = true;
   double hold_mirrored_s_ = 0;
   Geometry geometry_;
+  // calibration/result: the last result of the calibration program, null before one.
+  json calibration_result_;
   Drive drive_;
   JobPlan job_plan_;
   JobCut job_cut_;
@@ -510,6 +517,7 @@ class LogicNode : public rclcpp::Node {
   rclcpp_action::Client<FollowPath>::SharedPtr follow_client_;
   rclcpp_action::Client<Calibrate>::SharedPtr calibration_client_;
   rclcpp::Subscription<mowbite_msgs::msg::CalibrationStatus>::SharedPtr calibration_status_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr calibration_result_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr calibration_cmd_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_motion_sub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr setup_cmd_sub_;

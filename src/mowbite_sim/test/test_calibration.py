@@ -274,6 +274,59 @@ class TestCalibration(unittest.TestCase):
         self.assertEqual(result["recording"], files[0])
         with open(os.path.join(DATA, "calibration", "result.json")) as f:
             self.assertEqual(json.load(f)["id"], result["id"])
+        # The start told the rounds and the time the drive takes, the result the geometry it ran with.
+        start = p.event(since, "CALIBRATION", 1, phase="start")
+        self.assertEqual(start["rounds"], 4)
+        self.assertGreater(start["expected_s"], 150)
+        geometry = p.rpc("robot.geometry.get")[1]
+        self.assertEqual(result["geometry_version"], geometry["version"])
+        self.assertIsNone(result["applied"])
+        self.apply_and_setup(result, values, geometry["version"])
+
+    @staticmethod
+    def until(check, timeout=10.0):
+        """True once check() is, polled outside the lock of the probe (check may ask by RPC)."""
+        end = time.time() + timeout
+        while time.time() < end:
+            if check():
+                return True
+            time.sleep(0.2)
+        return False
+
+    def setup_step(self):
+        steps = self.probe.rpc("setup.get")[1]["steps"]
+        return next(step for step in steps if step["id"] == "calibration")
+
+    def apply_and_setup(self, result, values, version):
+        """calibration.apply takes only values that are ok, notes them in the result and passes the step of the setup;
+        another value opens the step again and the result is outdated."""
+        p = self.probe
+        self.assertEqual(self.setup_step()["state"], "open")
+        failed = p.rpc("calibration.apply", {"keys": ["track"], "client": "app"})
+        self.assertEqual(failed[0], "error", failed)
+        self.assertEqual((failed[1][0], failed[1][2]["reason"], failed[1][2]["key"]), (-32602, "NOT_OK", "track"))
+        answer = p.rpc("calibration.apply", {"keys": ["ticks_per_m", "antenna_x"], "client": "app"})
+        self.assertEqual(answer[0], "ok", answer)
+        applied = answer[1]["applied"]
+        self.assertEqual((applied["result_id"], applied["keys"]), (result["id"], ["ticks_per_m", "antenna_x"]))
+        self.assertEqual(applied["geometry_version"], version + 1)
+        settings = answer[1]["geometry"]["settings"]
+        self.assertAlmostEqual(settings["ticks_per_m"]["value"], values["ticks_per_m"]["value"])
+        self.assertAlmostEqual(applied["values"]["antenna_x"], values["antenna_x"]["value"])
+        self.assertTrue(self.until(lambda: p.rpc("calibration.result")[1]["applied"] == applied))
+        self.assertTrue(self.until(lambda: self.setup_step()["state"] == "ok"), self.setup_step())
+        # None on purpose for the same result replaces the note; the values stay.
+        answer = p.rpc("calibration.apply", {"keys": []})
+        self.assertEqual(answer[0], "ok", answer)
+        self.assertEqual((answer[1]["applied"]["keys"], answer[1]["applied"]["geometry_version"]), ([], version + 1))
+        # Another value: the step is open again, the result outdated.
+        changed = p.rpc("robot.geometry.set", {"version": version + 1, "settings": {"ticks_per_m": 1000.0}})
+        self.assertEqual(changed[0], "ok", changed)
+        self.assertTrue(self.until(lambda: self.setup_step()["state"] == "open"), self.setup_step())
+        self.assertEqual(self.setup_step()["result"]["reason"], "OUTDATED")
+        refused = p.rpc("calibration.apply", {"keys": ["ticks_per_m"]})
+        self.assertEqual(refused[0], "error", refused)
+        self.assertEqual((refused[1][0], refused[1][2]["reason"]), (-32600, "OUTDATED"))
 
     def test_03_stopped_by_the_app(self):
         p = self.probe

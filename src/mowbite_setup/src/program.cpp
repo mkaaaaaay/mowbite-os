@@ -1687,6 +1687,13 @@ void Program::TickWaiting(double wall) {
   for (const Step& step : list_.steps) {
     if (step.start || !step.automatic || step.check == "platform") continue;
     Record& record = RecordOf(step);
+    const bool calibration = step.check == "done_when" && step.Word("condition") == "calibration";
+    // A taken calibration that no longer holds opens its step again.
+    if (record.state == "ok" && calibration && !world_.calibration) {
+      End(step, "open", "OUTDATED", "The calibration is no longer the one taken: a new drive or another value",
+          json::object(), wall);
+      continue;
+    }
     if (record.state == "ok" || !NeedsMet(step)) continue;
     bool met = false;
     if (step.check == "geometry") {
@@ -1699,6 +1706,7 @@ void Program::TickWaiting(double wall) {
       if (condition == "station") met = world_.docking_stations > 0 && hardware_.dock_contact;
       if (condition == "area") met = world_.areas > 0 && world_.mowing_allowed;
       if (condition == "dock_test" || condition == "mow") met = reached_.count(condition) != 0;
+      if (calibration) met = world_.calibration;
     }
     if (!met) continue;
     ++record.attempt;

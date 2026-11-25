@@ -192,6 +192,11 @@ steps:
     check: done_when
     params: {condition: area}
     symbol: map
+  - id: calibration
+    stage: calibration
+    check: done_when
+    params: {condition: calibration}
+    symbol: ground
   - id: dock_test
     stage: trial
     check: done_when

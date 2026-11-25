@@ -41,6 +41,17 @@ Reason FollowerMissing() {
   return Reason("FOLLOWER_MISSING", "The follower is not running");
 }
 
+// The value of key in result that is ok, null without one.
+json OkValueOf(const json& result, const std::string& key) {
+  if (!result.contains("values") || !result["values"].is_array()) return json();
+  for (const auto& value : result["values"]) {
+    if (!value.is_object() || value.value("key", json()) != key || value.value("ok", false) != true) continue;
+    const json number = value.value("value", json());
+    if (number.is_number() && std::isfinite(number.get<double>())) return number;
+  }
+  return json();
+}
+
 }  // namespace
 
 Reason PlannerMissing() {
@@ -155,6 +166,12 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
   calibration_status_sub_ = create_subscription<mowbite_msgs::msg::CalibrationStatus>(
       "calibration/status", 10,
       [this](const mowbite_msgs::msg::CalibrationStatus::ConstSharedPtr& msg) { OnCalibrationStatus(*msg); });
+  calibration_result_sub_ = create_subscription<std_msgs::msg::String>(
+      "calibration/result", LatchedQos(1), [this](const std_msgs::msg::String::ConstSharedPtr& msg) {
+        const json parsed = json::parse(msg->data, nullptr, false);
+        std::lock_guard<std::mutex> lock(mutex_);
+        calibration_result_ = parsed.is_object() ? parsed : json();
+      });
   calibration_cmd_sub_ = create_subscription<geometry_msgs::msg::Twist>(
       "calibration/cmd_vel", 10, [this](const geometry_msgs::msg::Twist::ConstSharedPtr& msg) {
         bool active;
@@ -1383,6 +1400,10 @@ void LogicNode::OnRpcRequest(const mowbite_msgs::msg::RpcRequest& request) {
     OnCalibrationAbort(request);
     return;
   }
+  if (request.method == "calibration.apply") {
+    OnCalibrationApply(request);
+    return;
+  }
   if (request.method != "mowing.plan") return;
   json params;
   if (!request.params.empty()) {
@@ -1820,47 +1841,18 @@ void LogicNode::OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request) {
   json answer;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (core_.View().HoldUntil() > 0) {
-      PublishHoldRefusal(request.id, "The dimensions change after it");
-      return;
-    }
-    if (!core_.View().Idle()) {
-      PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
-                      "The dimensions change only in IDLE, not while recording, driving or mowing",
-                      json{{"reason", "BUSY"}}.dump());
-      return;
-    }
-    const json body_before = geometry_.RecordedBody();
+    if (RefuseGeometryNowLocked(request.id)) return;
     Geometry changed = geometry_;
     change = changed.Set(params, static_cast<double>(WallSeconds()));
     if (!change.ok) {
-      json data = json::object();
-      data["reason"] = change.problem.reason;
-      data["message"] = change.problem.message;
-      if (!change.problem.key.empty()) data["key"] = change.problem.key;
-      for (const auto& item : change.problem.data.items()) data[item.key()] = item.value();
-      PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, change.problem.message, data.dump());
+      PublishGeometryRefusal(request.id, change);
       return;
     }
-    if (change.stored) {
-      std::string error;
-      if (!SaveGeometry(changed, &error)) {
-        RCLCPP_ERROR(get_logger(), "robot.geometry.set: %s", error.c_str());
-        PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the dimensions: " + error);
-        return;
-      }
-      geometry_ = std::move(changed);
-      core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
-      if (geometry_.RecordedBody() != body_before) SendRecordedBody();
-      // Only a value that is another now is news; a key entered with the platform's own value is not.
-      if (!change.changed.empty()) {
-        json outside = json::array();
-        for (const ShapeOver& over : change.outside_shape) {
-          outside.push_back({{"part", over.part}, {"by", std::round(over.by * 1000.0) / 1000.0}});
-        }
-        core_.Call<&LogicCore::SetShapeOutside>(outside.dump());
-        core_.Call<&LogicCore::GeometryChanged>(change.changed, change.below_default, geometry_.version());
-      }
+    std::string error;
+    if (change.stored && !CommitGeometryLocked(std::move(changed), change, &error)) {
+      RCLCPP_ERROR(get_logger(), "robot.geometry.set: %s", error.c_str());
+      PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the dimensions: " + error);
+      return;
     }
     answer = geometry_.Get();
   }
@@ -1870,6 +1862,126 @@ void LogicNode::OnGeometrySet(const mowbite_msgs::msg::RpcRequest& request) {
     PublishGeometry();
     Step();
   }
+  mowbite_msgs::msg::RpcResponse msg;
+  msg.result = answer.dump();
+  msg.id = request.id;
+  rpc_response_pub_->publish(msg);
+}
+
+bool LogicNode::RefuseGeometryNowLocked(const std::string& id) {
+  if (core_.View().HoldUntil() > 0) {
+    PublishHoldRefusal(id, "The dimensions change after it");
+    return true;
+  }
+  if (!core_.View().Idle()) {
+    PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST,
+                    "The dimensions change only in IDLE, not while recording, driving or mowing",
+                    json{{"reason", "BUSY"}}.dump());
+    return true;
+  }
+  return false;
+}
+
+// -32602 with the reason, message, key and data of the problem.
+void LogicNode::PublishGeometryRefusal(const std::string& id, const GeometryChange& change) {
+  json data = json::object();
+  data["reason"] = change.problem.reason;
+  data["message"] = change.problem.message;
+  if (!change.problem.key.empty()) data["key"] = change.problem.key;
+  for (const auto& item : change.problem.data.items()) data[item.key()] = item.value();
+  PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_INVALID_PARAMS, change.problem.message, data.dump());
+}
+
+// Saves changed and makes it the geometry, with what follows from it; false with why when it cannot be saved. Called
+// with the mutex held.
+bool LogicNode::CommitGeometryLocked(Geometry changed, const GeometryChange& change, std::string* error) {
+  const json body_before = geometry_.RecordedBody();
+  if (!SaveGeometry(changed, error)) return false;
+  geometry_ = std::move(changed);
+  core_.Call<&LogicCore::SetTurningRadius>(geometry_.TurningRadius());
+  if (geometry_.RecordedBody() != body_before) SendRecordedBody();
+  // Only a value that is another now is news; a key entered with the platform's own value is not.
+  if (!change.changed.empty()) {
+    json outside = json::array();
+    for (const ShapeOver& over : change.outside_shape) {
+      outside.push_back({{"part", over.part}, {"by", std::round(over.by * 1000.0) / 1000.0}});
+    }
+    core_.Call<&LogicCore::SetShapeOutside>(outside.dump());
+    core_.Call<&LogicCore::GeometryChanged>(change.changed, change.below_default, geometry_.version());
+  }
+  return true;
+}
+
+// calibration.apply: the OS takes the values of its own last result (G32), as robot.geometry.set would, with the
+// note calibration_applied; the refusals are those of the catalog.
+void LogicNode::OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request) {
+  using mowbite_msgs::msg::RpcError;
+  const json params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
+  std::string field;
+  const std::string invalid =
+      params.is_discarded() ? "The parameters are not valid JSON"
+                            : mowbite_api::CheckParams(*mowbite_api::FindMethod("calibration.apply"), params, &field);
+  if (!invalid.empty()) {
+    PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, invalid, json{{"field", field}}.dump());
+    return;
+  }
+  const std::string client = params.value("client", "");
+  json answer;
+  int changed_keys = 0;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (RefuseGeometryNowLocked(request.id)) return;
+    const json& result = calibration_result_;
+    if (!result.is_object() || result.value("status", "") != "done" || !result.contains("id") ||
+        !result["id"].is_string()) {
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, "No evaluated calibration to take values from",
+                      json{{"reason", "NO_RESULT"}}.dump());
+      return;
+    }
+    const std::string result_id = result["id"].get<std::string>();
+    // The geometry the drive ran with, or the one right after the last calibration.apply of this result.
+    const json& applied = geometry_.calibration_applied();
+    const bool again = applied.is_object() && applied.value("result_id", "") == result_id;
+    const json base = again ? applied.value("geometry_version", json()) : result.value("geometry_version", json());
+    if (!base.is_number_integer() || base.get<int64_t>() != geometry_.version()) {
+      const json data = {{"reason", "OUTDATED"}, {"geometry_version", base}, {"version", geometry_.version()}};
+      PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST,
+                      "The dimensions changed since the calibration drive: drive again", data.dump());
+      return;
+    }
+    json settings = json::object();
+    for (const auto& item : params["keys"]) {
+      const std::string key = item.get<std::string>();
+      const auto& calibrated = mowbite_api::CalibrationKeys();
+      const json value = OkValueOf(result, key);
+      if (std::find(calibrated.begin(), calibrated.end(), key) == calibrated.end() || value.is_null() ||
+          settings.contains(key)) {
+        PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, key + " has no value that is ok in the result",
+                        json{{"reason", "NOT_OK"}, {"key", key}}.dump());
+        return;
+      }
+      settings[key] = value;
+    }
+    Geometry changed = geometry_;
+    const GeometryChange change = changed.ApplyCalibration(result_id, settings, WallSeconds());
+    if (!change.ok) {
+      PublishGeometryRefusal(request.id, change);
+      return;
+    }
+    std::string error;
+    if (!CommitGeometryLocked(std::move(changed), change, &error)) {
+      RCLCPP_ERROR(get_logger(), "calibration.apply: %s", error.c_str());
+      PublishRpcError(request.id, RpcError::ERROR_INTERNAL, "Cannot save the dimensions: " + error);
+      return;
+    }
+    changed_keys = static_cast<int>(change.changed.size());
+    answer = {{"applied", geometry_.calibration_applied()}, {"geometry", geometry_.Get()}};
+  }
+  const std::string by = client.empty() ? "" : " (client " + client + ")";
+  RCLCPP_INFO(get_logger(), "calibration.apply%s: version %d, changed %d key(s)", by.c_str(),
+              answer["geometry"]["version"].get<int>(), changed_keys);
+  PublishGeometry();
+  Step();
   mowbite_msgs::msg::RpcResponse msg;
   msg.result = answer.dump();
   msg.id = request.id;

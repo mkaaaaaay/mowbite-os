@@ -354,7 +354,9 @@ A step is one of: `choice` and `number` (the user answers), `confirm`, `board` (
 inputs at rest, motor controllers, battery, gravity), `input` (a STOP button, the lift or the bumper by hand: every
 part has to bring its emergency within `within`, a part of mode `short` must not), `imu` (tilting and turning by hand
 with the right sign), `position` (the fix holds), `geometry` (the dimensions confirmed) and `done_when` (done as soon
-as the OS sees corrections, a station, an area, a docking test or a trial run). None of them moves the mower. Take
+as the OS sees corrections, a station, an area, a docking test, a trial run or a calibration taken with
+`calibration.apply`; the step `calibration` opens again with OUTDATED after a new drive or another value of the six
+calibrated keys, and can be skipped). None of them moves the mower. Take
 `within` from what the board does: the NX60i stops 2.5 s after a lift sensor, so its list waits 3.5 s and counts 1.5 s
 as short. An emergency that is on for more than 0.3 s before its input shows in `hw/status` counts as brought by
 something else, and the part waits for its release: a driver reports the input with or before the emergency it brings.

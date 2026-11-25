@@ -114,6 +114,8 @@ struct Dimensions {
   // imu_roll or imu_pitch entered by the user, so measured.
   bool imu_measured = false;
   int version = 0;
+  // The last calibration.apply, null before one.
+  json applied;
 };
 
 std::optional<Dimensions> ReadDimensions(const std::string& text) {
@@ -155,6 +157,7 @@ std::optional<Dimensions> ReadDimensions(const std::string& text) {
     }
   }
   d.version = p.contains("version") && p["version"].is_number_integer() ? p["version"].get<int>() : 0;
+  if (p.contains("calibration_applied") && p["calibration_applied"].is_object()) d.applied = p["calibration_applied"];
   return d;
 }
 
@@ -185,9 +188,9 @@ class CalibrationNode : public rclcpp::Node {
     limits_.max_bytes = static_cast<uint64_t>(declare_parameter("recordings_max_mb", 20.0) * 1000.0 * 1000.0);
     limits_.max_days = declare_parameter("recordings_keep_days", 60.0);
     if (data_dir_.empty()) RCLCPP_WARN(get_logger(), "No data_dir: drives are neither recorded nor evaluated");
-    LoadResult();
-
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("calibration/cmd_vel", 10);
+    result_pub_ = create_publisher<std_msgs::msg::String>("calibration/result", LatchedQos(1));
+    LoadResult();
     status_pub_ = create_publisher<mowbite_msgs::msg::CalibrationStatus>("calibration/status", 10);
     request_pub_ = create_publisher<mowbite_msgs::msg::RpcRequest>("bridge/rpc/request", 100);
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
@@ -639,6 +642,7 @@ class CalibrationNode : public rclcpp::Node {
       RCLCPP_ERROR(get_logger(), "Calibration: cannot save the result: %s", why.c_str());
     }
     result_ = composed;
+    PublishResult();
     auto result = std::make_shared<Calibrate::Result>();
     result->reason = reason.empty() ? ending_.reason : reason;
     result->message = message.empty() ? ending_.message : message;
@@ -662,7 +666,14 @@ class CalibrationNode : public rclcpp::Node {
     mowbite_msgs::msg::RpcResponse msg;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      msg.result = result_.is_null() ? "null" : result_.dump(-1, ' ', false, json::error_handler_t::replace);
+      json answer = result_;
+      // applied: the last calibration.apply when it took from this result.
+      if (answer.is_object()) {
+        const json applied = dimensions_ ? dimensions_->applied : json();
+        const bool ours = applied.is_object() && applied.value("result_id", json()) == answer.value("id", json());
+        answer["applied"] = ours ? applied : json();
+      }
+      msg.result = answer.dump(-1, ' ', false, json::error_handler_t::replace);
     }
     msg.id = request.id;
     response_pub_->publish(msg);
@@ -677,9 +688,18 @@ class CalibrationNode : public rclcpp::Node {
     const json parsed = json::parse(text.str(), nullptr, false);
     if (parsed.is_object()) {
       result_ = parsed;
+      PublishResult();
     } else {
       RCLCPP_ERROR(get_logger(), "%s is not valid and is not offered", ResultPath().c_str());
     }
+  }
+
+  // calibration/result for the logic (calibration.apply) and the setup program. Called with the mutex held or before
+  // the callbacks run.
+  void PublishResult() {
+    std_msgs::msg::String msg;
+    msg.data = result_.dump(-1, ' ', false, json::error_handler_t::replace);
+    result_pub_->publish(msg);
   }
 
   std::string RecordingsDir() const { return data_dir_ + "/calibration/recordings"; }
@@ -722,6 +742,7 @@ class CalibrationNode : public rclcpp::Node {
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::CalibrationStatus>::SharedPtr status_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr result_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcRequest>::SharedPtr request_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::RpcMethods>::SharedPtr methods_pub_;

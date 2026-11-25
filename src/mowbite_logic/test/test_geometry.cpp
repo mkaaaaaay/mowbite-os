@@ -88,7 +88,8 @@ TEST(Geometry, ParamsCarryEveryKeyAndTheVersion) {
   EXPECT_EQ(params["stored"], json::array());
   EXPECT_EQ(params["confirmed"], json::array());
   EXPECT_FALSE(params.contains("robot_shape"));
-  EXPECT_EQ(params.size(), 20u);
+  EXPECT_TRUE(params["calibration_applied"].is_null());
+  EXPECT_EQ(params.size(), 21u);
 }
 
 TEST(Geometry, ThePlatformsFileHasToBeWholeAndKeepTheRules) {
@@ -489,6 +490,59 @@ TEST(Geometry, TheFileGivesTheEntriesBack) {
   EXPECT_EQ(again.Params(), geometry.Params());
   EXPECT_EQ(again.version(), 2);
   EXPECT_EQ(again.Text(), geometry.Text());
+}
+
+// calibration.apply: the values of a result as Set would take them, and the note of it in the file and the params.
+TEST(GeometryCalibration, ApplyTakesTheValuesAndNotesThem) {
+  Geometry geometry = Tron();
+  const GeometryChange change =
+      geometry.ApplyCalibration("calib-1", {{"track", 0.401}, {"antenna_x", 0.1}}, 1793707470.6);
+  ASSERT_TRUE(change.ok) << change.problem.message;
+  EXPECT_TRUE(change.stored);
+  EXPECT_EQ(geometry.version(), 1);
+  EXPECT_DOUBLE_EQ(geometry.Value("track"), 0.401);
+  const json applied = geometry.calibration_applied();
+  EXPECT_EQ(applied["result_id"], "calib-1");
+  EXPECT_EQ(applied["t"], 1793707470);
+  EXPECT_EQ(applied["keys"], (json{"track", "antenna_x"}));
+  EXPECT_EQ(applied["geometry_version"], 1);
+  EXPECT_EQ(applied["values"].size(), 6u);
+  EXPECT_DOUBLE_EQ(applied["values"]["track"].get<double>(), 0.401);
+  EXPECT_DOUBLE_EQ(applied["values"]["ticks_per_m"].get<double>(), 1000.0);
+  EXPECT_EQ(geometry.Params()["calibration_applied"], applied);
+
+  // Through the file and back.
+  Geometry again = Tron();
+  std::string why;
+  ASSERT_TRUE(again.Load(geometry.Text(), &why)) << why;
+  EXPECT_EQ(again.calibration_applied(), applied);
+
+  // None on purpose: the version stays, the note is new.
+  ASSERT_TRUE(geometry.ApplyCalibration("calib-1", json::object(), 1793707500.0).ok);
+  EXPECT_EQ(geometry.version(), 1);
+  EXPECT_EQ(geometry.calibration_applied()["keys"], json::array());
+  EXPECT_EQ(geometry.calibration_applied()["geometry_version"], 1);
+}
+
+TEST(GeometryCalibration, ARefusedApplyChangesNothing) {
+  Geometry geometry = Tron();
+  const std::string text = geometry.Text();
+  const GeometryChange change = geometry.ApplyCalibration("calib-1", {{"track", 2.0}}, 1.0);
+  EXPECT_FALSE(change.ok);
+  EXPECT_EQ(change.problem.reason, "OUT_OF_RANGE");
+  EXPECT_EQ(change.problem.key, "track");
+  EXPECT_TRUE(geometry.calibration_applied().is_null());
+  EXPECT_EQ(geometry.Text(), text);
+}
+
+// An old OS writes no note, a broken note is none: the entries count either way.
+TEST(GeometryCalibration, ABrokenNoteIsNone) {
+  Geometry geometry = Tron();
+  std::string why;
+  ASSERT_TRUE(geometry.Load(R"({"entries": {"track": 0.4}, "calibration_applied": {"keys": []}})", &why)) << why;
+  EXPECT_DOUBLE_EQ(geometry.Value("track"), 0.4);
+  EXPECT_TRUE(geometry.calibration_applied().is_null());
+  EXPECT_FALSE(json::parse(geometry.Text()).contains("calibration_applied"));
 }
 
 TEST(Geometry, AFileWithoutVersionOrEntriesIsTaken) {

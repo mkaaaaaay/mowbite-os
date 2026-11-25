@@ -347,6 +347,16 @@ const std::vector<SetupCondition>& SetupConditions() {
                                      "mow.",
              "Drive around the whole area once and save it."})},
        "recording"},
+      {{"calibration",
+        "The last calibration drive is evaluated, the user took its values or none on purpose (calibration.apply), and "
+        "they are still set; a new drive or another value opens the step again (OUTDATED)",
+        Both({"Kalibrierfahrt", "Eine Kalibrierfahrt machen und ihre Werte übernehmen, oder bewusst keinen. Der Haken "
+                               "kommt mit der Übernahme.",
+             "Neue Fahrt oder geänderte Werte öffnen den Schritt wieder. Er kann übersprungen werden."},
+            {"Calibration drive", "Do a calibration drive and take its values, or none on purpose. The tick comes "
+                                  "with taking them.",
+             "A new drive or changed values open the step again. It can be skipped."})},
+       "calibration"},
       {{"dock_test", "A docking test ended on the contacts",
         Both({"Andocken testen", "Den Andocktest starten. Der Haken kommt, wenn der Mäher von selbst wieder auf den "
                                 "Kontakten steht.",
@@ -398,7 +408,8 @@ const std::vector<SetupName>& SetupSkipReasons() {
 }
 
 const std::vector<std::string>& SetupOpens() {
-  static const std::vector<std::string> opens = {"ntrip", "geometry", "recording", "dock", "map", "dock_test", "mow"};
+  static const std::vector<std::string> opens = {"ntrip",     "geometry", "recording",  "dock",
+                                                 "map",       "dock_test", "mow",       "calibration"};
   return opens;
 }
 
@@ -1438,7 +1449,15 @@ EventEntry SetupStepEvent() {
                   Both({"Nicht gemacht", "Der Handgriff wurde nicht gemacht. Die Prüfung zählt nicht.",
                         "Den Schritt wiederholen und den Handgriff in der angezeigten Zeit machen."},
                        {"Not done", "The action wasn't done. The check doesn't count.",
-                        "Repeat the step and do the action within the time shown."}))},
+                        "Repeat the step and do the action within the time shown."})),
+           Reason("OUTDATED", "info", "user",
+                  "What the step waited for no longer holds (calibration: a new drive, or a value of it set again): "
+                  "the step is open again",
+                  {},
+                  Both({"Nicht mehr aktuell", "Was dieser Schritt geprüft hat, gilt nicht mehr.",
+                        "Den Schritt erneut erledigen oder überspringen."},
+                       {"Out of date", "What this step checked no longer holds.",
+                        "Do the step again or skip it."}))},
           "warning", "user"};
   for (auto& reason : entry.reasons) reason.closes = ClosingReasons().count(reason.code) > 0;
   return entry;

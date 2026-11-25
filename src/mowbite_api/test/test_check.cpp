@@ -195,3 +195,26 @@ TEST(CheckParams, AMethodWithOpenParams) {
   EXPECT_NE(CheckParams(*start, Json::array(), &field), "");
   EXPECT_EQ(FindMethod("mowing.start"), nullptr);
 }
+
+// The setup condition calibration: a done result, the note of calibration.apply for it, the six values unchanged.
+TEST(CalibrationTaken, ByTheNoteAndTheValues) {
+  const Json result = {{"id", "calib-1"}, {"status", "done"}};
+  Json values = Json::object();
+  for (const auto& key : CalibrationKeys()) values[key] = 0.5;
+  Json params = values;
+  params["calibration_applied"] = {{"result_id", "calib-1"}, {"keys", Json::array()}, {"values", values}};
+  EXPECT_EQ(CalibrationKeys().size(), 6u);
+  EXPECT_TRUE(CalibrationTaken(result, params));
+  Json other = params;
+  other["track"] = 0.5 + 1e-6;
+  EXPECT_FALSE(CalibrationTaken(result, other));
+  other = params;
+  other["blade_ahead"] = 0.3;
+  EXPECT_TRUE(CalibrationTaken(result, other));
+  EXPECT_FALSE(CalibrationTaken({{"id", "calib-2"}, {"status", "done"}}, params));
+  EXPECT_FALSE(CalibrationTaken({{"id", "calib-1"}, {"status", "not_evaluated"}}, params));
+  other = params;
+  other["calibration_applied"] = nullptr;
+  EXPECT_FALSE(CalibrationTaken(result, other));
+  EXPECT_FALSE(CalibrationTaken(Json(), params));
+}

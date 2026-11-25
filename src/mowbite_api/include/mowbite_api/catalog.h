@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 66;
+constexpr int kApi = 67;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -228,6 +228,12 @@ const std::vector<SettingEntry>& LogicSettings();
 std::optional<double> FitSetting(const std::string& name, double value);
 // The keys of the geometry in the order of the answers; robot_outline is the only list the user sets.
 const std::vector<GeometryEntry>& GeometryKeys();
+// The keys of robot.geometry the calibration drive measures and calibration.apply takes.
+const std::vector<std::string>& CalibrationKeys();
+// The calibration counts as taken (setup condition calibration): result (calibration.result) is done,
+// calibration_applied of the geometry params names it, and every key of CalibrationKeys() still has the value it had
+// then.
+bool CalibrationTaken(const Json& result, const Json& geometry_params);
 // A word of schedule.log: what it means, what its detail and more hold (empty: null).
 struct ScheduleLogWord {
   std::string word;

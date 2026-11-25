@@ -81,6 +81,102 @@
       ],
       "type": "object"
     },
+    "calibration.apply.params": {
+      "additionalProperties": false,
+      "description": "The params of calibration.apply: What to take",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        },
+        "keys": {
+          "description": "Keys of x-geometry with calibrated, each with a value that is ok in the result",
+          "items": {
+            "description": "One item",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "keys"
+      ],
+      "type": "object"
+    },
+    "calibration.apply.result": {
+      "additionalProperties": false,
+      "description": "The result of calibration.apply: What was taken and the geometry after it",
+      "properties": {
+        "applied": {
+          "additionalProperties": false,
+          "description": "The last calibration.apply of this result, null before one",
+          "properties": {
+            "geometry_version": {
+              "description": "version of robot.geometry right after it",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "The keys it took, [] for none",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "result_id": {
+              "description": "id of the result it took from",
+              "type": "string"
+            },
+            "t": {
+              "description": "unix s, when",
+              "type": "integer"
+            },
+            "values": {
+              "description": "Each key of x-geometry with calibrated and its value right after it",
+              "type": "object"
+            }
+          },
+          "required": [
+            "result_id",
+            "t",
+            "keys",
+            "geometry_version",
+            "values"
+          ],
+          "type": "object"
+        },
+        "geometry": {
+          "additionalProperties": false,
+          "description": "The geometry now",
+          "properties": {
+            "platform": {
+              "description": "The platform whose file gives the defaults",
+              "type": "string"
+            },
+            "settings": {
+              "description": "By key of x-geometry: value, default (the platform's), stored (entered by the user), type (number, points or shape), unit, min and max of a number, settable, and for a settable key confirmed (unix s the user set or confirmed its value, null before)",
+              "type": "object"
+            },
+            "version": {
+              "description": "Goes up with every change; robot.geometry.set needs the one read last",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "settings",
+            "version",
+            "platform"
+          ],
+          "type": "object"
+        }
+      },
+      "required": [
+        "applied",
+        "geometry"
+      ],
+      "type": "object"
+    },
     "calibration.check.params": {
       "description": "The params of calibration.check: None",
       "type": "object"
@@ -152,6 +248,47 @@
     "calibration.result.result": {
       "description": "The result of calibration.result: As the calibration wrote it",
       "properties": {
+        "applied": {
+          "additionalProperties": false,
+          "description": "The last calibration.apply of this result, null before one",
+          "properties": {
+            "geometry_version": {
+              "description": "version of robot.geometry right after it",
+              "type": "integer"
+            },
+            "keys": {
+              "description": "The keys it took, [] for none",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "result_id": {
+              "description": "id of the result it took from",
+              "type": "string"
+            },
+            "t": {
+              "description": "unix s, when",
+              "type": "integer"
+            },
+            "values": {
+              "description": "Each key of x-geometry with calibrated and its value right after it",
+              "type": "object"
+            }
+          },
+          "required": [
+            "result_id",
+            "t",
+            "keys",
+            "geometry_version",
+            "values"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "geometry_version": {
           "description": "version of robot.geometry the drive ran with, 0 when it was not known; missing in results from before api 66",
           "type": "integer"
@@ -6002,7 +6139,8 @@
             "NO_RTK",
             "STOPPED",
             "INTERRUPTED",
-            "NOT_DONE"
+            "NOT_DONE",
+            "OUTDATED"
           ],
           "type": "string"
         },
@@ -11324,6 +11462,7 @@
                   "map",
                   "dock_test",
                   "mow",
+                  "calibration",
                   null
                 ],
                 "type": [
@@ -17319,11 +17458,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:66",
+  "$id": "urn:mowbite-os:api:67",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 66,
+  "x-api": 67,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17819,6 +17958,7 @@
   ],
   "x-geometry": {
     "antenna_x": {
+      "calibrated": true,
       "description": "GNSS antenna ahead of the drive axle",
       "max": 0.6,
       "min": -0.6,
@@ -17828,6 +17968,7 @@
       "unit": "m"
     },
     "antenna_y": {
+      "calibrated": true,
       "description": "GNSS antenna left of the middle",
       "max": 0.3,
       "min": -0.3,
@@ -17837,6 +17978,7 @@
       "unit": "m"
     },
     "blade_ahead": {
+      "calibrated": false,
       "description": "Centre of the blade ahead of the drive axle",
       "max": 1.5,
       "min": -1.5,
@@ -17846,6 +17988,7 @@
       "unit": "m"
     },
     "blade_offset": {
+      "calibrated": false,
       "description": "Centre of the blade left of the middle",
       "max": 0.75,
       "min": -0.75,
@@ -17855,6 +17998,7 @@
       "unit": "m"
     },
     "dock_contact_x": {
+      "calibrated": false,
       "description": "Charging contacts ahead of the drive axle",
       "max": 1.5,
       "min": -1.5,
@@ -17864,12 +18008,14 @@
       "unit": "m"
     },
     "dock_footprint": {
+      "calibrated": false,
       "description": "Footprint of the docking station as points [x, y] in base_link of the docked mower (x to its front, y left), each at most 1.5 m away; [] for the planner's own",
       "settable": false,
       "type": "points",
       "unit": "m"
     },
     "imu_pitch": {
+      "calibrated": true,
       "description": "Pitch of the IMU against the platform's value",
       "max": 0.087,
       "min": -0.087,
@@ -17879,6 +18025,7 @@
       "unit": "rad"
     },
     "imu_roll": {
+      "calibrated": true,
       "description": "Roll of the IMU against the platform's value",
       "max": 0.087,
       "min": -0.087,
@@ -17888,6 +18035,7 @@
       "unit": "rad"
     },
     "mower_width": {
+      "calibrated": false,
       "description": "Width the blade cuts",
       "max": 1.5,
       "min": 0.05,
@@ -17897,6 +18045,7 @@
       "unit": "m"
     },
     "robot_front": {
+      "calibrated": false,
       "description": "Front of the body ahead of the drive axle (base_link)",
       "max": 1.5,
       "min": 0.0,
@@ -17906,12 +18055,14 @@
       "unit": "m"
     },
     "robot_outline": {
+      "calibrated": false,
       "description": "Outline of the body as points [x, y] from the drive axle, each at most 1.5 m away",
       "settable": true,
       "type": "points",
       "unit": "m"
     },
     "robot_rear": {
+      "calibrated": false,
       "description": "Rear of the body behind the drive axle",
       "max": 1.5,
       "min": 0.0,
@@ -17921,12 +18072,14 @@
       "unit": "m"
     },
     "robot_shape": {
+      "calibrated": false,
       "description": "How the mower looks from above, for the app to draw: parts {id, kind, points [x, y], closed} in the order to draw them, at most 32 parts, 200 points a part and 1000 in all; kind as x-setup.shape_kinds; [] for a platform without one. Shown only: robot_outline stays the body the mower drives and plans with",
       "settable": false,
       "type": "shape",
       "unit": "m"
     },
     "robot_width": {
+      "calibrated": false,
       "description": "Width of the body",
       "max": 1.5,
       "min": 0.1,
@@ -17936,6 +18089,7 @@
       "unit": "m"
     },
     "ticks_per_m": {
+      "calibrated": true,
       "description": "Wheel ticks per metre",
       "max": 10000.0,
       "min": 100.0,
@@ -17945,6 +18099,7 @@
       "unit": "1/m"
     },
     "track": {
+      "calibrated": true,
       "description": "Distance between the wheels",
       "max": 0.8,
       "min": 0.15,
@@ -17954,6 +18109,7 @@
       "unit": "m"
     },
     "wheel_radius": {
+      "calibrated": false,
       "description": "Radius of the drive wheels",
       "max": 0.5,
       "min": 0.02,
@@ -17963,6 +18119,7 @@
       "unit": "m"
     },
     "wheel_width": {
+      "calibrated": false,
       "description": "Width of the tread of the drive wheels; the body has to cover the wheels from above",
       "max": 0.3,
       "min": 0.01,
@@ -17979,6 +18136,13 @@
       "offered": "while the calibration program runs",
       "params": "#/$defs/calibration.abort.params",
       "result": "#/$defs/calibration.abort.result"
+    },
+    "calibration.apply": {
+      "description": "Takes values of the last calibration into robot.geometry, all or nothing, as robot.geometry.set would (in IDLE without a sub state and without a hold: -32600 BUSY or HOLD; a range or rule broken: -32602 with its reason and key). -32600 NO_RESULT without a result with status done, OUTDATED when robot.geometry changed since the drive (version not geometry_version of the result, or the one after its last calibration.apply); -32602 NOT_OK with key for a key without a value that is ok. keys [] takes none on purpose. GEOMETRY_CHANGED follows a change; a second call for the same result replaces applied",
+      "node": "mowbite_logic",
+      "offered": "while the calibration program runs",
+      "params": "#/$defs/calibration.apply.params",
+      "result": "#/$defs/calibration.apply.result"
     },
     "calibration.check": {
       "description": "Whether a calibration drive could start here, without a drive",
@@ -22687,6 +22851,26 @@
           }
         }
       },
+      "OUTDATED": {
+        "class": "cause",
+        "closes": false,
+        "description": "What the step waited for no longer holds (calibration: a new drive, or a value of it set again): the step is open again",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Den Schritt erneut erledigen oder überspringen.",
+            "help": "Was dieser Schritt geprüft hat, gilt nicht mehr.",
+            "name": "Nicht mehr aktuell"
+          },
+          "en": {
+            "fix": "Do the step again or skip it.",
+            "help": "What this step checked no longer holds.",
+            "name": "Out of date"
+          }
+        }
+      },
       "RELEASED": {
         "class": "cause",
         "closes": false,
@@ -25413,6 +25597,7 @@
               "ntrip",
               "station",
               "area",
+              "calibration",
               "dock_test",
               "mow"
             ]
@@ -26668,10 +26853,27 @@
           }
         }
       },
+      "calibration": {
+        "description": "The last calibration drive is evaluated, the user took its values or none on purpose (calibration.apply), and they are still set; a new drive or another value opens the step again (OUTDATED)",
+        "open": "calibration",
+        "order": 3,
+        "texts": {
+          "de": {
+            "fix": "Neue Fahrt oder geänderte Werte öffnen den Schritt wieder. Er kann übersprungen werden.",
+            "help": "Eine Kalibrierfahrt machen und ihre Werte übernehmen, oder bewusst keinen. Der Haken kommt mit der Übernahme.",
+            "name": "Kalibrierfahrt"
+          },
+          "en": {
+            "fix": "A new drive or changed values open the step again. It can be skipped.",
+            "help": "Do a calibration drive and take its values, or none on purpose. The tick comes with taking them.",
+            "name": "Calibration drive"
+          }
+        }
+      },
       "dock_test": {
         "description": "A docking test ended on the contacts",
         "open": "dock_test",
-        "order": 3,
+        "order": 4,
         "texts": {
           "de": {
             "fix": "Schlägt der Test fehl, die Station neu aufnehmen und wiederholen.",
@@ -26688,7 +26890,7 @@
       "mow": {
         "description": "The mower mowed and came back onto the contacts",
         "open": "mow",
-        "order": 4,
+        "order": 5,
         "texts": {
           "de": {
             "fix": "Bleibt der Mäher stehen, zeigt die App den Grund. Danach erneut starten.",
@@ -26980,7 +27182,8 @@
       "dock",
       "map",
       "dock_test",
-      "mow"
+      "mow",
+      "calibration"
     ],
     "points": {
       "area_clear": {

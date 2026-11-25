@@ -84,6 +84,7 @@ class Probe(SimProbe):
         self.map_pub = self.node.create_publisher(MapStatus, "map/status", LATCHED)
         self.ntrip_pub = self.node.create_publisher(NtripStatus, "gnss/ntrip_status", 10)
         self.params_pub = self.node.create_publisher(String, "bridge/params", HISTORY)
+        self.calibration_pub = self.node.create_publisher(String, "calibration/result", LATCHED)
         self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._result, 10)
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._failure, 10)
         self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
@@ -398,6 +399,17 @@ class TestSetup(unittest.TestCase):
             self.probe.switch(dock_contact=True)
         elif condition == "area":
             self.probe.map_pub.publish(MapStatus(docking_stations=1, areas=1, mowing_allowed=True))
+        elif condition == "calibration":
+            # A done result, then the note of calibration.apply for it with the six values as they are.
+            self.probe.calibration_pub.publish(String(data=json.dumps({"id": "calib-1", "status": "done"})))
+            time.sleep(0.5)
+            self.assertEqual(self.probe.step(step)["state"], "open")
+            values = {"ticks_per_m": 1000.0, "track": 0.4, "antenna_x": 0.0, "antenna_y": 0.0, "imu_roll": 0.0,
+                      "imu_pitch": 0.0}
+            confirmed = [key for s in LIST["steps"] if s["check"] == "geometry" for key in param(s["id"], "keys", [])]
+            params = {**values, "version": 4, "confirmed": confirmed,
+                      "calibration_applied": {"result_id": "calib-1", "keys": [], "values": values}}
+            self.probe.params_pub.publish(String(data=json.dumps({"node": "/mowbite_geometry", "params": params})))
         else:
             # Off the contacts and back onto them by itself, with mowing in between for the trial run.
             self.probe.switch(dock_contact=False)

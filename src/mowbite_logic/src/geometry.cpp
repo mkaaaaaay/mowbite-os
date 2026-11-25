@@ -461,10 +461,16 @@ bool Geometry::Load(const std::string& text, std::string* why) {
       confirmed[item.key()] = item.value().get<double>();
     }
   }
+  json applied;
+  if (parsed.contains("calibration_applied") && parsed["calibration_applied"].is_object() &&
+      parsed["calibration_applied"].contains("result_id") && parsed["calibration_applied"]["result_id"].is_string()) {
+    applied = parsed["calibration_applied"];
+  }
   const Values values = Effective(entries);
   if (auto problem = Check(values)) return fail(problem->message);
   entries_ = std::move(entries);
   confirmed_ = std::move(confirmed);
+  calibration_applied_ = std::move(applied);
   now_ = values;
   version_ = version;
   return true;
@@ -484,6 +490,7 @@ std::string Geometry::Text() const {
   file["version"] = version_;
   file["entries"] = std::move(entries);
   if (!confirmed_.empty()) file["confirmed"] = confirmed_;
+  if (!calibration_applied_.is_null()) file["calibration_applied"] = calibration_applied_;
   return file.dump(2) + "\n";
 }
 
@@ -546,7 +553,29 @@ json Geometry::Params() const {
   }
   out["stored"] = std::move(stored);
   out["confirmed"] = std::move(confirmed);
+  out["calibration_applied"] = calibration_applied_;
   return out;
+}
+
+GeometryChange Geometry::ApplyCalibration(const std::string& result_id, const json& settings, double now) {
+  GeometryChange change;
+  if (settings.empty()) {
+    change.ok = true;
+  } else {
+    change = Set({{"version", version_}, {"settings", settings}}, now);
+    if (!change.ok) return change;
+  }
+  json keys = json::array();
+  for (const auto& item : settings.items()) keys.push_back(item.key());
+  json values = json::object();
+  for (const auto& key : mowbite_api::CalibrationKeys()) values[key] = Value(key);
+  calibration_applied_ = {{"result_id", result_id},
+                          {"t", static_cast<int64_t>(std::floor(now))},
+                          {"keys", std::move(keys)},
+                          {"geometry_version", version_},
+                          {"values", std::move(values)}};
+  change.stored = true;
+  return change;
 }
 
 json Geometry::ShapeJson() const {

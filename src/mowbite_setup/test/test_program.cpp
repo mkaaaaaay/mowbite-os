@@ -1069,6 +1069,55 @@ TEST(Program, StepsTheOsSeesEndByThemselves) {
   EXPECT_EQ(bench.StepState("mow")["state"], "ok");
 }
 
+const char* const kCalibrationList = R"({
+  "catalog": 1,
+  "steps": [
+    {"id": "calibration", "stage": "calibration", "check": "done_when", "params": {"condition": "calibration"}}
+  ]
+})";
+
+// Ok once the calibration is taken, open again when a new drive or another value undoes it, ok again or skipped.
+TEST(Program, TheCalibrationStepFollowsTheTakenCalibration) {
+  Bench bench(kCalibrationList);
+  World world;
+  world.state = "IDLE";
+  bench.program.OnWorld(world);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("calibration")["state"], "open");
+  EXPECT_EQ(bench.StepState("calibration")["open"], "calibration");
+  world.calibration = true;
+  bench.program.OnWorld(world);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("calibration")["state"], "ok");
+  bench.Events();
+  world.calibration = false;
+  bench.program.OnWorld(world);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("calibration")["state"], "open");
+  EXPECT_EQ(bench.StepState("calibration")["result"]["reason"], "OUTDATED");
+  const auto events = bench.Events();
+  ASSERT_EQ(events.size(), 1u);
+  EXPECT_EQ(events[0]["type"], "SETUP_STEP");
+  EXPECT_EQ(events[0]["state"], "failed");
+  EXPECT_EQ(events[0]["reason"], "OUTDATED");
+  EXPECT_EQ(events[0]["severity"], "info");
+  // Once only.
+  bench.Run(0.5);
+  EXPECT_TRUE(bench.Events().empty());
+  world.calibration = true;
+  bench.program.OnWorld(world);
+  bench.Run(0.2);
+  EXPECT_EQ(bench.StepState("calibration")["state"], "ok");
+  // Skipped is no lock: the step stays skipped while nothing is taken.
+  world.calibration = false;
+  bench.program.OnWorld(world);
+  bench.Run(0.2);
+  ASSERT_FALSE(bench.program.Skip({{"step", "calibration"}, {"version", bench.program.version()}, {"reason", "later"}},
+                                  kWall));
+  bench.Run(0.5);
+  EXPECT_EQ(bench.StepState("calibration")["state"], "skipped");
+}
+
 TEST(Program, AMowerThatDoesNotComeBackByItselfDidNotDock) {
   Bench bench;
   World world;

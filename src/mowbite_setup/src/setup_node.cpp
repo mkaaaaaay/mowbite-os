@@ -293,6 +293,14 @@ class SetupNode : public rclcpp::Node {
         });
     params_sub_ = create_subscription<std_msgs::msg::String>(
         "bridge/params", LatchedQos(50), [this](std_msgs::msg::String::ConstSharedPtr msg) { OnParams(msg->data); });
+    calibration_sub_ = create_subscription<std_msgs::msg::String>(
+        "calibration/result", LatchedQos(1), [this](std_msgs::msg::String::ConstSharedPtr msg) {
+          const json parsed = json::parse(msg->data, nullptr, false);
+          std::lock_guard<std::mutex> lock(mutex_);
+          calibration_result_ = parsed.is_object() ? parsed : json();
+          world_.calibration = mowbite_api::CalibrationTaken(calibration_result_, geometry_params_);
+          program_->OnWorld(world_);
+        });
     request_sub_ = create_subscription<mowbite_msgs::msg::RpcRequest>(
         "bridge/rpc/request", 100, [this](mowbite_msgs::msg::RpcRequest::ConstSharedPtr msg) { OnRequest(*msg); });
     tick_timer_ = create_wall_timer(std::chrono::milliseconds(50), [this] { OnTick(); });
@@ -424,6 +432,8 @@ class SetupNode : public rclcpp::Node {
     const json& params = parsed["params"];
     if (!params.is_object()) return;
     std::lock_guard<std::mutex> lock(mutex_);
+    geometry_params_ = params;
+    world_.calibration = mowbite_api::CalibrationTaken(calibration_result_, geometry_params_);
     if (params.contains("track") && params["track"].is_number()) {
       track_ = params["track"].get<double>();
       program_->SetTrack(track_);
@@ -793,6 +803,9 @@ class SetupNode : public rclcpp::Node {
   std::map<std::string, Image> images_;
   std::map<std::string, std::pair<std::string, int>> image_infos_;
   World world_;
+  // The last calibration/result and the params of the geometry, for world_.calibration.
+  json calibration_result_;
+  json geometry_params_;
   double write_tried_ = 0;
   bool save_pending_ = false;
   // 50 ms ticks; one after a stall of more than 0.2 s does not judge.
@@ -826,6 +839,7 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::NtripStatus>::SharedPtr ntrip_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::ClockStatus>::SharedPtr clock_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr params_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr calibration_sub_;
   rclcpp::Subscription<mowbite_msgs::msg::RpcRequest>::SharedPtr request_sub_;
   rclcpp::TimerBase::SharedPtr tick_timer_;
   rclcpp::TimerBase::SharedPtr choice_timer_;

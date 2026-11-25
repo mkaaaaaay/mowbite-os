@@ -101,6 +101,23 @@ Field GeometryAnswer() {
                  Text("platform", "The platform whose file gives the defaults")});
 }
 
+// calibration_applied of the geometry, applied in calibration.result: the last calibration.apply.
+Field CalibrationApplied(bool required) {
+  return Object("applied", "The last calibration.apply of this result, null before one",
+                {Text("result_id", "id of the result it took from"), Integer("t", "unix s, when"),
+                 List("keys", "The keys it took, [] for none", Type::kString),
+                 Integer("geometry_version", "version of robot.geometry right after it"),
+                 Object("values", "Each key of x-geometry with calibrated and its value right after it")},
+                required);
+}
+
+// The answer of robot.geometry.get under another name.
+Field GeometryAs(std::string name) {
+  Field field = GeometryAnswer();
+  field.name = std::move(name);
+  return field;
+}
+
 // An effect of the lights, as light.get_profile has its effects and limits.
 Field LightEffect(std::string name, std::string text) {
   return Object(std::move(name), std::move(text),
@@ -906,8 +923,22 @@ const std::vector<Method>& Methods() {
                             {Integer("geometry_version",
                                      "version of robot.geometry the drive ran with, 0 when it was not known; missing "
                                      "in results from before api 66",
-                                     false)}))),
+                                     false),
+                             Nullable(CalibrationApplied(false))}))),
        ""},
+      {"calibration.apply", "mowbite_logic",
+       "Takes values of the last calibration into robot.geometry, all or nothing, as robot.geometry.set would (in IDLE "
+       "without a sub state and without a hold: -32600 BUSY or HOLD; a range or rule broken: -32602 with its reason "
+       "and key). -32600 NO_RESULT without a result with status done, OUTDATED when robot.geometry changed since the "
+       "drive (version not geometry_version of the result, or the one after its last calibration.apply); -32602 "
+       "NOT_OK with key for a key without a value that is ok. keys [] takes none on purpose. GEOMETRY_CHANGED follows "
+       "a change; a second call for the same result replaces applied",
+       Object("params", "What to take",
+              {List("keys", "Keys of x-geometry with calibrated, each with a value that is ok in the result",
+                    Type::kString),
+               Client()}),
+       Object("result", "What was taken and the geometry after it", {CalibrationApplied(true), GeometryAs("geometry")}),
+       "while the calibration program runs"},
       {"schedule.get", "mowbite_schedule", "The schedule, whether it may start, the clock and the sun", NoParams(),
        ScheduleAnswer(), ""},
       {"schedule.set", "mowbite_schedule",
@@ -1623,6 +1654,26 @@ std::optional<double> FitSetting(const std::string& name, double value) {
     if (setting.name == name) return std::clamp(setting.integer ? std::round(value) : value, setting.min, setting.max);
   }
   return std::nullopt;
+}
+
+const std::vector<std::string>& CalibrationKeys() {
+  static const std::vector<std::string> keys = {"ticks_per_m", "track", "antenna_x", "antenna_y", "imu_roll",
+                                                "imu_pitch"};
+  return keys;
+}
+
+bool CalibrationTaken(const Json& result, const Json& geometry_params) {
+  if (!result.is_object() || result.value("status", "") != "done" || !geometry_params.is_object()) return false;
+  const Json applied = geometry_params.value("calibration_applied", Json());
+  if (!applied.is_object() || !result.contains("id") || applied.value("result_id", Json()) != result["id"]) {
+    return false;
+  }
+  const Json values = applied.value("values", Json::object());
+  return std::all_of(CalibrationKeys().begin(), CalibrationKeys().end(), [&](const std::string& key) {
+    const Json now = geometry_params.value(key, Json());
+    const Json then = values.is_object() ? values.value(key, Json()) : Json();
+    return now.is_number() && then.is_number() && std::abs(now.get<double>() - then.get<double>()) <= 1e-9;
+  });
 }
 
 const std::vector<GeometryEntry>& GeometryKeys() {
