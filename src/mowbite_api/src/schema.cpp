@@ -169,7 +169,7 @@ Json Reasons(const EventEntry& event) {
     Json fields = Json::object();
     for (const auto& field : reason.fields) fields[field.name] = field.unit;
     Json entry = {{"severity", reason.severity}, {"resume", reason.resume}, {"description", reason.text},
-                  {"fields", fields}};
+                  {"fields", fields}, {"class", reason.cls}};
     if (event.type == "SETUP_STEP") entry["closes"] = reason.closes;
     if (!reason.texts.empty()) entry["texts"] = Texts(reason.texts);
     if (out.contains(reason.code) && out[reason.code].contains("when")) entry["when"] = out[reason.code]["when"];
@@ -366,7 +366,7 @@ Json BuildSchema(const Json& planner) {
           {"description", "null with ok, else the word schedule.log would write, see x-schedule-log"}}}}}};
   Json bits = Json::array();
   for (const auto& bit : EmergencyBits()) {
-    Json entry = {{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}};
+    Json entry = {{"bit", bit.bit}, {"name", bit.name}, {"description", bit.text}, {"class", bit.cls}};
     if (!bit.texts.empty()) entry["texts"] = Texts(bit.texts);
     bits.push_back(entry);
   }
@@ -375,11 +375,13 @@ Json BuildSchema(const Json& planner) {
                  {"title", "MowBite OS app interface"},
                  {"description",
                   "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; "
-                  "made from the code, objects sorted by key. x-reasons has severity and resume of every reason by "
-                  "event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these "
+                  "made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it "
+                  "explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED "
+                  "and REQUEST_REFUSED only in refusals; when: another rating for these "
                   "field values; texts: name, help and fix by language; an enum field may carry the same by value as "
                   "x-texts), x-emergency-bits the bits of "
-                  "emergency, x-commands the commands with params, result, the event of their refusal and the actions "
+                  "emergency with their class, x-commands the commands with params, result, the event of their "
+                  "refusal and the actions "
                   "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id and key (an id with "
                   "openmower_names has the key of its own id), x-settings the settings of params.set "

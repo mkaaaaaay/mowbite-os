@@ -12,6 +12,7 @@
 
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/setup.h"
+#include "../src/internal.h"
 
 using namespace mowbite_api;
 
@@ -228,6 +229,45 @@ TEST(Catalog, EmergencyBits) {
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 21)), "LATCH, UNEXPECTED_RESTART");
   EXPECT_EQ(EmergencyNames((1 << 0) | (1 << 22)), "LATCH, INPUTS_LEARNING");
   EXPECT_EQ(EmergencyNames(1 << 23), "BOARD_NOT_HEARD");
+}
+
+// Every reason and bit has a class; the table of symptoms names only reasons there are (FP23 B2c, Master 15.11.).
+TEST(Catalog, ClassOfEveryReasonAndBit) {
+  for (const auto* groups : {&Events(), &Refusals()}) {
+    for (const auto& group : *groups) {
+      for (const auto& reason : group.reasons) {
+        EXPECT_TRUE(reason.cls == kCause || reason.cls == kSymptom) << group.type << "/" << reason.code;
+      }
+    }
+  }
+  for (const auto& [type, codes] : ReasonSymptoms()) {
+    const EventEntry* group = FindReasonGroup(type);
+    ASSERT_NE(group, nullptr) << type;
+    for (const auto& code : codes) {
+      if (code == "*") continue;
+      EXPECT_NE(FindReason(type, code), nullptr) << type << "/" << code;
+    }
+  }
+  for (const auto& bit : EmergencyBits()) EXPECT_TRUE(bit.cls == kCause || bit.cls == kSymptom) << bit.name;
+  // Samples of the list: a precondition at the start is a cause, the same lost while working a symptom.
+  EXPECT_EQ(ReasonClass("MOWING_REFUSED", "NO_POSITION"), kCause);
+  EXPECT_EQ(ReasonClass("STATE", "NO_POSITION"), kSymptom);
+  EXPECT_EQ(ReasonClass("DOCKING", "RAIN"), kCause);
+  EXPECT_EQ(ReasonClass("STATE", "EMERGENCY"), kSymptom);
+  EXPECT_EQ(ReasonClass("DOCKING_FAILED", "dock_failed"), kSymptom);
+  EXPECT_EQ(ReasonClass("UNEXPECTED_RESTART", "POWER_LOSS"), kSymptom);
+  EXPECT_EQ(ReasonClass("INCIDENT", "STOP"), kSymptom);
+  EXPECT_EQ(ReasonClass("STATE", "NO_SUCH_REASON"), kSymptom);
+  EXPECT_EQ(ReasonClass("NO_SUCH_EVENT", "RAIN"), kSymptom);
+  // A bit that names why the mower stopped is a cause, one of a silent part a symptom.
+  for (const int bit : {2, 3, 5, 13, 17, 22}) EXPECT_EQ(EmergencyBits()[bit].cls, kCause) << bit;
+  for (const int bit : {0, 1, 6, 7, 16, 20, 21, 23}) EXPECT_EQ(EmergencyBits()[bit].cls, kSymptom) << bit;
+  // The bit that tells most: a cause first, else not LATCH.
+  EXPECT_EQ(EmergencyReasonBit(0), nullptr);
+  EXPECT_EQ(EmergencyReasonBit(1 << 30), nullptr);
+  EXPECT_EQ(EmergencyReasonBit((1 << 0) | (1 << 6) | (1 << 13))->name, "TILT");
+  EXPECT_EQ(EmergencyReasonBit((1 << 0) | (1 << 6))->name, "TIMEOUT_HIGH_LEVEL");
+  EXPECT_EQ(EmergencyReasonBit(1 << 0)->name, "LATCH");
 }
 
 // Home Assistant reads the names from the log line with [A-Z_, ]: each bit, set alone, gives a name that fits it.

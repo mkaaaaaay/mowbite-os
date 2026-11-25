@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <iterator>
 #include <map>
+#include <set>
 #include <string>
 
 #include "fields.h"
@@ -298,6 +299,34 @@ Field StatsAnswer() {
              UnixTime("done_at", "Last seen to, 0 not since counting started")})});
 }
 
+Field StopBookAnswer() {
+  const auto cls = [] {
+    return Text("class", "cause or symptom of the reason, see x-reasons", true, {kCause, kSymptom});
+  };
+  const std::string reason =
+      "TYPE/REASON of the event that explained it, EMERGENCY/BIT for an emergency, TYPE/REASON or UNKNOWN of the best "
+      "hint when none did; STANDSTILL and MARK for those kinds";
+  return Object(
+      "result", "The stop book",
+      {Integer("schema", "Always 1"),
+       Rows("weeks", "Each ISO week with something in it, oldest first, the one going on last",
+            {Text("week", "As 2026-W48"), UnixTime("start", "Its Monday 00:00 UTC"),
+             Integer("stops", "Stops without a command"),
+             Integer("unexplained", "Of them those no event explained in time, and marks without a stop"),
+             Integer("standstills", "Times it stood still while busy, not counted as stops"),
+             Number("blade_h", "h", "Hours the blade turned, as stats.get counts them"),
+             Rows("reasons", "Counts by reason, most first",
+                  {Text("reason", reason), cls(), Integer("count", "How often")})}),
+       Rows("last", "The last stops, standstills and marks, newest first",
+            {UnixTime("t", "When"), Text("activity", "What the mower did then", true, kStopActivities),
+             Text("kind",
+                  "stop; standstill: stood still while busy, only observed; mark: incidents.mark without a stop "
+                  "before",
+                  true, {"stop", "standstill", "mark"}),
+             Text("reason", reason), cls(), Bool("explained", "An event of class cause explained it in time"),
+             Text("incident", "The incident about it, empty for none")})});
+}
+
 // The version of a planner or an app; the OS has none besides its revision.
 Field Version() {
   return Nullable(Text("version", "Its version, null for os"));
@@ -490,8 +519,18 @@ const std::vector<Field>& LogicFields() {
   return fields;
 }
 
+// The bits with their class: these only tell that a part is silent or timed out, the others why the mower stopped.
+std::vector<EmergencyBit> ClassifiedBits(std::vector<EmergencyBit> bits) {
+  static const std::set<std::string> symptoms = {"LATCH",           "TIMEOUT_INPUTS",    "TIMEOUT_HIGH_LEVEL",
+                                                 "HIGH_LEVEL",      "SERVICE_NOT_READY", "MOWER_RPM_TIMEOUT",
+                                                 "IMU_TIMEOUT",     "DRIVER_STALL",      "UNEXPECTED_RESTART",
+                                                 "BOARD_NOT_HEARD"};
+  for (auto& bit : bits) bit.cls = symptoms.count(bit.name) != 0 ? kSymptom : kCause;
+  return bits;
+}
+
 const std::vector<EmergencyBit>& EmergencyBits() {
-  static const std::vector<EmergencyBit> bits = {
+  static const std::vector<EmergencyBit> bits = ClassifiedBits({
       {0, "LATCH", "The emergency holds until it is reset"},
       {1, "TIMEOUT_INPUTS", "The inputs of the board did not report in time"},
       {2, "STOP", "A stop button was pressed"},
@@ -553,7 +592,7 @@ const std::vector<EmergencyBit>& EmergencyBits() {
          {"Board not answering",
           "No board of the chosen mower reports at its port. MowBite OS sends nothing there.",
           "Check that the right mower is chosen and the board has power. Else choose another mower in the setup."}}}},
-  };
+  });
   return bits;
 }
 
@@ -897,6 +936,11 @@ const std::vector<Method>& Methods() {
               {Text("part", "Its key", true, {"blade", "clean"}),
                Whole("hours", "h", 1, kStatsMaxDueHours, "Blade hours")}),
        StatsAnswer(), ""},
+      {"stats.stops", "mowbite_stats",
+       "The stop book: stops without a command by reason and ISO week (UTC, the last " +
+           std::to_string(kStopBookWeeks) + "), and the last " + std::to_string(kStopBookLast) +
+           "; a stop no event explains opens an incident",
+       Object("params", "None", {Client()}, false), StopBookAnswer(), ""},
       {"journal.status", "mowbite_stats", "What the journal of the OS keeps, and its incidents", NoParams(),
        Object("result", "The journal and its incidents",
               {Bool("enabled", "Whether the OS records a journal (journal_enabled; a change counts from the next start)"),
@@ -1648,13 +1692,38 @@ bool ReasonFits(const ReasonEntry& reason, const std::string& code, const Json& 
   return true;
 }
 
+const ReasonEntry* FindReason(const std::string& event, const std::string& code, const Json& details) {
+  const EventEntry* entry = FindReasonGroup(event);
+  if (!entry) return nullptr;
+  for (const auto& reason : entry->reasons) {
+    if (ReasonFits(reason, code, details)) return &reason;
+  }
+  return nullptr;
+}
+
 Rating RateReason(const std::string& event, const std::string& code, const Json& details) {
+  if (const ReasonEntry* reason = FindReason(event, code, details)) {
+    return {reason->severity.c_str(), reason->resume.c_str()};
+  }
   const EventEntry* entry = FindReasonGroup(event);
   if (!entry) return {"warning", "user"};
-  for (const auto& reason : entry->reasons) {
-    if (ReasonFits(reason, code, details)) return {reason.severity.c_str(), reason.resume.c_str()};
-  }
   return {entry->other_severity.c_str(), entry->other_resume.c_str()};
+}
+
+const std::string& ReasonClass(const std::string& event, const std::string& code) {
+  static const std::string symptom = kSymptom;
+  const ReasonEntry* reason = FindReason(event, code);
+  return reason ? reason->cls : symptom;
+}
+
+const EmergencyBit* EmergencyReasonBit(int bits) {
+  const EmergencyBit* found = nullptr;
+  for (const auto& bit : EmergencyBits()) {
+    if ((static_cast<uint32_t>(bits) & (1u << bit.bit)) == 0) continue;
+    if (bit.cls == kCause) return &bit;
+    if (!found || found->name == "LATCH") found = &bit;
+  }
+  return found;
 }
 
 std::vector<std::string> EmergencyNameList(int bits) {

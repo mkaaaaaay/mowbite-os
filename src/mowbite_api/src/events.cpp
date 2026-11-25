@@ -1,4 +1,5 @@
 #include <map>
+#include <set>
 
 #include "fields.h"
 #include "internal.h"
@@ -1235,7 +1236,8 @@ std::vector<ReasonEntry> IncidentKinds() {
           kind("POSITION_JUMP", "The position jumped back onto GPS"),
           kind("FOLLOWER_MISSING", "The path follower did not answer"),
           kind("BLADE_REFUSED", "The driver refused to start the blade"),
-          kind("MARK", "The user marked the last minutes (incidents.mark)")};
+          kind("MARK", "The user marked the last minutes (incidents.mark)"),
+          kind("STOP", "The mower stopped without a command and no event told a cause (stats.stops)")};
 }
 
 // severity and resume of an event that is always a notice.
@@ -1346,8 +1348,68 @@ Field Guide() {
 
 }  // namespace
 
+const std::map<std::string, std::set<std::string>>& ReasonSymptoms() {
+  static const std::map<std::string, std::set<std::string>> symptoms = {
+      {"CALIBRATION_FAILED",
+       {"CALIBRATION_MISSING", "EMERGENCY", "LEFT_LANE", "NOT_MOVING", "NOT_TURNING", "OVERSPEED", "POSE_LOST",
+        "SENSOR_MISSING", "STOPPED", "TIMEOUT"}},
+      {"CALIBRATION_REFUSED", {"CALIBRATION_MISSING", "EMERGENCY", "SENSOR_MISSING"}},
+      {"CAMERA_CHANGED", {"DRIVER_MISSING", "NO_SIGNAL"}},
+      {"CAMERA_REFUSED", {"DRIVER_MISSING", "NO_SIGNAL"}},
+      {"CAMERA_UNLOCK_REFUSED", {"FAILED", "TIMEOUT"}},
+      {"CORRECTIONS", {"LOST"}},
+      {"DOCKING", {"PLANNER_MISSING", "PLANNER_TIMEOUT"}},
+      {"DOCKING_FAILED", {"NO_HEADING", "NO_POSITION", "approach_failed", "dock_failed"}},
+      {"DOCKING_RETRY", {"approach_failed", "dock_failed"}},
+      {"DOCKING_TEST_RUN", {"NO_HEADING", "NO_POSITION", "STOPPED", "approach_failed", "dock_failed"}},
+      {"DRIVE",
+       {"CANCELED", "CROSS_TRACK", "EMERGENCY", "FOLLOWER_MISSING", "FOLLOWER_REFUSED", "INVALID", "PLANNER_MISSING",
+        "PLANNER_TIMEOUT", "POSE_LOST", "STOPPED", "TIMEOUT", "TRANSIT_FAILED"}},
+      {"DRIVE_REFUSED", {"EMERGENCY", "FOLLOWER_MISSING", "PLANNER_MISSING"}},
+      {"EMERGENCY_RESET_REFUSED", {"DRIVER_MISSING", "NO_ANSWER", "SAFETY_MISSING", "STILL_ACTIVE", "TILT_UNKNOWN"}},
+      {"HOST_OS", {"CRASH_LOOP", "DATA_ERROR"}},
+      {"INCIDENT", {"*"}},
+      {"MOWING_REFUSED", {"EMERGENCY", "FOLLOWER_MISSING", "PLANNER_MISSING"}},
+      {"OBSTACLE_SIGHT", {"NO_SIGNAL"}},
+      {"RECORDED_BODY_KEPT", {"SAVE_FAILED"}},
+      {"RECORDING_REFUSED", {"EMERGENCY", "SAVE_FAILED"}},
+      {"SETUP_BLOCKED", {"DRIVER_MISSING", "EMERGENCY", "NO_DATA"}},
+      {"SETUP_REFUSED", {"DRIVER_MISSING", "EMERGENCY"}},
+      {"SETUP_STEP",
+       {"DRIVER_REFUSED", "EMERGENCY", "INTERRUPTED", "LINE_SILENT", "LOGIC_REFUSED", "NOT_APPLIED", "NOT_SEEN",
+        "NO_DATA", "NO_LINE", "NO_RESTART", "NO_RETURN", "NO_START", "RESTART_FAILED"}},
+      {"SOUND_REFUSED", {"EMERGENCY"}},
+      {"STATE",
+       {"APPROACH_FAILED", "BLADE_REFUSED", "BLADE_SPINUP_FAILED", "CROSS_TRACK", "EMERGENCY", "FOLLOWER_MISSING",
+        "INVALID", "NO_HEADING", "NO_POSITION", "PLANNING_FAILED", "POSE_LOST", "TIMEOUT"}},
+      {"UNDOCKING_FAILED", {"no_gps", "path_failed"}},
+      {"UNEXPECTED_RESTART", {"*"}},
+      {"UPDATE", {"EMERGENCY", "INTERNAL", "INTERRUPTED", "KERNEL_CRASH", "UNFINISHED", "UNHEALTHY"}},
+      {"UPDATE_REFUSED",
+       {"EMERGENCY", "INTERNAL", "KERNEL_CRASH", "NO_HOLD", "START_NOT_OK", "UNFINISHED", "WIFI_FAILED"}},
+  };
+  return symptoms;
+}
+
+namespace {
+
+// The entries with the class of each reason.
+std::vector<EventEntry> Classified(std::vector<EventEntry> entries) {
+  for (auto& entry : entries) {
+    const auto found = ReasonSymptoms().find(entry.type);
+    const std::set<std::string>* symptoms = found == ReasonSymptoms().end() ? nullptr : &found->second;
+    for (auto& reason : entry.reasons) {
+      const bool symptom = symptoms && (symptoms->count("*") != 0 || symptoms->count(reason.code) != 0);
+      reason.cls = symptom ? kSymptom : kCause;
+    }
+  }
+  return entries;
+}
+
+}  // namespace
+
 const std::vector<EventEntry>& Events() {
-  static const std::vector<EventEntry> events = {
+  static const std::vector<EventEntry> events = Classified({
       Event("BOOTED", "bridge", "The OS started; sent again with the same id after the first connect"),
       Event("SHUTDOWN", "bridge", "The OS stops"),
       Event("STATE", "logic", "The state changed; a pause carries its reason",
@@ -1784,7 +1846,7 @@ const std::vector<EventEntry>& Events() {
             Notice({Names("added", "Methods offered now"), Names("removed", "Methods no longer offered")})),
       SetupStepEvent(),
       SetupProgramEvent(),
-  };
+  });
   return events;
 }
 
@@ -1938,7 +2000,7 @@ std::vector<ReasonEntry> UpdateReasons() {
 }
 
 const std::vector<EventEntry>& Refusals() {
-  static const std::vector<EventEntry> groups = {
+  static const std::vector<EventEntry> groups = Classified({
       Event("COMMAND_REFUSED", "answer",
             "A command was refused for a reason no event tells: the data of its -32600, never an event",
             Rated(true, {Text("event", "The event whose texts the reason has: a *_REFUSED type or COMMAND_REFUSED",
@@ -1983,7 +2045,7 @@ const std::vector<EventEntry>& Refusals() {
             "error", "user"),
       SetupRefused(),
       SetupBlocked(),
-  };
+  });
   return groups;
 }
 

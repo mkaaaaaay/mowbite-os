@@ -4442,7 +4442,8 @@
             "POSITION_JUMP",
             "FOLLOWER_MISSING",
             "BLADE_REFUSED",
-            "MARK"
+            "MARK",
+            "STOP"
           ],
           "type": "string"
         },
@@ -12794,6 +12795,179 @@
       ],
       "type": "object"
     },
+    "stats.stops.params": {
+      "additionalProperties": false,
+      "description": "The params of stats.stops: None",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "stats.stops.result": {
+      "additionalProperties": false,
+      "description": "The result of stats.stops: The stop book",
+      "properties": {
+        "last": {
+          "description": "The last stops, standstills and marks, newest first",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "activity": {
+                "description": "What the mower did then",
+                "enum": [
+                  "MOWING",
+                  "UNDOCKING",
+                  "DOCKING",
+                  "DRIVING",
+                  "CALIBRATING",
+                  "IDLE"
+                ],
+                "type": "string"
+              },
+              "class": {
+                "description": "cause or symptom of the reason, see x-reasons",
+                "enum": [
+                  "cause",
+                  "symptom"
+                ],
+                "type": "string"
+              },
+              "explained": {
+                "description": "An event of class cause explained it in time",
+                "type": "boolean"
+              },
+              "incident": {
+                "description": "The incident about it, empty for none",
+                "type": "string"
+              },
+              "kind": {
+                "description": "stop; standstill: stood still while busy, only observed; mark: incidents.mark without a stop before",
+                "enum": [
+                  "stop",
+                  "standstill",
+                  "mark"
+                ],
+                "type": "string"
+              },
+              "reason": {
+                "description": "TYPE/REASON of the event that explained it, EMERGENCY/BIT for an emergency, TYPE/REASON or UNKNOWN of the best hint when none did; STANDSTILL and MARK for those kinds",
+                "type": "string"
+              },
+              "t": {
+                "description": "When",
+                "type": "integer",
+                "x-unit": "unix s"
+              }
+            },
+            "required": [
+              "t",
+              "activity",
+              "kind",
+              "reason",
+              "class",
+              "explained",
+              "incident"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "description": "Always 1",
+          "type": "integer"
+        },
+        "weeks": {
+          "description": "Each ISO week with something in it, oldest first, the one going on last",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "blade_h": {
+                "description": "Hours the blade turned, as stats.get counts them",
+                "type": "number",
+                "x-unit": "h"
+              },
+              "reasons": {
+                "description": "Counts by reason, most first",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One item",
+                  "properties": {
+                    "class": {
+                      "description": "cause or symptom of the reason, see x-reasons",
+                      "enum": [
+                        "cause",
+                        "symptom"
+                      ],
+                      "type": "string"
+                    },
+                    "count": {
+                      "description": "How often",
+                      "type": "integer"
+                    },
+                    "reason": {
+                      "description": "TYPE/REASON of the event that explained it, EMERGENCY/BIT for an emergency, TYPE/REASON or UNKNOWN of the best hint when none did; STANDSTILL and MARK for those kinds",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "reason",
+                    "class",
+                    "count"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "standstills": {
+                "description": "Times it stood still while busy, not counted as stops",
+                "type": "integer"
+              },
+              "start": {
+                "description": "Its Monday 00:00 UTC",
+                "type": "integer",
+                "x-unit": "unix s"
+              },
+              "stops": {
+                "description": "Stops without a command",
+                "type": "integer"
+              },
+              "unexplained": {
+                "description": "Of them those no event explained in time, and marks without a stop",
+                "type": "integer"
+              },
+              "week": {
+                "description": "As 2026-W48",
+                "type": "string"
+              }
+            },
+            "required": [
+              "week",
+              "start",
+              "stops",
+              "unexplained",
+              "standstills",
+              "blade_h",
+              "reasons"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema",
+        "weeks",
+        "last"
+      ],
+      "type": "object"
+    },
     "system.api.params": {
       "additionalProperties": false,
       "description": "The params of system.api",
@@ -17121,11 +17295,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:64",
+  "$id": "urn:mowbite-os:api:65",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
+  "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 64,
+  "x-api": 65,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17440,111 +17614,133 @@
   "x-emergency-bits": [
     {
       "bit": 0,
+      "class": "symptom",
       "description": "The emergency holds until it is reset",
       "name": "LATCH"
     },
     {
       "bit": 1,
+      "class": "symptom",
       "description": "The inputs of the board did not report in time",
       "name": "TIMEOUT_INPUTS"
     },
     {
       "bit": 2,
+      "class": "cause",
       "description": "A stop button was pressed",
       "name": "STOP"
     },
     {
       "bit": 3,
+      "class": "cause",
       "description": "The mower was lifted",
       "name": "LIFT"
     },
     {
       "bit": 4,
+      "class": "cause",
       "description": "More than one lift sensor triggered",
       "name": "LIFT_MULTIPLE"
     },
     {
       "bit": 5,
+      "class": "cause",
       "description": "A bumper hit something",
       "name": "COLLISION"
     },
     {
       "bit": 6,
+      "class": "symptom",
       "description": "The board heard nothing from the OS in time",
       "name": "TIMEOUT_HIGH_LEVEL"
     },
     {
       "bit": 7,
+      "class": "symptom",
       "description": "The OS asked for the emergency",
       "name": "HIGH_LEVEL"
     },
     {
       "bit": 8,
+      "class": "symptom",
       "description": "A service of the board was not ready",
       "name": "SERVICE_NOT_READY"
     },
     {
       "bit": 9,
+      "class": "cause",
       "description": "More than one bumper triggered",
       "name": "COLLISION_MULTIPLE"
     },
     {
       "bit": 10,
+      "class": "symptom",
       "description": "The blade motor did not report its speed in time",
       "name": "MOWER_RPM_TIMEOUT"
     },
     {
       "bit": 11,
+      "class": "cause",
       "description": "The blade motor turned outside its limits",
       "name": "MOWER_RPM_LIMIT"
     },
     {
       "bit": 12,
+      "class": "cause",
       "description": "The firmware of the board does not fit the driver",
       "name": "FIRMWARE_INCOMPATIBLE"
     },
     {
       "bit": 13,
+      "class": "cause",
       "description": "The body tilted beyond its limit",
       "name": "TILT"
     },
     {
       "bit": 14,
+      "class": "cause",
       "description": "An autonomous drive took the mower outside of the allowed areas",
       "name": "FENCE"
     },
     {
       "bit": 15,
+      "class": "cause",
       "description": "The wheels do not move the mower as GNSS shows it",
       "name": "STUCK"
     },
     {
       "bit": 16,
+      "class": "symptom",
       "description": "No IMU sample for the board, whose tilt detection depends on it",
       "name": "IMU_TIMEOUT"
     },
     {
       "bit": 17,
+      "class": "cause",
       "description": "The blade still turns after it was switched off",
       "name": "MOWER_NOT_STOPPED"
     },
     {
       "bit": 18,
+      "class": "cause",
       "description": "A wheel turned against the drive command",
       "name": "WHEEL_RUNAWAY"
     },
     {
       "bit": 19,
+      "class": "cause",
       "description": "Another host talks to the board",
       "name": "FOREIGN_HOST"
     },
     {
       "bit": 20,
+      "class": "symptom",
       "description": "The input and output of the driver stalled",
       "name": "DRIVER_STALL"
     },
     {
       "bit": 21,
+      "class": "symptom",
       "description": "The OS started after a kernel crash or after an end without its own stop while the mower worked; it holds until emergency.reset, also after power off and on",
       "name": "UNEXPECTED_RESTART",
       "texts": {
@@ -17562,6 +17758,7 @@
     },
     {
       "bit": 22,
+      "class": "cause",
       "description": "The driver was started to learn its inputs (step inputs_assign of the setup): it watches its candidate lines, none of them stops anything, so it holds the mower until it starts without; no release ends it",
       "name": "INPUTS_LEARNING",
       "texts": {
@@ -17579,6 +17776,7 @@
     },
     {
       "bit": 23,
+      "class": "symptom",
       "description": "The driver opened its port and heard no frame of its board since: it sends nothing there until one comes, so a mower chosen wrong talks to no other board. The first frame ends it without a release",
       "name": "BOARD_NOT_HEARD",
       "texts": {
@@ -18409,6 +18607,13 @@
       "params": "#/$defs/stats.part_due.params",
       "result": "#/$defs/stats.part_due.result"
     },
+    "stats.stops": {
+      "description": "The stop book: stops without a command by reason and ISO week (UTC, the last 8), and the last 200; a stop no event explains opens an incident",
+      "node": "mowbite_stats",
+      "offered": "",
+      "params": "#/$defs/stats.stops.params",
+      "result": "#/$defs/stats.stops.result"
+    },
     "system.api": {
       "description": "This interface as JSON Schema with its version",
       "node": "mowbite_bridge",
@@ -18522,6 +18727,7 @@
   "x-reasons": {
     "AREA_SKIPPED": {
       "BODY_OUT": {
+        "class": "cause",
         "description": "The mower would stick out past the edges of the area on its plan",
         "fields": {},
         "resume": "auto",
@@ -18540,12 +18746,14 @@
         }
       },
       "MANUAL": {
+        "class": "cause",
         "description": "By the user",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "NO_PLAN": {
+        "class": "cause",
         "description": "The planner cannot plan this area as asked",
         "fields": {},
         "resume": "auto",
@@ -18564,6 +18772,7 @@
         }
       },
       "SCHEDULE": {
+        "class": "cause",
         "description": "The schedule: the time of the plan is over, or its areas are paused",
         "fields": {
           "detail": ""
@@ -18584,6 +18793,7 @@
         }
       },
       "START_UNREACHABLE": {
+        "class": "cause",
         "description": "No part of the plan can be reached from where the mower stands",
         "fields": {},
         "resume": "auto",
@@ -18604,6 +18814,7 @@
     },
     "CALIBRATION_FAILED": {
       "BATTERY_LOW": {
+        "class": "cause",
         "description": "The battery is too low",
         "fields": {
           "battery_percentage": "%",
@@ -18614,6 +18825,7 @@
         "severity": "warning"
       },
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -18622,6 +18834,7 @@
         "severity": "error"
       },
       "CALIBRATION_MISSING": {
+        "class": "symptom",
         "description": "The calibration program is not running or gave no sign",
         "fields": {
           "limit": "s",
@@ -18631,24 +18844,28 @@
         "severity": "error"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "GYRO_OFFSET": {
+        "class": "cause",
         "description": "The gyro does not read zero while the mower stands",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "GYRO_SIGN": {
+        "class": "cause",
         "description": "The gyro turns the other way than the wheels",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "IMU_GRAVITY": {
+        "class": "cause",
         "description": "The IMU does not measure gravity as it should",
         "fields": {
           "gravity": "m/s2",
@@ -18658,30 +18875,35 @@
         "severity": "error"
       },
       "LEFT_LANE": {
+        "class": "symptom",
         "description": "The mower left its lane",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NOT_MOVING": {
+        "class": "symptom",
         "description": "The mower does not move",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NOT_STANDING": {
+        "class": "cause",
         "description": "The mower moves while it should stand",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NOT_TURNING": {
+        "class": "symptom",
         "description": "The mower does not turn",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_ROOM": {
+        "class": "cause",
         "description": "No room for a calibration drive here",
         "fields": {
           "free_length": "m",
@@ -18693,6 +18915,7 @@
         "severity": "warning"
       },
       "NO_RTK": {
+        "class": "cause",
         "description": "No RTK fix",
         "fields": {
           "limit": "m"
@@ -18701,24 +18924,28 @@
         "severity": "warning"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "OVERSPEED": {
+        "class": "symptom",
         "description": "The mower drove faster than it should",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSE_LOST": {
+        "class": "symptom",
         "description": "The position stopped coming",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -18728,6 +18955,7 @@
         "severity": "warning"
       },
       "POSITION_JUMP": {
+        "class": "cause",
         "description": "The position jumped back onto GPS",
         "fields": {
           "distance": "m"
@@ -18736,6 +18964,7 @@
         "severity": "warning"
       },
       "SENSOR_MISSING": {
+        "class": "symptom",
         "description": "A sensor the calibration needs does not report",
         "fields": {
           "limit": "1/s",
@@ -18745,6 +18974,7 @@
         "severity": "error"
       },
       "SLOPE": {
+        "class": "cause",
         "description": "The ground is too steep",
         "fields": {
           "limit": "deg",
@@ -18754,12 +18984,14 @@
         "severity": "warning"
       },
       "STOPPED": {
+        "class": "symptom",
         "description": "Stopped by the app or by the logic",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "TIMEOUT": {
+        "class": "symptom",
         "description": "It took too long",
         "fields": {},
         "resume": "user",
@@ -18768,6 +19000,7 @@
     },
     "CALIBRATION_REFUSED": {
       "BATTERY_LOW": {
+        "class": "cause",
         "description": "The battery is too low",
         "fields": {
           "battery_percentage": "%",
@@ -18778,6 +19011,7 @@
         "severity": "warning"
       },
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -18786,6 +19020,7 @@
         "severity": "info"
       },
       "CALIBRATION_MISSING": {
+        "class": "symptom",
         "description": "The calibration program is not running or gave no sign",
         "fields": {
           "limit": "s",
@@ -18795,12 +19030,14 @@
         "severity": "error"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "GNSS_RATE": {
+        "class": "cause",
         "description": "The GNSS reports too seldom",
         "fields": {
           "limit": "1/s",
@@ -18810,6 +19047,7 @@
         "severity": "warning"
       },
       "HOLD": {
+        "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
         "fields": {
           "until": "unix s"
@@ -18818,6 +19056,7 @@
         "severity": "info"
       },
       "IMU_GRAVITY": {
+        "class": "cause",
         "description": "The IMU does not measure gravity as it should",
         "fields": {
           "gravity": "m/s2",
@@ -18827,6 +19066,7 @@
         "severity": "error"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -18835,36 +19075,42 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_UNREADABLE": {
+        "class": "cause",
         "description": "The map cannot be read",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_HEADING": {
+        "class": "cause",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_MOWING_AREA": {
+        "class": "cause",
         "description": "The map has no active mowing area",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_POSITION": {
+        "class": "cause",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_ROOM": {
+        "class": "cause",
         "description": "No room for a calibration drive here",
         "fields": {
           "free_length": "m",
@@ -18876,6 +19122,7 @@
         "severity": "warning"
       },
       "NO_RTK": {
+        "class": "cause",
         "description": "No RTK fix",
         "fields": {
           "limit": "m"
@@ -18884,12 +19131,14 @@
         "severity": "warning"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "ON_DOCK": {
+        "class": "cause",
         "description": "The mower is on the docking station",
         "fields": {
           "distance": "m",
@@ -18899,6 +19148,7 @@
         "severity": "info"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -18908,6 +19158,7 @@
         "severity": "warning"
       },
       "SENSOR_MISSING": {
+        "class": "symptom",
         "description": "A sensor the calibration needs does not report",
         "fields": {
           "limit": "1/s",
@@ -18917,6 +19168,7 @@
         "severity": "error"
       },
       "SLOPE": {
+        "class": "cause",
         "description": "The ground is too steep",
         "fields": {
           "limit": "deg",
@@ -18926,12 +19178,14 @@
         "severity": "warning"
       },
       "STILL_STOPPING": {
+        "class": "cause",
         "description": "The last drive is still stopping",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -18954,6 +19208,7 @@
     },
     "CAMERA_CHANGED": {
       "BLADE_RUNNING": {
+        "class": "cause",
         "description": "The blade runs, and this camera does not stream next to it",
         "fields": {},
         "resume": "auto",
@@ -18972,6 +19227,7 @@
         }
       },
       "DRIVER_MISSING": {
+        "class": "symptom",
         "description": "The driver of the platform does not answer or reports no status",
         "fields": {},
         "resume": "auto",
@@ -18990,6 +19246,7 @@
         }
       },
       "LOCKED_AFTER_CRASH": {
+        "class": "cause",
         "description": "The camera stays off after a kernel crash while it ran, until its lock on the mower is removed",
         "fields": {},
         "resume": "auto",
@@ -19008,6 +19265,7 @@
         }
       },
       "NOT_SET_UP": {
+        "class": "cause",
         "description": "Something the camera needs is not set up on the mower: a model, an encoder or the stream server",
         "fields": {},
         "resume": "auto",
@@ -19026,6 +19284,7 @@
         }
       },
       "NO_SIGNAL": {
+        "class": "symptom",
         "description": "The camera gives no picture, or its process ended",
         "fields": {},
         "resume": "auto",
@@ -19044,6 +19303,7 @@
         }
       },
       "SELF_TEST": {
+        "class": "cause",
         "description": "The test of the camera after the start is pending or running; it passes on its own",
         "fields": {},
         "resume": "auto",
@@ -19062,6 +19322,7 @@
         }
       },
       "TOO_HOT": {
+        "class": "cause",
         "description": "The computer of the mower is too hot, the camera pauses",
         "fields": {},
         "resume": "auto",
@@ -19082,6 +19343,7 @@
     },
     "CAMERA_REFUSED": {
       "BLADE_RUNNING": {
+        "class": "cause",
         "description": "The blade runs, and this camera does not stream next to it",
         "fields": {},
         "resume": "auto",
@@ -19100,6 +19362,7 @@
         }
       },
       "CAMERA_BUSY": {
+        "class": "cause",
         "description": "Two viewers watch already, over all cameras together",
         "fields": {},
         "resume": "user",
@@ -19118,6 +19381,7 @@
         }
       },
       "DRIVER_MISSING": {
+        "class": "symptom",
         "description": "The driver of the platform does not answer or reports no status",
         "fields": {},
         "resume": "auto",
@@ -19136,6 +19400,7 @@
         }
       },
       "LOCKED_AFTER_CRASH": {
+        "class": "cause",
         "description": "The camera stays off after a kernel crash while it ran, until its lock on the mower is removed",
         "fields": {},
         "resume": "user",
@@ -19154,6 +19419,7 @@
         }
       },
       "NOT_SET_UP": {
+        "class": "cause",
         "description": "Something the camera needs is not set up on the mower: a model, an encoder or the stream server",
         "fields": {},
         "resume": "user",
@@ -19172,6 +19438,7 @@
         }
       },
       "NO_SIGNAL": {
+        "class": "symptom",
         "description": "The camera gives no picture, or its process ended",
         "fields": {},
         "resume": "user",
@@ -19190,6 +19457,7 @@
         }
       },
       "SELF_TEST": {
+        "class": "cause",
         "description": "The test of the camera after the start is pending or running; it passes on its own",
         "fields": {},
         "resume": "auto",
@@ -19208,6 +19476,7 @@
         }
       },
       "TOO_HOT": {
+        "class": "cause",
         "description": "The computer of the mower is too hot, the camera pauses",
         "fields": {},
         "resume": "auto",
@@ -19228,6 +19497,7 @@
     },
     "CAMERA_UNLOCK_REFUSED": {
       "FAILED": {
+        "class": "symptom",
         "description": "It did not work",
         "fields": {
           "detail": ""
@@ -19248,6 +19518,7 @@
         }
       },
       "NOT_AT_REST": {
+        "class": "cause",
         "description": "The mower is not at rest: it works, is driven or calibrated, or its blade runs",
         "fields": {},
         "resume": "user",
@@ -19266,6 +19537,7 @@
         }
       },
       "NOT_LOCKED": {
+        "class": "cause",
         "description": "There is no lock to delete",
         "fields": {},
         "resume": "user",
@@ -19284,6 +19556,7 @@
         }
       },
       "TIMEOUT": {
+        "class": "symptom",
         "description": "It took too long",
         "fields": {},
         "resume": "user",
@@ -19302,6 +19575,7 @@
         }
       },
       "UNSUPPORTED": {
+        "class": "cause",
         "description": "This mower or its system cannot do this",
         "fields": {},
         "resume": "user",
@@ -19322,6 +19596,7 @@
     },
     "CHARGING_LOST": {
       "NO_CHARGE_CURRENT": {
+        "class": "cause",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
@@ -19331,6 +19606,7 @@
         "severity": "warning"
       },
       "NO_DOCK_CONTACT": {
+        "class": "cause",
         "description": "No contact with the docking station",
         "fields": {},
         "resume": "user",
@@ -19339,6 +19615,7 @@
     },
     "COMMAND_REFUSED": {
       "CHANGED": {
+        "class": "cause",
         "description": "The area or path is another one than the client saw: nothing was skipped",
         "fields": {
           "area": "",
@@ -19348,12 +19625,14 @@
         "severity": "info"
       },
       "NO_JOB": {
+        "class": "cause",
         "description": "There is no unfinished job",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "WRONG_STATE": {
+        "class": "cause",
         "description": "The command does not fit the state of the mower; its action would not be enabled",
         "fields": {
           "state": "",
@@ -19365,6 +19644,7 @@
     },
     "CORRECTIONS": {
       "LOST": {
+        "class": "symptom",
         "description": "No corrections from the NTRIP caster",
         "fields": {
           "limit": "s"
@@ -19373,6 +19653,7 @@
         "severity": "warning"
       },
       "REJECTED": {
+        "class": "cause",
         "description": "The NTRIP caster refused the login",
         "fields": {
           "code": ""
@@ -19381,12 +19662,14 @@
         "severity": "error"
       },
       "RESTORED": {
+        "class": "cause",
         "description": "Corrections from the NTRIP caster again",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "SOURCE_CHANGED": {
+        "class": "cause",
         "description": "Corrections from another caster or mountpoint than before",
         "fields": {
           "host": "",
@@ -19402,6 +19685,7 @@
     },
     "DOCKING": {
       "BATTERY_CRITICAL": {
+        "class": "cause",
         "description": "The battery voltage is critically low",
         "fields": {
           "battery_voltage": "V",
@@ -19411,6 +19695,7 @@
         "severity": "warning"
       },
       "BATTERY_HOT": {
+        "class": "cause",
         "description": "The battery is too hot",
         "fields": {
           "limit": "°C",
@@ -19420,6 +19705,7 @@
         "severity": "warning"
       },
       "BATTERY_LOW": {
+        "class": "cause",
         "description": "The battery is too low",
         "fields": {
           "battery_percentage": "%",
@@ -19430,6 +19716,7 @@
         "severity": "info"
       },
       "DARK": {
+        "class": "cause",
         "description": "The sun has set",
         "fields": {
           "limit": "deg",
@@ -19439,12 +19726,14 @@
         "severity": "info"
       },
       "MANUAL": {
+        "class": "cause",
         "description": "By the user",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "MOTOR_HOT": {
+        "class": "cause",
         "description": "The blade motor is too hot",
         "fields": {
           "limit": "°C",
@@ -19454,6 +19743,7 @@
         "severity": "warning"
       },
       "PLANNER_MISSING": {
+        "class": "symptom",
         "description": "The planner is not running",
         "fields": {},
         "resume": "user",
@@ -19472,6 +19762,7 @@
         }
       },
       "PLANNER_TIMEOUT": {
+        "class": "symptom",
         "description": "The planner took too long",
         "fields": {},
         "resume": "user",
@@ -19490,12 +19781,14 @@
         }
       },
       "RAIN": {
+        "class": "cause",
         "description": "It rains",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "SCHEDULE": {
+        "class": "cause",
         "description": "The schedule: the time of the plan is over, or its areas are paused",
         "fields": {
           "detail": ""
@@ -19516,6 +19809,7 @@
         }
       },
       "TEST": {
+        "class": "cause",
         "description": "Docking test by camera",
         "fields": {},
         "resume": "user",
@@ -19536,6 +19830,7 @@
     },
     "DOCKING_FAILED": {
       "NO_CHARGE_CURRENT": {
+        "class": "cause",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
@@ -19545,18 +19840,21 @@
         "severity": "error"
       },
       "NO_HEADING": {
+        "class": "symptom",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_POSITION": {
+        "class": "symptom",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -19566,12 +19864,14 @@
         "severity": "error"
       },
       "approach_failed": {
+        "class": "symptom",
         "description": "The approach to the docking station failed (value of OpenMower)",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "dock_failed": {
+        "class": "symptom",
         "description": "The last part onto the contacts failed (value of OpenMower)",
         "fields": {},
         "resume": "user",
@@ -19580,6 +19880,7 @@
     },
     "DOCKING_RETRY": {
       "NO_CHARGE_CURRENT": {
+        "class": "cause",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
@@ -19589,12 +19890,14 @@
         "severity": "warning"
       },
       "approach_failed": {
+        "class": "symptom",
         "description": "The approach to the docking station failed (value of OpenMower)",
         "fields": {},
         "resume": "auto",
         "severity": "warning"
       },
       "dock_failed": {
+        "class": "symptom",
         "description": "The last part onto the contacts failed (value of OpenMower)",
         "fields": {},
         "resume": "auto",
@@ -19603,6 +19906,7 @@
     },
     "DOCKING_TEST_RUN": {
       "NO_CHARGE_CURRENT": {
+        "class": "cause",
         "description": "Contact with the docking station, but no charge current",
         "fields": {
           "current": "A",
@@ -19612,18 +19916,21 @@
         "severity": "error"
       },
       "NO_HEADING": {
+        "class": "symptom",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_POSITION": {
+        "class": "symptom",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -19633,18 +19940,21 @@
         "severity": "error"
       },
       "STOPPED": {
+        "class": "symptom",
         "description": "Stopped by the app or by the logic",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "approach_failed": {
+        "class": "symptom",
         "description": "The approach to the docking station failed (value of OpenMower)",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "dock_failed": {
+        "class": "symptom",
         "description": "The last part onto the contacts failed (value of OpenMower)",
         "fields": {},
         "resume": "user",
@@ -19653,36 +19963,42 @@
     },
     "DRIVE": {
       "ALREADY_THERE": {
+        "class": "cause",
         "description": "The mower is there already",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "CANCELED": {
+        "class": "symptom",
         "description": "The drive was canceled",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "CROSS_TRACK": {
+        "class": "symptom",
         "description": "The mower got too far off its path",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "DONE": {
+        "class": "cause",
         "description": "The drive arrived",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "FOLLOWER_MISSING": {
+        "class": "symptom",
         "description": "The path follower does not answer",
         "fields": {
           "limit": "s",
@@ -19692,24 +20008,28 @@
         "severity": "error"
       },
       "FOLLOWER_REFUSED": {
+        "class": "symptom",
         "description": "The path follower refused the path",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "HEADING": {
+        "class": "cause",
         "description": "The heading is not good enough",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "INVALID": {
+        "class": "symptom",
         "description": "The path or the request was not valid",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -19718,60 +20038,70 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_UNREADABLE": {
+        "class": "cause",
         "description": "The map cannot be read",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NOT_ALLOWED": {
+        "class": "cause",
         "description": "Outside of the areas the mower may drive in",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_MOWING_AREA": {
+        "class": "cause",
         "description": "The map has no active mowing area",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "OUTSIDE": {
+        "class": "cause",
         "description": "The mower left the allowed area",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "PLANNER_MISSING": {
+        "class": "symptom",
         "description": "The planner is not running",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "PLANNER_TIMEOUT": {
+        "class": "symptom",
         "description": "The planner took too long",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSE_LOST": {
+        "class": "symptom",
         "description": "The position stopped coming",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -19781,12 +20111,14 @@
         "severity": "warning"
       },
       "STOPPED": {
+        "class": "symptom",
         "description": "Stopped by the app or by the logic",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -19807,18 +20139,21 @@
         }
       },
       "TIMEOUT": {
+        "class": "symptom",
         "description": "It took too long",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "TRANSIT_FAILED": {
+        "class": "symptom",
         "description": "No way to the goal",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "TURN_SLIDE": {
+        "class": "cause",
         "description": "Turning on the spot, the mower slid too far from its place",
         "fields": {},
         "resume": "user",
@@ -19839,12 +20174,14 @@
     },
     "DRIVE_REFUSED": {
       "ALREADY_THERE": {
+        "class": "cause",
         "description": "The mower is there already",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -19853,6 +20190,7 @@
         "severity": "info"
       },
       "DOCK_UNREACHABLE": {
+        "class": "cause",
         "description": "The docking station is outside of the areas the mower may drive in",
         "fields": {
           "distance": "m"
@@ -19861,12 +20199,14 @@
         "severity": "warning"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "FOLLOWER_MISSING": {
+        "class": "symptom",
         "description": "The path follower does not answer",
         "fields": {
           "limit": "s",
@@ -19876,6 +20216,7 @@
         "severity": "error"
       },
       "HOLD": {
+        "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
         "fields": {
           "until": "unix s"
@@ -19884,6 +20225,7 @@
         "severity": "info"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -19892,18 +20234,21 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_UNREADABLE": {
+        "class": "cause",
         "description": "The map cannot be read",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MARKER_UNAVAILABLE": {
+        "class": "cause",
         "description": "The dock camera cannot measure the marker",
         "fields": {},
         "resume": "user",
@@ -19922,6 +20267,7 @@
         }
       },
       "NO_CHARGE_CONTACTS": {
+        "class": "cause",
         "description": "This mower has no charge contacts to dock onto",
         "fields": {},
         "resume": "user",
@@ -19940,42 +20286,49 @@
         }
       },
       "NO_DOCK": {
+        "class": "cause",
         "description": "The map has no docking station",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_DOCK_CONTACT": {
+        "class": "cause",
         "description": "No contact with the docking station",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_HEADING": {
+        "class": "cause",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_MOWING_AREA": {
+        "class": "cause",
         "description": "The map has no active mowing area",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_POSITION": {
+        "class": "cause",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "ON_DOCK": {
+        "class": "cause",
         "description": "The mower is on the docking station",
         "fields": {
           "distance": "m",
@@ -19985,12 +20338,14 @@
         "severity": "info"
       },
       "PLANNER_MISSING": {
+        "class": "symptom",
         "description": "The planner is not running",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -20000,6 +20355,7 @@
         "severity": "warning"
       },
       "REFERENCE_MISMATCH": {
+        "class": "cause",
         "description": "The docking station is not where the map has it",
         "fields": {
           "distance": "m",
@@ -20009,12 +20365,14 @@
         "severity": "warning"
       },
       "STILL_STOPPING": {
+        "class": "cause",
         "description": "The last drive is still stopping",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -20037,18 +20395,21 @@
     },
     "EMERGENCY_RESET_REFUSED": {
       "DRIVER_MISSING": {
+        "class": "symptom",
         "description": "The driver of the platform does not answer or reports no status",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "FOREIGN_HOST": {
+        "class": "cause",
         "description": "Another host talks to the board",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "LATCH_CHANGED": {
+        "class": "cause",
         "description": "Another reason latched after STOP was pressed: the driver kept the emergency",
         "fields": {},
         "resume": "user",
@@ -20067,6 +20428,7 @@
         }
       },
       "LEARNING": {
+        "class": "cause",
         "description": "The driver learns its inputs: only a start without it ends the emergency INPUTS_LEARNING",
         "fields": {},
         "resume": "user",
@@ -20085,30 +20447,35 @@
         }
       },
       "NO_ANSWER": {
+        "class": "symptom",
         "description": "No answer in time",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "RESTART_HOLD_STAYS": {
+        "class": "cause",
         "description": "The hold after an unexpected restart could not be removed from data_dir",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "SAFETY_MISSING": {
+        "class": "symptom",
         "description": "The safety node does not answer",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "SILENT": {
+        "class": "cause",
         "description": "The driver tests its silence: the emergency stays until it is over",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "STILL_ACTIVE": {
+        "class": "symptom",
         "description": "The release was taken, but the emergency did not end within 2 s",
         "fields": {
           "bits": ""
@@ -20129,6 +20496,7 @@
         }
       },
       "STILL_TILTED": {
+        "class": "cause",
         "description": "The mower is still tilted",
         "fields": {
           "angle": "deg",
@@ -20138,6 +20506,7 @@
         "severity": "warning"
       },
       "TILT_UNKNOWN": {
+        "class": "symptom",
         "description": "The tilt of the mower is not known",
         "fields": {
           "seconds": "s"
@@ -20148,12 +20517,14 @@
     },
     "GEOMETRY_CHANGED": {
       "BELOW_DEFAULT": {
+        "class": "cause",
         "description": "A dimension of the body is now below the value of the platform: check the measurement",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "SHAPE_OUTSIDE": {
+        "class": "cause",
         "description": "The body leaves out a part of the shape of the mower: check the outline",
         "fields": {},
         "resume": "user",
@@ -20174,6 +20545,7 @@
     },
     "HOST_OS": {
       "CRASH_LOOP": {
+        "class": "symptom",
         "description": "MowBite OS crashed several times and stays off",
         "fields": {
           "last_crash": "unix s",
@@ -20195,6 +20567,7 @@
         }
       },
       "DATA_DIR_LOCKED": {
+        "class": "cause",
         "description": "Another MowBite OS holds the data, this one does not start",
         "fields": {},
         "resume": "user",
@@ -20213,6 +20586,7 @@
         }
       },
       "DATA_ERROR": {
+        "class": "symptom",
         "description": "The data of MowBite OS cannot be read or prepared, it does not start",
         "fields": {},
         "resume": "user",
@@ -20231,6 +20605,7 @@
         }
       },
       "DATA_NO_SPACE": {
+        "class": "cause",
         "description": "No space for the backup of the data before the start, it does not start",
         "fields": {},
         "resume": "user",
@@ -20249,6 +20624,7 @@
         }
       },
       "DDS_PROFILE": {
+        "class": "cause",
         "description": "The profile the parts of the OS talk with is missing, it does not start",
         "fields": {},
         "resume": "user",
@@ -20267,6 +20643,7 @@
         }
       },
       "PLATFORM_CONFIG": {
+        "class": "cause",
         "description": "The platform leaves a value of the parameter files unset, it does not start",
         "fields": {},
         "resume": "user",
@@ -20285,6 +20662,7 @@
         }
       },
       "SCHEMA_NEWER": {
+        "class": "cause",
         "description": "The data is newer than this MowBite OS, it does not start",
         "fields": {},
         "resume": "user",
@@ -20305,66 +20683,84 @@
     },
     "INCIDENT": {
       "BLADE_REFUSED": {
+        "class": "symptom",
         "description": "The driver refused to start the blade",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "CALIBRATION_FAILED": {
+        "class": "symptom",
         "description": "A calibration drive failed",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "CRASH": {
+        "class": "symptom",
         "description": "A process of the OS ended without its own end",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "DOCKING_FAILED": {
+        "class": "symptom",
         "description": "Docking failed",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency began",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "FOLLOWER_MISSING": {
+        "class": "symptom",
         "description": "The path follower did not answer",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "MARK": {
+        "class": "symptom",
         "description": "The user marked the last minutes (incidents.mark)",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "MOW_MOTOR_SPINUP_FAILED": {
+        "class": "symptom",
         "description": "The blade did not come up to speed",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "POSITION_JUMP": {
+        "class": "symptom",
         "description": "The position jumped back onto GPS",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
+      "STOP": {
+        "class": "symptom",
+        "description": "The mower stopped without a command and no event told a cause (stats.stops)",
+        "fields": {},
+        "resume": "auto",
+        "severity": "info"
+      },
       "UNDOCKING_FAILED": {
+        "class": "symptom",
         "description": "Undocking failed",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "UNEXPECTED_RESTART": {
+        "class": "symptom",
         "description": "The OS started again without its own stop",
         "fields": {},
         "resume": "auto",
@@ -20373,6 +20769,7 @@
     },
     "MAP_DATUM": {
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -20383,6 +20780,7 @@
     },
     "MOWING_REFUSED": {
       "BATTERY_HOT": {
+        "class": "cause",
         "description": "The battery is too hot",
         "fields": {
           "limit": "°C",
@@ -20392,6 +20790,7 @@
         "severity": "warning"
       },
       "BATTERY_LOW": {
+        "class": "cause",
         "description": "The battery is too low",
         "fields": {
           "battery_percentage": "%",
@@ -20402,6 +20801,7 @@
         "severity": "warning"
       },
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -20410,6 +20810,7 @@
         "severity": "info"
       },
       "CLOCK_UNSAFE": {
+        "class": "cause",
         "description": "The clock of the mower is not safe: a plan of the schedule does not start",
         "fields": {
           "clock_reason": ""
@@ -20430,6 +20831,7 @@
         }
       },
       "DARK": {
+        "class": "cause",
         "description": "The sun has set",
         "fields": {
           "limit": "deg",
@@ -20439,6 +20841,7 @@
         "severity": "info"
       },
       "DATA_ROLLBACK": {
+        "class": "cause",
         "description": "The data went back to an older backup whose map is not the one of now: nothing mows by itself until the user confirms the map (data.rollback.confirm)",
         "fields": {
           "backup_of": "unix s"
@@ -20459,6 +20862,7 @@
         }
       },
       "DOCK_UNREACHABLE": {
+        "class": "cause",
         "description": "The docking station is outside of the areas the mower may drive in",
         "fields": {
           "distance": "m"
@@ -20467,12 +20871,14 @@
         "severity": "warning"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "FOLLOWER_MISSING": {
+        "class": "symptom",
         "description": "The path follower does not answer",
         "fields": {
           "limit": "s",
@@ -20482,6 +20888,7 @@
         "severity": "error"
       },
       "HOLD": {
+        "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
         "fields": {
           "until": "unix s"
@@ -20490,6 +20897,7 @@
         "severity": "info"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -20498,18 +20906,21 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_UNREADABLE": {
+        "class": "cause",
         "description": "The map cannot be read",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MOTOR_HOT": {
+        "class": "cause",
         "description": "The blade motor is too hot",
         "fields": {
           "limit": "°C",
@@ -20519,6 +20930,7 @@
         "severity": "warning"
       },
       "NOT_DOCKED": {
+        "class": "cause",
         "description": "The mower is not on the docking station: a plan of the schedule starts only from there",
         "fields": {},
         "resume": "user",
@@ -20537,42 +20949,49 @@
         }
       },
       "NO_DOCK": {
+        "class": "cause",
         "description": "The map has no docking station",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_DOCK_CONTACT": {
+        "class": "cause",
         "description": "No contact with the docking station",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_HEADING": {
+        "class": "cause",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_MOWING_AREA": {
+        "class": "cause",
         "description": "The map has no active mowing area",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_POSITION": {
+        "class": "cause",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "OBSTACLE": {
+        "class": "cause",
         "description": "An obstacle is in the way: the mower stands with the blade off until the way is seen free",
         "fields": {
           "kind": ""
@@ -20593,6 +21012,7 @@
         }
       },
       "ON_DOCK": {
+        "class": "cause",
         "description": "The mower is on the docking station",
         "fields": {
           "distance": "m",
@@ -20602,12 +21022,14 @@
         "severity": "info"
       },
       "PLANNER_MISSING": {
+        "class": "symptom",
         "description": "The planner is not running",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -20617,12 +21039,14 @@
         "severity": "warning"
       },
       "RAIN": {
+        "class": "cause",
         "description": "It rains",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "REFERENCE_MISMATCH": {
+        "class": "cause",
         "description": "The docking station is not where the map has it",
         "fields": {
           "distance": "m",
@@ -20632,12 +21056,14 @@
         "severity": "warning"
       },
       "STILL_STOPPING": {
+        "class": "cause",
         "description": "The last drive is still stopping",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -20660,12 +21086,14 @@
     },
     "OBSTACLE_SIGHT": {
       "COVERED": {
+        "class": "cause",
         "description": "The lens of the sensor is covered or dirty",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "LOCKED_AFTER_CRASH": {
+        "class": "cause",
         "description": "The camera stays off after a kernel crash while it ran, until its lock on the mower is removed",
         "fields": {},
         "resume": "auto",
@@ -20684,6 +21112,7 @@
         }
       },
       "NOT_SET_UP": {
+        "class": "cause",
         "description": "Something the camera needs is not set up on the mower: a model, an encoder or the stream server",
         "fields": {},
         "resume": "auto",
@@ -20702,6 +21131,7 @@
         }
       },
       "NO_SIGNAL": {
+        "class": "symptom",
         "description": "The camera gives no picture, or its process ended",
         "fields": {},
         "resume": "auto",
@@ -20720,6 +21150,7 @@
         }
       },
       "SELF_TEST": {
+        "class": "cause",
         "description": "The test of the camera after the start is pending or running; it passes on its own",
         "fields": {},
         "resume": "auto",
@@ -20738,18 +21169,21 @@
         }
       },
       "TOO_BRIGHT": {
+        "class": "cause",
         "description": "The image of the sensor is too bright: glare, a low sun",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "TOO_DARK": {
+        "class": "cause",
         "description": "The image of the sensor is too dark to see",
         "fields": {},
         "resume": "auto",
         "severity": "info"
       },
       "TOO_HOT": {
+        "class": "cause",
         "description": "The computer of the mower is too hot, the camera pauses",
         "fields": {},
         "resume": "auto",
@@ -20770,6 +21204,7 @@
     },
     "POSITION_JUMP": {
       "GAP": {
+        "class": "cause",
         "description": "Back on GPS after a gap",
         "fields": {
           "distance": "m"
@@ -20778,6 +21213,7 @@
         "severity": "warning"
       },
       "OUTLIERS": {
+        "class": "cause",
         "description": "Back on GPS after outliers",
         "fields": {
           "distance": "m"
@@ -20788,6 +21224,7 @@
     },
     "RECORDED_BODY_KEPT": {
       "SAVE_FAILED": {
+        "class": "symptom",
         "description": "The map could not be saved",
         "fields": {
           "code": ""
@@ -20810,6 +21247,7 @@
     },
     "RECORDING_REFUSED": {
       "DOCK_TOO_CLOSE": {
+        "class": "cause",
         "description": "The two points of the docking station are too close together",
         "fields": {
           "distance": "m",
@@ -20819,12 +21257,14 @@
         "severity": "warning"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "HOLD": {
+        "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
         "fields": {
           "until": "unix s"
@@ -20833,6 +21273,7 @@
         "severity": "info"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -20841,36 +21282,42 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_DOCK_CONTACT": {
+        "class": "cause",
         "description": "No contact with the docking station",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_HEADING": {
+        "class": "cause",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_OUTLINE": {
+        "class": "cause",
         "description": "There is no outline yet",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "NO_POSITION": {
+        "class": "cause",
         "description": "No position from the localization",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "POINT_TOO_CLOSE": {
+        "class": "cause",
         "description": "The point is too close to the last one",
         "fields": {
           "distance": "m",
@@ -20880,6 +21327,7 @@
         "severity": "warning"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -20896,6 +21344,7 @@
         ]
       },
       "REVERSING": {
+        "class": "cause",
         "description": "Reversing takes the points ahead of base_link back and records none",
         "fields": {},
         "resume": "auto",
@@ -20914,12 +21363,14 @@
         }
       },
       "RING_CROSSES_ITSELF": {
+        "class": "cause",
         "description": "The ring crosses itself",
         "fields": {},
         "resume": "user",
         "severity": "warning"
       },
       "RING_FEW_POINTS": {
+        "class": "cause",
         "description": "The ring has too few points",
         "fields": {
           "limit": "",
@@ -20929,6 +21380,7 @@
         "severity": "warning"
       },
       "RING_TOO_SMALL": {
+        "class": "cause",
         "description": "The ring encloses too small an area",
         "fields": {
           "area": "m2",
@@ -20938,6 +21390,7 @@
         "severity": "warning"
       },
       "SAVE_FAILED": {
+        "class": "symptom",
         "description": "The map could not be saved",
         "fields": {
           "code": ""
@@ -20946,12 +21399,14 @@
         "severity": "error"
       },
       "STILL_SAVING": {
+        "class": "cause",
         "description": "The last change of the map is still being saved",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -20972,6 +21427,7 @@
         }
       },
       "TOO_MANY_POINTS": {
+        "class": "cause",
         "description": "The ring has too many points",
         "fields": {
           "limit": ""
@@ -20982,6 +21438,7 @@
     },
     "REQUEST_REFUSED": {
       "CORRELATION_DATA": {
+        "class": "cause",
         "description": "The correlation data of the request is longer than 1024 bytes: nothing was done",
         "fields": {
           "limit": "bytes"
@@ -20990,6 +21447,7 @@
         "severity": "error"
       },
       "RESPONSE_TOPIC": {
+        "class": "cause",
         "description": "The response topic of the request is not rpc/response/<token> with a token of 1 to 64 of A-Z, a-z, 0-9, dot, underscore and hyphen: nothing was done",
         "fields": {},
         "resume": "user",
@@ -20998,6 +21456,7 @@
     },
     "SETUP_BLOCKED": {
       "BLADE_NOT_ALLOWED": {
+        "class": "cause",
         "description": "hw/capabilities has blade_allowed false although the parameter file of the program sets allow_blade: the file kept by hand or the driver overrules it",
         "fields": {
           "key": ""
@@ -21018,6 +21477,7 @@
         }
       },
       "BUSY": {
+        "class": "cause",
         "description": "Another step runs, or the mower is not idle",
         "fields": {
           "state": "",
@@ -21039,6 +21499,7 @@
         }
       },
       "CLOCK_UNSAFE": {
+        "class": "cause",
         "description": "The clock is not safe (time/clock): the date would be wrong",
         "fields": {
           "clock_reason": ""
@@ -21059,6 +21520,7 @@
         }
       },
       "DRIVER_MISSING": {
+        "class": "symptom",
         "description": "The driver of the platform reports no status",
         "fields": {},
         "resume": "user",
@@ -21077,6 +21539,7 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency is latched that the program does not release itself",
         "fields": {},
         "resume": "user",
@@ -21095,6 +21558,7 @@
         }
       },
       "INPUT_ACTIVE": {
+        "class": "cause",
         "description": "The input of the part is still switched: before its action, or after it while its emergency waits for the input to be free",
         "fields": {},
         "resume": "user",
@@ -21113,6 +21577,7 @@
         }
       },
       "NOT_OFFERED": {
+        "class": "cause",
         "description": "The driver does not offer what the step needs",
         "fields": {},
         "resume": "user",
@@ -21131,6 +21596,7 @@
         }
       },
       "NO_DATA": {
+        "class": "symptom",
         "description": "A source the step needs sends nothing",
         "fields": {
           "source": ""
@@ -21151,6 +21617,7 @@
         }
       },
       "NO_RTK": {
+        "class": "cause",
         "description": "A step on the ground needs an RTK fix: it compares its way with the GNSS",
         "fields": {},
         "resume": "user",
@@ -21169,6 +21636,7 @@
         }
       },
       "ON_DOCK": {
+        "class": "cause",
         "description": "The mower is on the charging contacts",
         "fields": {},
         "resume": "user",
@@ -21187,6 +21655,7 @@
         }
       },
       "RESTARTS_LOW": {
+        "class": "cause",
         "description": "The launch has fewer than two restarts of the driver left",
         "fields": {
           "left": ""
@@ -21207,6 +21676,7 @@
         }
       },
       "SAFETY_AIR": {
+        "class": "cause",
         "description": "The lock is closed: a step on the ground needs every safety step jacked up passed first",
         "fields": {
           "steps": ""
@@ -21227,6 +21697,7 @@
         }
       },
       "SAFETY_INPUTS": {
+        "class": "cause",
         "description": "A step input of the roles stop, lift or bumper is not ok",
         "fields": {
           "steps": ""
@@ -21247,6 +21718,7 @@
         }
       },
       "SAFETY_STEPS": {
+        "class": "cause",
         "description": "A safety step of the list is not ok, or the lock holds a cause of it: steps names them, skipped those of them that were skipped",
         "fields": {
           "skipped": "",
@@ -21268,6 +21740,7 @@
         }
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "setup.json in data_dir cannot be written",
         "fields": {
           "file": ""
@@ -21290,6 +21763,7 @@
     },
     "SETUP_REFUSED": {
       "BLADE_NOT_ALLOWED": {
+        "class": "cause",
         "description": "hw/capabilities has blade_allowed false although the parameter file of the program sets allow_blade: the file kept by hand or the driver overrules it",
         "fields": {
           "key": ""
@@ -21310,6 +21784,7 @@
         }
       },
       "BUSY": {
+        "class": "cause",
         "description": "Another step runs, or the mower is not idle",
         "fields": {
           "state": "",
@@ -21331,6 +21806,7 @@
         }
       },
       "CLOCK_UNSAFE": {
+        "class": "cause",
         "description": "The clock is not safe (time/clock): the date would be wrong",
         "fields": {
           "clock_reason": ""
@@ -21351,6 +21827,7 @@
         }
       },
       "CONFIRM_MISSING": {
+        "class": "cause",
         "description": "setup.start does not name every point of confirm[] of the step",
         "fields": {
           "missing": ""
@@ -21371,6 +21848,7 @@
         }
       },
       "DRIVER_MISSING": {
+        "class": "symptom",
         "description": "The driver of the platform reports no status",
         "fields": {},
         "resume": "user",
@@ -21389,6 +21867,7 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stands: a step that restarts the OS or moves the wheels needs none",
         "fields": {},
         "resume": "user",
@@ -21407,6 +21886,7 @@
         }
       },
       "INVALID_VALUE": {
+        "class": "cause",
         "description": "A value of setup.answer or the reason of setup.skip is not one the step takes",
         "fields": {
           "name": ""
@@ -21427,6 +21907,7 @@
         }
       },
       "LOCKED": {
+        "class": "cause",
         "description": "A step this one needs is not ok",
         "fields": {
           "needs": ""
@@ -21447,6 +21928,7 @@
         }
       },
       "NOT_OFFERED": {
+        "class": "cause",
         "description": "The driver does not offer what the step needs",
         "fields": {},
         "resume": "user",
@@ -21465,6 +21947,7 @@
         }
       },
       "NOT_SKIPPABLE": {
+        "class": "cause",
         "description": "The step cannot be skipped",
         "fields": {},
         "resume": "user",
@@ -21483,6 +21966,7 @@
         }
       },
       "NO_RTK": {
+        "class": "cause",
         "description": "A step on the ground needs an RTK fix: it compares its way with the GNSS",
         "fields": {},
         "resume": "user",
@@ -21501,6 +21985,7 @@
         }
       },
       "ON_DOCK": {
+        "class": "cause",
         "description": "The mower is on the charging contacts",
         "fields": {},
         "resume": "user",
@@ -21519,6 +22004,7 @@
         }
       },
       "PLATFORM_FIXED": {
+        "class": "cause",
         "description": "The installation fixed the platform (MOWBITE_PLATFORM): setup.platform.set takes no other",
         "fields": {},
         "resume": "user",
@@ -21537,6 +22023,7 @@
         }
       },
       "RESTARTS_LOW": {
+        "class": "cause",
         "description": "The launch has fewer than two restarts of the driver left",
         "fields": {
           "left": ""
@@ -21557,6 +22044,7 @@
         }
       },
       "SAFETY_AIR": {
+        "class": "cause",
         "description": "The lock is closed: a step on the ground needs every safety step jacked up passed first",
         "fields": {
           "steps": ""
@@ -21577,6 +22065,7 @@
         }
       },
       "SAFETY_INPUTS": {
+        "class": "cause",
         "description": "A step input of the roles stop, lift or bumper is not ok",
         "fields": {
           "steps": ""
@@ -21597,6 +22086,7 @@
         }
       },
       "SAFETY_STEPS": {
+        "class": "cause",
         "description": "A safety step of the list is not ok, or the lock holds a cause of it: steps names them, skipped those of them that were skipped",
         "fields": {
           "skipped": "",
@@ -21618,6 +22108,7 @@
         }
       },
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "setup.json in data_dir cannot be written",
         "fields": {
           "file": ""
@@ -21638,6 +22129,7 @@
         }
       },
       "UNKNOWN_PLATFORM": {
+        "class": "cause",
         "description": "The image has no platform of this name: see setup.platforms",
         "fields": {
           "platform": ""
@@ -21658,6 +22150,7 @@
         }
       },
       "UNKNOWN_STEP": {
+        "class": "cause",
         "description": "The step list has no step of this name",
         "fields": {
           "step": ""
@@ -21678,6 +22171,7 @@
         }
       },
       "VERSION": {
+        "class": "cause",
         "description": "The state changed since the version the call names",
         "fields": {
           "version": ""
@@ -21698,6 +22192,7 @@
         }
       },
       "WRONG_METHOD": {
+        "class": "cause",
         "description": "The step is not done with this method: see start and inputs of the step",
         "fields": {},
         "resume": "user",
@@ -21718,6 +22213,7 @@
     },
     "SETUP_STEP": {
       "AMBIGUOUS": {
+        "class": "cause",
         "closes": false,
         "description": "More than one line changed with the action of the part",
         "fields": {
@@ -21740,6 +22236,7 @@
         }
       },
       "DRIVER_REFUSED": {
+        "class": "symptom",
         "closes": false,
         "description": "The driver refused hw/silence or hw/end",
         "fields": {
@@ -21762,6 +22259,7 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "closes": false,
         "description": "An emergency the step did not ask for came up",
         "fields": {
@@ -21784,6 +22282,7 @@
         }
       },
       "FLUTTER": {
+        "class": "cause",
         "closes": false,
         "description": "A line changed while nothing was to be touched",
         "fields": {
@@ -21805,6 +22304,7 @@
         }
       },
       "INTERRUPTED": {
+        "class": "symptom",
         "closes": false,
         "description": "The OS restarted while the step ran",
         "fields": {},
@@ -21824,6 +22324,7 @@
         }
       },
       "LIMIT": {
+        "class": "cause",
         "closes": true,
         "description": "A value is outside of its bounds",
         "fields": {
@@ -21849,6 +22350,7 @@
         }
       },
       "LINE_SILENT": {
+        "class": "symptom",
         "closes": false,
         "description": "A line of the role did not switch in the whole step",
         "fields": {
@@ -21871,6 +22373,7 @@
         }
       },
       "LOGIC_REFUSED": {
+        "class": "symptom",
         "closes": false,
         "description": "The logic did not take the step into SETUP within its time",
         "fields": {
@@ -21893,6 +22396,7 @@
         }
       },
       "NOT_APPLIED": {
+        "class": "symptom",
         "closes": false,
         "description": "After the restart the driver does not show what the step wrote: hw/inputs the table of inputs_assign, hw/capabilities the date and stand time of summary",
         "fields": {
@@ -21914,6 +22418,7 @@
         }
       },
       "NOT_DONE": {
+        "class": "cause",
         "closes": false,
         "description": "The step saw nothing of the action of a part, and the answer to pressed was no or did not come: the step is open again and the lock stays as it was",
         "fields": {
@@ -21935,6 +22440,7 @@
         }
       },
       "NOT_RELEASED": {
+        "class": "cause",
         "closes": false,
         "description": "The emergency the step brought did not end with the release of the program",
         "fields": {
@@ -21956,6 +22462,7 @@
         }
       },
       "NOT_SEEN": {
+        "class": "symptom",
         "closes": true,
         "description": "The OS did not see what the part asked for within its time",
         "fields": {
@@ -21977,6 +22484,7 @@
         }
       },
       "NO_DATA": {
+        "class": "symptom",
         "closes": false,
         "description": "A source the step needs sent nothing",
         "fields": {
@@ -21999,6 +22507,7 @@
         }
       },
       "NO_EMERGENCY": {
+        "class": "cause",
         "closes": true,
         "description": "The input switched, or the silence or end of the driver came, but the emergency of the step did not follow within its limit",
         "fields": {
@@ -22021,6 +22530,7 @@
         }
       },
       "NO_LINE": {
+        "class": "symptom",
         "closes": false,
         "description": "No line changed within the time of the part",
         "fields": {
@@ -22042,6 +22552,7 @@
         }
       },
       "NO_RESTART": {
+        "class": "symptom",
         "closes": false,
         "description": "After the release a new command did not turn the wheels within its time",
         "fields": {
@@ -22063,6 +22574,7 @@
         }
       },
       "NO_RETURN": {
+        "class": "symptom",
         "closes": false,
         "description": "The driver was not back within return_max after hw/end",
         "fields": {
@@ -22084,6 +22596,7 @@
         }
       },
       "NO_RTK": {
+        "class": "cause",
         "closes": false,
         "description": "No position of the solution, accuracy and rate asked for within the timeout, or the RTK fix was lost in a step on the ground",
         "fields": {
@@ -22105,6 +22618,7 @@
         }
       },
       "NO_STANDSTILL": {
+        "class": "cause",
         "closes": true,
         "description": "The mower did not stand still within 3 s of the last command or of the trigger",
         "fields": {
@@ -22127,6 +22641,7 @@
         }
       },
       "NO_START": {
+        "class": "symptom",
         "closes": false,
         "description": "The wheels or the blade did not turn within the time after the first command",
         "fields": {
@@ -22149,6 +22664,7 @@
         }
       },
       "RELEASED": {
+        "class": "cause",
         "closes": false,
         "description": "setup.keep stayed away: the app lost its connection or let go of the step",
         "fields": {
@@ -22170,6 +22686,7 @@
         }
       },
       "RESTART_FAILED": {
+        "class": "symptom",
         "closes": false,
         "description": "The OS was not back within the time after the restart the step asked for",
         "fields": {
@@ -22191,6 +22708,7 @@
         }
       },
       "STARTED_AGAIN": {
+        "class": "cause",
         "closes": true,
         "description": "A wheel or the blade turned while nothing was to turn: after the stop or the release",
         "fields": {
@@ -22214,6 +22732,7 @@
         }
       },
       "STOPPED": {
+        "class": "cause",
         "closes": false,
         "description": "Ended with setup.abort",
         "fields": {},
@@ -22233,6 +22752,7 @@
         }
       },
       "STOPPED_EARLY": {
+        "class": "cause",
         "closes": false,
         "description": "A short switch of the input brought the emergency already",
         "fields": {
@@ -22254,6 +22774,7 @@
         }
       },
       "WRONG_DIRECTION": {
+        "class": "cause",
         "closes": true,
         "description": "A part turned the wheels the other way than asked",
         "fields": {
@@ -22275,6 +22796,7 @@
         }
       },
       "WRONG_INPUT": {
+        "class": "cause",
         "closes": false,
         "description": "Another input switched than the one the part asked for",
         "fields": {
@@ -22297,6 +22819,7 @@
         }
       },
       "WRONG_SIGN": {
+        "class": "cause",
         "closes": false,
         "description": "The IMU showed the move the other way round",
         "fields": {
@@ -22318,6 +22841,7 @@
         }
       },
       "WRONG_WHEEL": {
+        "class": "cause",
         "closes": true,
         "description": "In the part one_wheel the answer or the odometry named another wheel than the right",
         "fields": {
@@ -22342,6 +22866,7 @@
     },
     "SOUND_REFUSED": {
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -22362,6 +22887,7 @@
         }
       },
       "CHECKSUM": {
+        "class": "cause",
         "description": "The file that came has another sha256 than the one given",
         "fields": {},
         "resume": "user",
@@ -22380,12 +22906,14 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "NOT_MP3": {
+        "class": "cause",
         "description": "The file is no MP3 the mower can play",
         "fields": {},
         "resume": "user",
@@ -22404,6 +22932,7 @@
         }
       },
       "NO_FILE": {
+        "class": "cause",
         "description": "The situation has no sound",
         "fields": {},
         "resume": "user",
@@ -22422,6 +22951,7 @@
         }
       },
       "NO_SPACE": {
+        "class": "cause",
         "description": "No room for the file: all sounds together have a limit, and the journal keeps its reserve free",
         "fields": {},
         "resume": "user",
@@ -22440,6 +22970,7 @@
         }
       },
       "PART_ORDER": {
+        "class": "cause",
         "description": "A part of the upload came out of order",
         "fields": {
           "expected": ""
@@ -22460,6 +22991,7 @@
         }
       },
       "TOO_LARGE": {
+        "class": "cause",
         "description": "The file or a part of it is too large",
         "fields": {
           "limit": "bytes"
@@ -22480,6 +23012,7 @@
         }
       },
       "TOO_LONG": {
+        "class": "cause",
         "description": "The sound is too long",
         "fields": {
           "limit": "s",
@@ -22503,12 +23036,14 @@
     },
     "STATE": {
       "APPROACH_FAILED": {
+        "class": "symptom",
         "description": "No way to the start of the next path while mowing",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "BATTERY_HOT": {
+        "class": "cause",
         "description": "The battery is too hot",
         "fields": {
           "limit": "°C",
@@ -22518,24 +23053,28 @@
         "severity": "warning"
       },
       "BLADE_REFUSED": {
+        "class": "symptom",
         "description": "The driver refused to start the blade",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "BLADE_SPINUP_FAILED": {
+        "class": "symptom",
         "description": "The blade did not come up to speed",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "CROSS_TRACK": {
+        "class": "symptom",
         "description": "The mower got too far off its path",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "DARK": {
+        "class": "cause",
         "description": "The sun has set",
         "fields": {
           "limit": "deg",
@@ -22545,18 +23084,21 @@
         "severity": "info"
       },
       "DOCK_CONTACT": {
+        "class": "cause",
         "description": "Contact with the docking station while mowing",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "FOLLOWER_MISSING": {
+        "class": "symptom",
         "description": "The path follower does not answer",
         "fields": {
           "limit": "s",
@@ -22566,30 +23108,35 @@
         "severity": "error"
       },
       "HEADING": {
+        "class": "cause",
         "description": "The heading is not good enough",
         "fields": {},
         "resume": "auto",
         "severity": "warning"
       },
       "INVALID": {
+        "class": "symptom",
         "description": "The path or the request was not valid",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MANUAL": {
+        "class": "cause",
         "description": "By the user",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "MAP_CHANGED": {
+        "class": "cause",
         "description": "The mowing areas changed while mowing; continue plans anew",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_MISMATCH": {
+        "class": "cause",
         "description": "The map does not fit the datum in use",
         "fields": {
           "datum_state": ""
@@ -22598,18 +23145,21 @@
         "severity": "error"
       },
       "MAP_UNKNOWN": {
+        "class": "cause",
         "description": "The datum of the GNSS is not known yet",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MAP_UNREADABLE": {
+        "class": "cause",
         "description": "The map cannot be read",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "MOTOR_HOT": {
+        "class": "cause",
         "description": "The blade motor is too hot",
         "fields": {
           "limit": "°C",
@@ -22619,36 +23169,42 @@
         "severity": "warning"
       },
       "NOT_ALLOWED": {
+        "class": "cause",
         "description": "Outside of the areas the mower may drive in",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_HEADING": {
+        "class": "symptom",
         "description": "The heading is not known yet",
         "fields": {},
         "resume": "auto",
         "severity": "warning"
       },
       "NO_MOWING_AREA": {
+        "class": "cause",
         "description": "The map has no active mowing area",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "NO_POSITION": {
+        "class": "symptom",
         "description": "No position from the localization",
         "fields": {},
         "resume": "auto",
         "severity": "warning"
       },
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "OBSTACLE": {
+        "class": "cause",
         "description": "An obstacle is in the way: the mower stands with the blade off until the way is seen free",
         "fields": {
           "kind": ""
@@ -22669,24 +23225,28 @@
         }
       },
       "OUTSIDE": {
+        "class": "cause",
         "description": "The mower left the allowed area",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "PLANNING_FAILED": {
+        "class": "symptom",
         "description": "No plan for the area",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "POSE_LOST": {
+        "class": "symptom",
         "description": "The position stopped coming",
         "fields": {},
         "resume": "auto",
         "severity": "warning"
       },
       "POSITION_ACCURACY": {
+        "class": "cause",
         "description": "The position is not accurate enough",
         "fields": {
           "accuracy": "m",
@@ -22696,6 +23256,7 @@
         "severity": "warning"
       },
       "POSITION_UNSTABLE": {
+        "class": "cause",
         "description": "The position was lost again and again without the job getting on",
         "fields": {
           "times": ""
@@ -22704,12 +23265,14 @@
         "severity": "error"
       },
       "RAIN": {
+        "class": "cause",
         "description": "It rains",
         "fields": {},
         "resume": "user",
         "severity": "info"
       },
       "SCHEDULE": {
+        "class": "cause",
         "description": "The schedule: the time of the plan is over, or its areas are paused",
         "fields": {
           "detail": ""
@@ -22730,12 +23293,14 @@
         }
       },
       "TIMEOUT": {
+        "class": "symptom",
         "description": "It took too long",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "TURN_SLIDE": {
+        "class": "cause",
         "description": "Turning on the spot, the mower slid too far from its place",
         "fields": {},
         "resume": "user",
@@ -22756,6 +23321,7 @@
     },
     "STORAGE": {
       "STORAGE_NOT_WRITABLE": {
+        "class": "cause",
         "description": "A file in data_dir cannot be written: nothing starts until it can",
         "fields": {
           "file": ""
@@ -22778,18 +23344,21 @@
     },
     "UNDOCKING_FAILED": {
       "NO_SAFETY_MEASUREMENT": {
+        "class": "cause",
         "description": "This platform has no safety measurement yet, so it does not drive by itself",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "no_gps": {
+        "class": "symptom",
         "description": "No GPS for the way off the docking station (value of OpenMower)",
         "fields": {},
         "resume": "user",
         "severity": "error"
       },
       "path_failed": {
+        "class": "symptom",
         "description": "The way off the docking station failed (value of OpenMower)",
         "fields": {},
         "resume": "user",
@@ -22798,6 +23367,7 @@
     },
     "UNEXPECTED_RESTART": {
       "KERNEL_CRASH": {
+        "class": "symptom",
         "description": "The kernel of the mower crashed; it holds the mower in every state",
         "fields": {},
         "resume": "user",
@@ -22816,6 +23386,7 @@
         }
       },
       "NODE_STALLED": {
+        "class": "symptom",
         "description": "The watch ended MowBite OS: a node gave no sign within its limit or did not start (stalled in UNEXPECTED_RESTART names it); it holds the mower after a state other than IDLE",
         "fields": {},
         "resume": "user",
@@ -22841,6 +23412,7 @@
         ]
       },
       "OS_CRASH": {
+        "class": "symptom",
         "description": "MowBite OS ended without its own stop in this boot; it holds the mower after a state other than IDLE",
         "fields": {},
         "resume": "user",
@@ -22866,6 +23438,7 @@
         ]
       },
       "POWER_LOSS": {
+        "class": "symptom",
         "description": "The mower started again while MowBite OS ran (power, reset, power key, hang); it holds the mower after a state other than IDLE",
         "fields": {},
         "resume": "user",
@@ -22893,6 +23466,7 @@
     },
     "UPDATE": {
       "APP_API_BREAK": {
+        "class": "cause",
         "description": "The app of the bundle was built for another break of the interface than the OS installed",
         "fields": {},
         "resume": "user",
@@ -22911,6 +23485,7 @@
         }
       },
       "APP_TOO_OLD": {
+        "class": "cause",
         "description": "The app of the bundle is too old for the OS that is installed",
         "fields": {},
         "resume": "user",
@@ -22929,6 +23504,7 @@
         }
       },
       "BAD_BUNDLE": {
+        "class": "cause",
         "description": "The update file is damaged or not what its origin names",
         "fields": {},
         "resume": "user",
@@ -22947,6 +23523,7 @@
         }
       },
       "BAD_ORIGIN": {
+        "class": "cause",
         "description": "The update does not come from a configured origin, or its index is not validly signed",
         "fields": {},
         "resume": "user",
@@ -22965,6 +23542,7 @@
         }
       },
       "BAD_SIGNATURE": {
+        "class": "cause",
         "description": "The update is not signed by a known key",
         "fields": {},
         "resume": "user",
@@ -22983,6 +23561,7 @@
         }
       },
       "BASE_TOO_OLD": {
+        "class": "cause",
         "description": "The update needs a newer base system of the mower",
         "fields": {},
         "resume": "user",
@@ -23001,6 +23580,7 @@
         }
       },
       "BLOCKED": {
+        "class": "cause",
         "description": "The automatic update skips this revision; available.blocked says why",
         "fields": {},
         "resume": "user",
@@ -23019,6 +23599,7 @@
         }
       },
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -23039,6 +23620,7 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
@@ -23057,6 +23639,7 @@
         }
       },
       "INTERNAL": {
+        "class": "symptom",
         "description": "An error in the updater",
         "fields": {},
         "resume": "user",
@@ -23075,6 +23658,7 @@
         }
       },
       "INTERRUPTED": {
+        "class": "symptom",
         "description": "The switch to this revision was cut off twice",
         "fields": {},
         "resume": "user",
@@ -23093,6 +23677,7 @@
         }
       },
       "JOB_OPEN": {
+        "class": "cause",
         "description": "A mowing job is unfinished; the planner waits for its end unless reset_jobs",
         "fields": {},
         "resume": "user",
@@ -23111,6 +23696,7 @@
         }
       },
       "KERNEL_CRASH": {
+        "class": "symptom",
         "description": "The kernel of the mower crashed; it holds the mower in every state",
         "fields": {},
         "resume": "user",
@@ -23129,6 +23715,7 @@
         }
       },
       "LIBRARY_MISSING": {
+        "class": "cause",
         "description": "A library the update needs is missing on the mower",
         "fields": {},
         "resume": "user",
@@ -23147,6 +23734,7 @@
         }
       },
       "NO_DOCK_CONTACT": {
+        "class": "cause",
         "description": "No contact with the docking station",
         "fields": {},
         "resume": "auto",
@@ -23165,6 +23753,7 @@
         }
       },
       "NO_HOLD": {
+        "class": "cause",
         "description": "MowBite OS did not hold the mower for the update",
         "fields": {},
         "resume": "auto",
@@ -23183,6 +23772,7 @@
         }
       },
       "OLD_SERIAL": {
+        "class": "cause",
         "description": "The update is not newer than what runs",
         "fields": {},
         "resume": "user",
@@ -23201,6 +23791,7 @@
         }
       },
       "OS_TOO_OLD": {
+        "class": "cause",
         "description": "The app of the bundle needs a newer OS than the one installed",
         "fields": {},
         "resume": "user",
@@ -23219,6 +23810,7 @@
         }
       },
       "PLANNER_DATA": {
+        "class": "cause",
         "description": "The planner of the bundle keeps its files in another version than the OS installed reads",
         "fields": {},
         "resume": "user",
@@ -23237,6 +23829,7 @@
         }
       },
       "PLANNER_INTERFACE": {
+        "class": "cause",
         "description": "The planner of the bundle speaks another interface than the OS installed",
         "fields": {},
         "resume": "user",
@@ -23255,6 +23848,7 @@
         }
       },
       "PLATFORM_MISMATCH": {
+        "class": "cause",
         "description": "The update is built for other platforms than the one of this mower",
         "fields": {},
         "resume": "user",
@@ -23273,6 +23867,7 @@
         }
       },
       "ROLLED_BACK_BY_HAND": {
+        "class": "cause",
         "description": "This revision was taken back by hand and does not come back by itself",
         "fields": {},
         "resume": "user",
@@ -23291,6 +23886,7 @@
         }
       },
       "SCHEDULED_START": {
+        "class": "cause",
         "description": "A plan of the schedule starts within 1800 s; MowBite OS grants no hold for an update until then",
         "fields": {
           "at": "unix s"
@@ -23311,6 +23907,7 @@
         }
       },
       "UNFINISHED": {
+        "class": "symptom",
         "description": "An update did not finish; the mower goes back to the revision before it first",
         "fields": {},
         "resume": "auto",
@@ -23329,6 +23926,7 @@
         }
       },
       "UNHEALTHY": {
+        "class": "symptom",
         "description": "After the update MowBite OS did not come up healthy, the mower went back",
         "fields": {},
         "resume": "user",
@@ -23347,6 +23945,7 @@
         }
       },
       "UPDATE_NO_SPACE": {
+        "class": "cause",
         "description": "No space on the mower to unpack the update",
         "fields": {},
         "resume": "user",
@@ -23367,6 +23966,7 @@
     },
     "UPDATE_REFUSED": {
       "BUSY": {
+        "class": "cause",
         "description": "The mower is busy with something else",
         "fields": {
           "state": ""
@@ -23387,6 +23987,7 @@
         }
       },
       "EMERGENCY": {
+        "class": "symptom",
         "description": "An emergency stops the mower",
         "fields": {},
         "resume": "user",
@@ -23405,6 +24006,7 @@
         }
       },
       "HOLD": {
+        "class": "cause",
         "description": "An update holds the mower: nothing starts until it is done",
         "fields": {},
         "resume": "user",
@@ -23423,6 +24025,7 @@
         }
       },
       "INTERNAL": {
+        "class": "symptom",
         "description": "An error in the updater",
         "fields": {},
         "resume": "user",
@@ -23441,6 +24044,7 @@
         }
       },
       "INVALID": {
+        "class": "cause",
         "description": "The path or the request was not valid",
         "fields": {},
         "resume": "user",
@@ -23459,6 +24063,7 @@
         }
       },
       "KERNEL_CRASH": {
+        "class": "symptom",
         "description": "The kernel of the mower crashed; it holds the mower in every state",
         "fields": {},
         "resume": "user",
@@ -23477,6 +24082,7 @@
         }
       },
       "NOT_UPDATING": {
+        "class": "cause",
         "description": "No update runs that could be stopped",
         "fields": {},
         "resume": "user",
@@ -23495,6 +24101,7 @@
         }
       },
       "NO_HOLD": {
+        "class": "symptom",
         "description": "MowBite OS did not hold the mower for the update",
         "fields": {},
         "resume": "user",
@@ -23513,6 +24120,7 @@
         }
       },
       "NO_NEWER": {
+        "class": "cause",
         "description": "No newer revision was found",
         "fields": {},
         "resume": "user",
@@ -23531,6 +24139,7 @@
         }
       },
       "NO_PREVIOUS": {
+        "class": "cause",
         "description": "There is no earlier installation to go back to",
         "fields": {},
         "resume": "user",
@@ -23549,6 +24158,7 @@
         }
       },
       "SCHEDULED_START": {
+        "class": "cause",
         "description": "A plan of the schedule starts within 1800 s; MowBite OS grants no hold for an update until then",
         "fields": {
           "at": "unix s"
@@ -23569,6 +24179,7 @@
         }
       },
       "START_NOT_OK": {
+        "class": "symptom",
         "description": "The first start of a newly written system is not good yet; the message lists what fails",
         "fields": {},
         "resume": "user",
@@ -23587,6 +24198,7 @@
         }
       },
       "UNFINISHED": {
+        "class": "symptom",
         "description": "An update did not finish; the mower goes back to the revision before it first",
         "fields": {},
         "resume": "user",
@@ -23605,6 +24217,7 @@
         }
       },
       "UNKNOWN_REVISION": {
+        "class": "cause",
         "description": "The mower does not know this revision",
         "fields": {},
         "resume": "user",
@@ -23623,6 +24236,7 @@
         }
       },
       "UNSUPPORTED": {
+        "class": "cause",
         "description": "This mower or its system cannot do this",
         "fields": {},
         "resume": "user",
@@ -23641,6 +24255,7 @@
         }
       },
       "WIFI_FAILED": {
+        "class": "symptom",
         "description": "The mower could not join the WLAN; the connection before stays",
         "fields": {},
         "resume": "user",

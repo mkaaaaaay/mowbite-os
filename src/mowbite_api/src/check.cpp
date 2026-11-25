@@ -123,12 +123,7 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
   const ReasonEntry* reason = nullptr;
   if (details.contains("reason") && details["reason"].is_string()) {
     const std::string code = details["reason"].get<std::string>();
-    for (const auto& entry : event->reasons) {
-      if (ReasonFits(entry, code, details)) {
-        reason = &entry;
-        break;
-      }
-    }
+    reason = FindReason(type, code, details);
     if (!reason) {
       problems.push_back(type + ": reason " + code + " is not in the catalog for this event");
     } else {

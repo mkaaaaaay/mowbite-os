@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 64;
+constexpr int kApi = 65;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -82,6 +82,8 @@ struct ReasonEntry {
   UserTexts texts = {};
   // SETUP_STEP: a safety step that fails with it closes the lock of autonomous driving and mowing.
   bool closes = false;
+  // kCause or kSymptom, set by the catalog for every reason.
+  std::string cls = {};
 };
 
 struct EventEntry {
@@ -104,6 +106,8 @@ struct EmergencyBit {
   std::string name;
   std::string text;
   UserTexts texts = {};
+  // kCause or kSymptom, set by the catalog for every bit.
+  std::string cls = {};
 };
 
 // An action of actions/json that does what a command does with these params.
@@ -251,6 +255,11 @@ constexpr int kNotifyMaxPushes = 10;
 constexpr char kNotifyTopicPattern[] = "^[A-Za-z0-9_-]{0,64}$";
 constexpr int kStatsMaxDueHours = 10000;
 constexpr int kStatsMaxAnswerHours = 9000;
+// stats.stops: ISO weeks of counts and the last stops kept; what the mower did when it stopped, IDLE only for a mark.
+constexpr int kStopBookWeeks = 8;
+constexpr int kStopBookLast = 200;
+inline const std::vector<std::string> kStopActivities = {"MOWING",  "UNDOCKING",   "DOCKING",
+                                                         "DRIVING", "CALIBRATING", "IDLE"};
 // The most bytes of the answer of sensors.history, position.history and events.history (MQTT ends at 2 MB).
 constexpr int kHistoryMaxAnswerBytes = 900000;
 // sensors.history: hours kept and the steps (s) from small to large.
@@ -301,6 +310,21 @@ struct Rating {
 Rating RateReason(const std::string& event, const std::string& code, const Json& details = Json::object());
 // Whether the entry rates this code with these details.
 bool ReasonFits(const ReasonEntry& reason, const std::string& code, const Json& details);
+// The entry of the event or group that rates this code with these details, nullptr for none.
+const ReasonEntry* FindReason(const std::string& event, const std::string& code, const Json& details = Json::object());
+
+// A reason or bit of class cause names a state of the world, the mower, the data or an act (weather, battery, map,
+// RTK quality, setup, the user, a broken precondition) that explains its event without another log. One of class
+// symptom only names the outcome or a part that is silent or missing (timeout, abort, invalid, a missing node, a
+// crash) and needs another event or an incident. The class only feeds the stop book and its incidents.
+constexpr char kCause[] = "cause";
+constexpr char kSymptom[] = "symptom";
+
+// The class of a reason of an event or a group of answers; kSymptom for one the catalog does not know.
+const std::string& ReasonClass(const std::string& event, const std::string& code);
+// The bit that tells most of an emergency: its first set bit of class cause, else its first set one but LATCH, which
+// every latched emergency has; nullptr without a named bit set.
+const EmergencyBit* EmergencyReasonBit(int bits);
 
 // The name EmergencyNames gives all set bits without a name together.
 constexpr char kUnknownEmergency[] = "UNKNOWN";
