@@ -153,8 +153,8 @@ class Gesture:
             return "the mower has a WLAN connection"
         if (os_now or {}).get("state") != "running":
             return None
-        session = gate.session_of_this_boot(self.paths) or {}
-        return None if session.get("state") == "IDLE" else f"the OS is busy ({session.get('state') or 'unknown'})"
+        why = gate.unrest(gate.session_of_this_boot(self.paths))
+        return None if why is None else f"the OS is not at rest: {why.why}"
 
     # Opens the access point for OPEN_S, or gives an open one OPEN_S from now; why not, None when it did.
     def open(self):

@@ -205,11 +205,13 @@ class Host:
             raise Refused("HOLD", "an update runs")
         state = self.watch.read()["state"]
         if state not in ("stopped", "down", "halted"):
-            session = gate.session_of_this_boot(self.paths) or {}
-            if session.get("emergency") is True or os.path.lexists(self.paths.restart_hold):
-                raise Refused("EMERGENCY", "an emergency or the restart hold stands: release it first")
-            if state != "running" or session.get("state") != "IDLE":
-                raise Refused("BUSY", f"MowBite OS is {session.get('state') or state}")
+            if os.path.lexists(self.paths.restart_hold):
+                raise Refused("EMERGENCY", "the restart hold stands: release it first")
+            why = gate.unrest(gate.session_of_this_boot(self.paths))
+            if why is not None:
+                raise Refused(why.code, why.why)
+            if state != "running":
+                raise Refused("BUSY", f"MowBite OS is {state}")
         if not self.carrier.restart():
             raise Refused("INTERNAL", "the OS did not start")
         self.look()

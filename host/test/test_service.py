@@ -801,7 +801,7 @@ class GestureTest(CallsBase):
     def test_an_os_that_runs_has_to_idle(self):
         self.install()
         self.fake.session(state="MOWING")
-        self.refused("the OS is busy (MOWING)")
+        self.refused("the OS is not at rest: MowBite OS is MOWING")
 
     def test_an_idle_os_lets_it_open(self):
         self.install()

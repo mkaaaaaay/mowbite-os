@@ -9,6 +9,7 @@ A switch of the planner restarts the OS and so passes the same gate; before it t
 (checkpoint.json), since the logic begins the area of a job again when its planner changed. The app passes no gate:
 its switch touches nothing that runs.
 """
+import collections
 import os
 import re
 
@@ -83,6 +84,21 @@ def job_open(paths):
 # whether it is halted or down (off); recovering: for undoing an unfinished switch, which is no reason then;
 # contacts: whether a running OS has to stand on its charging contacts; no_os: no OS is installed yet, so none could
 # release the restart hold or judge a crash.
+# Why the OS that runs now is not at rest by session (its os-session.json of this boot), None at rest: running (clean
+# false), idle, no emergency. working: it runs without an emergency and does something else.
+Unrest = collections.namedtuple("Unrest", "code why working")
+
+
+def unrest(session):
+    if session is None or session.get("clean") is not False:
+        return Unrest("BUSY", "MowBite OS is starting or stopping", False)
+    if session.get("emergency") is True:
+        return Unrest("EMERGENCY", "an emergency stands: release it first", False)
+    if session.get("state") != "IDLE":
+        return Unrest("BUSY", f"MowBite OS is {session.get('state')}", True)
+    return None
+
+
 def before_hold(paths, active, still=False, recovering=False, contacts=True, no_os=False):
     if not recovering and unfinished(paths):
         return "UNFINISHED", "an update did not finish: recover first"
@@ -94,12 +110,9 @@ def before_hold(paths, active, still=False, recovering=False, contacts=True, no_
     if not active or still:
         return None
     session = session_of_this_boot(paths)
-    if session is None or session.get("clean") is not False:
-        return "BUSY", "MowBite OS is starting or stopping"
-    if session.get("emergency") is True:
-        return "EMERGENCY", "an emergency stands: release it first"
-    if session.get("state") != "IDLE":
-        return "BUSY", f"MowBite OS is {session.get('state')}"
+    why = unrest(session)
+    if why is not None:
+        return why.code, why.why
     if contacts and session.get("charging") is not True:
         return "NO_DOCK_CONTACT", "the mower is not on its charging contacts"
     return None

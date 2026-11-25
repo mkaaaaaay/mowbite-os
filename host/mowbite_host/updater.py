@@ -886,11 +886,8 @@ class Updater:
                 return None
         else:
             why = f"never healthy: {judged['line'] or 'no answer'}"
-        session = gate.session_of_this_boot(self.paths)
-        if (session is not None and session.get("clean") is False and session.get("emergency") is not True and
-                session.get("state") != "IDLE"):
-            return None
-        return why
+        working = gate.unrest(gate.session_of_this_boot(self.paths))
+        return None if working is not None and working.working else why
 
     # _broken for the OS that runs now, also while recover_due does not ask for its hold.
     def _running_broken(self):
