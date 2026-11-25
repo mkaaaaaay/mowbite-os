@@ -41,6 +41,11 @@ Reason FollowerMissing() {
   return Reason("FOLLOWER_MISSING", "The follower is not running");
 }
 
+// " (client <client>)" for a log line, empty without one.
+std::string ClientSuffix(const std::string& client) {
+  return client.empty() ? "" : " (client " + client + ")";
+}
+
 // The value of key in result that is ok, null without one.
 json OkValueOf(const json& result, const std::string& key) {
   if (!result.contains("values") || !result["values"].is_array()) return json();
@@ -479,27 +484,48 @@ void LogicNode::OnCommandRpc(const mowbite_msgs::msg::RpcRequest& request, const
     outcome = core_.Call<&LogicCore::Command>(command.name, params, NodeProblemLocked(command.name));
   }
   const std::string client = outcome.invalid.empty() && params.is_object() ? params.value("client", "") : "";
-  const std::string by = client.empty() ? "" : " (client " + client + ")";
   if (!outcome.invalid.empty()) {
     RCLCPP_WARN(get_logger(), "%s: %s", command.name.c_str(), outcome.invalid.c_str());
     PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, outcome.invalid,
                     json{{"field", outcome.invalid_field}}.dump());
   } else if (outcome.release) {
-    RCLCPP_INFO(get_logger(), "%s%s", command.name.c_str(), by.c_str());
+    RCLCPP_INFO(get_logger(), "%s%s", command.name.c_str(), ClientSuffix(client).c_str());
     ReleaseEmergency(request.id);
-  } else if (outcome.accepted) {
-    RCLCPP_INFO(get_logger(), "%s%s: %s", command.name.c_str(), by.c_str(), outcome.result.dump().c_str());
-    mowbite_msgs::msg::RpcResponse msg;
-    msg.result = outcome.result.dump(-1, ' ', false, json::error_handler_t::replace);
-    msg.id = request.id;
-    rpc_response_pub_->publish(msg);
   } else {
-    RCLCPP_WARN(get_logger(), "%s%s refused: %s (%s)", command.name.c_str(), by.c_str(), outcome.why.code.c_str(),
-                outcome.why.message.c_str());
-    PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
-                    outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
+    PublishOutcome(request.id, command.name, client, outcome);
   }
   Step();
+}
+
+// The answer to a command that was taken or refused: its result, or -32600 with the data of the refusal.
+void LogicNode::PublishOutcome(const std::string& id, const std::string& name, const std::string& client,
+                               const CommandOutcome& outcome) {
+  const std::string by = ClientSuffix(client);
+  if (outcome.accepted) {
+    RCLCPP_INFO(get_logger(), "%s%s: %s", name.c_str(), by.c_str(), outcome.result.dump().c_str());
+    mowbite_msgs::msg::RpcResponse msg;
+    msg.result = outcome.result.dump(-1, ' ', false, json::error_handler_t::replace);
+    msg.id = id;
+    rpc_response_pub_->publish(msg);
+    return;
+  }
+  RCLCPP_WARN(get_logger(), "%s%s refused: %s (%s)", name.c_str(), by.c_str(), outcome.why.code.c_str(),
+              outcome.why.message.c_str());
+  PublishRpcError(id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
+                  outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
+}
+
+// The params of a method of the catalog, checked against it; false after the -32602 with the field at fault.
+bool LogicNode::ReadMethodParams(const mowbite_msgs::msg::RpcRequest& request, json* params) {
+  *params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
+  std::string field;
+  const std::string invalid =
+      params->is_discarded() ? "The parameters are not valid JSON"
+                             : mowbite_api::CheckParams(*mowbite_api::FindMethod(request.method), *params, &field);
+  if (invalid.empty()) return true;
+  PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_PARAMS, invalid,
+                  json{{"field", field}}.dump());
+  return false;
 }
 
 // Answers every emergency.reset waiting for the safety node: released, or the refusal and the id of its event.
@@ -1581,16 +1607,8 @@ void LogicNode::OnCalibrationCheck(const mowbite_msgs::msg::RpcRequest& request)
 // {"state": "CALIBRATING"} once the drive began, else -32600 with the data of a refused command and
 // CALIBRATION_REFUSED, or -32602 for params that do not fit.
 void LogicNode::OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request) {
-  using mowbite_msgs::msg::RpcError;
-  const json params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
-  std::string field;
-  const std::string invalid =
-      params.is_discarded() ? "The parameters are not valid JSON"
-                            : mowbite_api::CheckParams(*mowbite_api::FindMethod("calibration.start"), params, &field);
-  if (!invalid.empty()) {
-    PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, invalid, json{{"field", field}}.dump());
-    return;
-  }
+  json params;
+  if (!ReadMethodParams(request, &params)) return;
   const std::string client = params.value("client", "");
   CommandOutcome outcome;
   {
@@ -1598,19 +1616,7 @@ void LogicNode::OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request)
     const double t = MonotonicSeconds();
     outcome = core_.Call<&LogicCore::CalibrationStart>(CalibrationProblemsLocked(t), client, t);
   }
-  const std::string by = client.empty() ? "" : " (client " + client + ")";
-  if (outcome.accepted) {
-    RCLCPP_INFO(get_logger(), "calibration.start%s: calibrating", by.c_str());
-    mowbite_msgs::msg::RpcResponse msg;
-    msg.result = outcome.result.dump();
-    msg.id = request.id;
-    rpc_response_pub_->publish(msg);
-  } else {
-    RCLCPP_WARN(get_logger(), "calibration.start%s refused: %s (%s)", by.c_str(), outcome.why.code.c_str(),
-                outcome.why.message.c_str());
-    PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
-                    outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
-  }
+  PublishOutcome(request.id, request.method, client, outcome);
   Step();
 }
 
@@ -1916,15 +1922,8 @@ bool LogicNode::CommitGeometryLocked(Geometry changed, const GeometryChange& cha
 // note calibration_applied; the refusals are those of the catalog.
 void LogicNode::OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request) {
   using mowbite_msgs::msg::RpcError;
-  const json params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
-  std::string field;
-  const std::string invalid =
-      params.is_discarded() ? "The parameters are not valid JSON"
-                            : mowbite_api::CheckParams(*mowbite_api::FindMethod("calibration.apply"), params, &field);
-  if (!invalid.empty()) {
-    PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, invalid, json{{"field", field}}.dump());
-    return;
-  }
+  json params;
+  if (!ReadMethodParams(request, &params)) return;
   const std::string client = params.value("client", "");
   json answer;
   int changed_keys = 0;
@@ -1941,7 +1940,7 @@ void LogicNode::OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request)
     const std::string result_id = result["id"].get<std::string>();
     // The geometry the drive ran with, or the one right after the last calibration.apply of this result.
     const json& applied = geometry_.calibration_applied();
-    const bool again = applied.is_object() && applied.value("result_id", "") == result_id;
+    const bool again = mowbite_api::AppliedTo(applied, result);
     const json base = again ? applied.value("geometry_version", json()) : result.value("geometry_version", json());
     if (!base.is_number_integer() || base.get<int64_t>() != geometry_.version()) {
       const json data = {{"reason", "OUTDATED"}, {"geometry_version", base}, {"version", geometry_.version()}};
@@ -1977,8 +1976,7 @@ void LogicNode::OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request)
     changed_keys = static_cast<int>(change.changed.size());
     answer = {{"applied", geometry_.calibration_applied()}, {"geometry", geometry_.Get()}};
   }
-  const std::string by = client.empty() ? "" : " (client " + client + ")";
-  RCLCPP_INFO(get_logger(), "calibration.apply%s: version %d, changed %d key(s)", by.c_str(),
+  RCLCPP_INFO(get_logger(), "calibration.apply%s: version %d, changed %d key(s)", ClientSuffix(client).c_str(),
               answer["geometry"]["version"].get<int>(), changed_keys);
   PublishGeometry();
   Step();

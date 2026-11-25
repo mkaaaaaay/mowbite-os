@@ -1657,22 +1657,34 @@ std::optional<double> FitSetting(const std::string& name, double value) {
 }
 
 const std::vector<std::string>& CalibrationKeys() {
-  static const std::vector<std::string> keys = {"ticks_per_m", "track", "antenna_x", "antenna_y", "imu_roll",
-                                                "imu_pitch"};
+  static const std::vector<std::string> keys = [] {
+    std::vector<std::string> out;
+    for (const auto& key : GeometryKeys()) {
+      if (key.calibrated) out.push_back(key.name);
+    }
+    return out;
+  }();
   return keys;
+}
+
+bool AppliedTo(const Json& applied, const Json& result) {
+  if (!applied.is_object() || !result.is_object()) return false;
+  const auto id = result.find("id");
+  const auto of = applied.find("result_id");
+  return id != result.end() && id->is_string() && of != applied.end() && *of == *id;
 }
 
 bool CalibrationTaken(const Json& result, const Json& geometry_params) {
   if (!result.is_object() || result.value("status", "") != "done" || !geometry_params.is_object()) return false;
-  const Json applied = geometry_params.value("calibration_applied", Json());
-  if (!applied.is_object() || !result.contains("id") || applied.value("result_id", Json()) != result["id"]) {
-    return false;
-  }
-  const Json values = applied.value("values", Json::object());
+  const auto applied = geometry_params.find("calibration_applied");
+  if (applied == geometry_params.end() || !AppliedTo(*applied, result)) return false;
+  const auto values = applied->find("values");
+  if (values == applied->end() || !values->is_object()) return false;
   return std::all_of(CalibrationKeys().begin(), CalibrationKeys().end(), [&](const std::string& key) {
-    const Json now = geometry_params.value(key, Json());
-    const Json then = values.is_object() ? values.value(key, Json()) : Json();
-    return now.is_number() && then.is_number() && std::abs(now.get<double>() - then.get<double>()) <= 1e-9;
+    const auto now = geometry_params.find(key);
+    const auto then = values->find(key);
+    return now != geometry_params.end() && then != values->end() && now->is_number() && then->is_number() &&
+           std::abs(now->get<double>() - then->get<double>()) <= 1e-9;
   });
 }
 
@@ -1689,9 +1701,9 @@ const std::vector<GeometryEntry>& GeometryKeys() {
       {"mower_width", false, true, 0.05, 1.5, "m", false, "Width the blade cuts"},
       {"blade_ahead", false, true, -1.5, 1.5, "m", false, "Centre of the blade ahead of the drive axle"},
       {"blade_offset", false, true, -0.75, 0.75, "m", false, "Centre of the blade left of the middle"},
-      {"antenna_x", false, true, -0.6, 0.6, "m", false, "GNSS antenna ahead of the drive axle"},
-      {"antenna_y", false, true, -0.3, 0.3, "m", false, "GNSS antenna left of the middle"},
-      {"track", false, true, 0.15, 0.8, "m", false, "Distance between the wheels"},
+      {"antenna_x", false, true, -0.6, 0.6, "m", false, "GNSS antenna ahead of the drive axle", false, true},
+      {"antenna_y", false, true, -0.3, 0.3, "m", false, "GNSS antenna left of the middle", false, true},
+      {"track", false, true, 0.15, 0.8, "m", false, "Distance between the wheels", false, true},
       {"wheel_radius", false, false, 0.02, 0.5, "m", false, "Radius of the drive wheels"},
       {"wheel_width", false, false, 0.01, 0.3, "m", false,
        "Width of the tread of the drive wheels; the body has to cover the wheels from above"},
@@ -1699,9 +1711,11 @@ const std::vector<GeometryEntry>& GeometryKeys() {
       {"dock_footprint", true, false, 0.0, 0.0, "m", false,
        "Footprint of the docking station as points [x, y] in base_link of the docked mower (x to its front, y left), "
        "each at most 1.5 m away; [] for the planner's own"},
-      {"ticks_per_m", false, true, 100.0, 10000.0, "1/m", false, "Wheel ticks per metre"},
-      {"imu_roll", false, true, -0.087, 0.087, "rad", true, "Roll of the IMU against the platform's value"},
-      {"imu_pitch", false, true, -0.087, 0.087, "rad", true, "Pitch of the IMU against the platform's value"},
+      {"ticks_per_m", false, true, 100.0, 10000.0, "1/m", false, "Wheel ticks per metre", false, true},
+      {"imu_roll", false, true, -0.087, 0.087, "rad", true, "Roll of the IMU against the platform's value",
+       false, true},
+      {"imu_pitch", false, true, -0.087, 0.087, "rad", true, "Pitch of the IMU against the platform's value",
+       false, true},
       {"robot_shape", false, false, 0.0, 0.0, "m", false,
        "How the mower looks from above, for the app to draw: parts {id, kind, points [x, y], closed} in the order to "
        "draw them, at most " +

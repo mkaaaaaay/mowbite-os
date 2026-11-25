@@ -210,6 +210,9 @@ class LogicNode : public rclcpp::Node {
   void OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request);
   void OnCalibrationAbort(const mowbite_msgs::msg::RpcRequest& request);
   void OnCalibrationApply(const mowbite_msgs::msg::RpcRequest& request);
+  void PublishOutcome(const std::string& id, const std::string& name, const std::string& client,
+                      const CommandOutcome& outcome);
+  bool ReadMethodParams(const mowbite_msgs::msg::RpcRequest& request, json* params);
   void SendCalibration(const CalibrationGoal& goal);
   void CancelCalibration();
   std::string LogicParamsPath() const;

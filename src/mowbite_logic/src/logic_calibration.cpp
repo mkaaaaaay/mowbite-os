@@ -73,12 +73,11 @@ std::vector<Reason> CalibrationPart::CalibrationProblems(CoreFacts core, double 
   return problems;
 }
 
-Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s, std::string* event_id) {
+Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s) {
   core.CommandCancels();
   const std::vector<Reason> problems = CalibrationProblems(core, now_s);
   if (!problems.empty()) {
-    const std::string id = RefuseCalibration(core, problems.front());
-    if (event_id) *event_id = id;
+    RefuseCalibration(core, problems.front());
     return problems.front();
   }
   // NOLINTNEXTLINE(bugprone-unchecked-optional-access): no problems means CalibrationProblems found a status
@@ -99,11 +98,11 @@ Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s, std::str
   return {};
 }
 
-std::string CalibrationPart::RefuseCalibration(CoreAccess core, const Reason& why) {
+void CalibrationPart::RefuseCalibration(CoreAccess core, const Reason& why) {
   core.CommandCancels();
   json details = json::object();
   PutReason(&details, "CALIBRATION_REFUSED", why);
-  return core.AddEvent("CALIBRATION_REFUSED", std::move(details));
+  core.AddEvent("CALIBRATION_REFUSED", std::move(details));
 }
 
 void CalibrationPart::OnCalibrationSign(CoreFacts core, double now_s) {

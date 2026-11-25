@@ -93,6 +93,16 @@ bool Done(const std::string& state) {
   return state == "ok" || state == "skipped";
 }
 
+// A step of done_when whose condition reopens.
+bool Reopens(const Step& step) {
+  if (step.check != "done_when") return false;
+  const auto& conditions = mowbite_api::SetupConditions();
+  const auto found = std::find_if(conditions.begin(), conditions.end(), [&step](const auto& condition) {
+    return condition.id == step.Word("condition");
+  });
+  return found != conditions.end() && found->reopens;
+}
+
 }  // namespace
 
 Program::Program(StepList list, std::string platform) : list_(std::move(list)), platform_(std::move(platform)) {
@@ -1687,31 +1697,31 @@ void Program::TickWaiting(double wall) {
   for (const Step& step : list_.steps) {
     if (step.start || !step.automatic || step.check == "platform") continue;
     Record& record = RecordOf(step);
-    const bool calibration = step.check == "done_when" && step.Word("condition") == "calibration";
-    // A taken calibration that no longer holds opens its step again.
-    if (record.state == "ok" && calibration && !world_.calibration) {
-      End(step, "open", "OUTDATED", "The calibration is no longer the one taken: a new drive or another value",
-          json::object(), wall);
+    if (record.state == "ok") {
+      if (Reopens(step) && !Met(step)) {
+        End(step, "open", "OUTDATED", "What the step waited for no longer holds", json::object(), wall);
+      }
       continue;
     }
-    if (record.state == "ok" || !NeedsMet(step)) continue;
-    bool met = false;
-    if (step.check == "geometry") {
-      const auto& keys = step.lists.at("keys");
-      met = std::all_of(keys.begin(), keys.end(),
-                        [this](const std::string& key) { return world_.confirmed.count(key) != 0; });
-    } else {
-      const std::string& condition = step.Word("condition");
-      if (condition == "ntrip") met = world_.ntrip;
-      if (condition == "station") met = world_.docking_stations > 0 && hardware_.dock_contact;
-      if (condition == "area") met = world_.areas > 0 && world_.mowing_allowed;
-      if (condition == "dock_test" || condition == "mow") met = reached_.count(condition) != 0;
-      if (calibration) met = world_.calibration;
-    }
-    if (!met) continue;
+    if (!NeedsMet(step) || !Met(step)) continue;
     ++record.attempt;
     Pass(step, 0, wall);
   }
+}
+
+bool Program::Met(const Step& step) const {
+  if (step.check == "geometry") {
+    const auto& keys = step.lists.at("keys");
+    return std::all_of(keys.begin(), keys.end(),
+                       [this](const std::string& key) { return world_.confirmed.count(key) != 0; });
+  }
+  const std::string& condition = step.Word("condition");
+  if (condition == "ntrip") return world_.ntrip;
+  if (condition == "station") return world_.docking_stations > 0 && hardware_.dock_contact;
+  if (condition == "area") return world_.areas > 0 && world_.mowing_allowed;
+  if (condition == "dock_test" || condition == "mow") return reached_.count(condition) != 0;
+  if (condition == "calibration") return world_.calibration;
+  return false;
 }
 
 json Program::Values(const Step& step, double now, bool final) const {

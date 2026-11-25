@@ -190,6 +190,8 @@ struct GeometryEntry {
   std::string text;
   // robot_shape: a list of parts, the platform's alone.
   bool shape = false;
+  // The calibration drive measures it and calibration.apply takes it.
+  bool calibrated = false;
 };
 
 // A situation the OS may play a sound for (sound.*), names as in open_mower_ros #347.
@@ -228,8 +230,10 @@ const std::vector<SettingEntry>& LogicSettings();
 std::optional<double> FitSetting(const std::string& name, double value);
 // The keys of the geometry in the order of the answers; robot_outline is the only list the user sets.
 const std::vector<GeometryEntry>& GeometryKeys();
-// The keys of robot.geometry the calibration drive measures and calibration.apply takes.
+// The keys of GeometryKeys() with calibrated.
 const std::vector<std::string>& CalibrationKeys();
+// calibration_applied of the geometry params notes a calibration.apply of result (its id).
+bool AppliedTo(const Json& applied, const Json& result);
 // The calibration counts as taken (setup condition calibration): result (calibration.result) is done,
 // calibration_applied of the geometry params names it, and every key of CalibrationKeys() still has the value it had
 // then.

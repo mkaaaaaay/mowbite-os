@@ -282,6 +282,7 @@ bool Program::Start(const Lane& lane, double now) {
 
 std::vector<Program::Step> Program::Plan(const Lane& lane) const {
   std::vector<Step> steps;
+  steps.reserve(3 + 4 * static_cast<size_t>(std::max(config_.rounds, 0)));
   const double spin_up = config_.spin_rate / config_.spin_accel;
   const double off = pose_s_ ? std::abs(Wrap(lane.heading - pose_.heading)) : M_PI / 2;
   steps.push_back({Phase::kStart, 0, 0.0});

@@ -350,9 +350,7 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   }
   if (!out.invalid.empty()) return out;
   client_ = params.is_object() ? params.value("client", "") : "";
-  // Effects may go away while the command runs, events never: its events are those after the ones before it.
-  const auto is_event = [](const Effect& effect) { return std::holds_alternative<Event>(effect); };
-  const auto events_before = std::count_if(effects_.begin(), effects_.end(), is_event);
+  const std::ptrdiff_t events_before = EventCount();
   const Reason why = name == "mowing.start"
                          ? mowing_.RequestStart(CoreAccess(*this), std::move(start), node_problem, &out)
                          : RunCommand(*command, params, node_problem, &out);
@@ -362,12 +360,24 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
     out.result = CommandAnswer(out.result);
     return out;
   }
-  out.why = why;
+  Refuse(&out, why, events_before, command->refused.empty() ? "COMMAND_REFUSED" : command->refused);
+  return out;
+}
+
+// Effects may go away while a command runs, events never: its events are those after the ones before it.
+std::ptrdiff_t LogicCore::EventCount() const {
+  return std::count_if(effects_.begin(), effects_.end(),
+                       [](const Effect& effect) { return std::holds_alternative<Event>(effect); });
+}
+
+void LogicCore::Refuse(CommandOutcome* out, const Reason& why, std::ptrdiff_t events_before,
+                       const std::string& command_group) const {
+  out->why = why;
   // The refusal that went out as an event of its own names the group; else the group whose reason it is.
   std::string group;
   std::string event_id;
   json action;
-  auto seen = decltype(events_before){0};
+  std::ptrdiff_t seen = 0;
   for (const Effect& effect : effects_) {
     const Event* found = std::get_if<Event>(&effect);
     if (!found || seen++ < events_before) continue;
@@ -384,10 +394,9 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
       if (reason.code == why.code) group = "COMMAND_REFUSED";
     }
   }
-  if (group.empty()) group = command->refused.empty() ? "COMMAND_REFUSED" : command->refused;
-  out.data = RefusalData(group, why, event_id);
-  if (!action.is_null()) out.data["action"] = action;
-  return out;
+  if (group.empty()) group = command_group;
+  out->data = RefusalData(group, why, event_id);
+  if (!action.is_null()) out->data["action"] = action;
 }
 
 json LogicCore::CommandAnswer(const json& fields) const {

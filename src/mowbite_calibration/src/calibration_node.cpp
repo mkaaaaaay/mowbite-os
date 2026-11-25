@@ -664,17 +664,19 @@ class CalibrationNode : public rclcpp::Node {
   void OnRequest(const mowbite_msgs::msg::RpcRequest& request) {
     if (request.method != "calibration.result") return;
     mowbite_msgs::msg::RpcResponse msg;
+    json answer;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      json answer = result_;
+      answer = result_;
       // applied: the last calibration.apply when it took from this result.
       if (answer.is_object()) {
-        const json applied = dimensions_ ? dimensions_->applied : json();
-        const bool ours = applied.is_object() && applied.value("result_id", json()) == answer.value("id", json());
-        answer["applied"] = ours ? applied : json();
+        const json* applied = dimensions_ ? &dimensions_->applied : nullptr;
+        const json id = answer.value("id", json());
+        const bool ours = applied && applied->is_object() && applied->value("result_id", json()) == id;
+        answer["applied"] = ours ? *applied : json();
       }
-      msg.result = answer.dump(-1, ' ', false, json::error_handler_t::replace);
     }
+    msg.result = answer.dump(-1, ' ', false, json::error_handler_t::replace);
     msg.id = request.id;
     response_pub_->publish(msg);
   }

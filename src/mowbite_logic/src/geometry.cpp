@@ -461,11 +461,8 @@ bool Geometry::Load(const std::string& text, std::string* why) {
       confirmed[item.key()] = item.value().get<double>();
     }
   }
-  json applied;
-  if (parsed.contains("calibration_applied") && parsed["calibration_applied"].is_object() &&
-      parsed["calibration_applied"].contains("result_id") && parsed["calibration_applied"]["result_id"].is_string()) {
-    applied = parsed["calibration_applied"];
-  }
+  json applied = parsed.value("calibration_applied", json());
+  if (!applied.is_object() || !applied.value("result_id", json()).is_string()) applied = json();
   const Values values = Effective(entries);
   if (auto problem = Check(values)) return fail(problem->message);
   entries_ = std::move(entries);

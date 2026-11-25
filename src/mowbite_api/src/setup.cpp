@@ -356,7 +356,7 @@ const std::vector<SetupCondition>& SetupConditions() {
             {"Calibration drive", "Do a calibration drive and take its values, or none on purpose. The tick comes "
                                   "with taking them.",
              "A new drive or changed values open the step again. It can be skipped."})},
-       "calibration"},
+       "calibration", true},
       {{"dock_test", "A docking test ended on the contacts",
         Both({"Andocken testen", "Den Andocktest starten. Der Haken kommt, wenn der Mäher von selbst wieder auf den "
                                 "Kontakten steht.",

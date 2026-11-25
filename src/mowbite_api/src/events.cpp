@@ -1186,8 +1186,9 @@ std::vector<ReasonEntry> CalibrationRefusals(const std::vector<std::pair<std::st
   std::vector<ReasonEntry> reasons = User(codes);
   for (auto& reason : reasons) {
     if (reason.code != "BATTERY_LOW") continue;
-    reason.fields = {Number("battery_voltage", "V", "Voltage of the battery"),
-                     Integer("battery_percentage", "%", "Charge of the battery"), Limit("%")};
+    for (auto& field : reason.fields) {
+      if (field.name == "limit") field = Limit("%");
+    }
   }
   return reasons;
 }

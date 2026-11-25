@@ -327,8 +327,7 @@ Json BuildSchema(const Json& planner) {
     Json entry = {{"type", key.shape ? "shape" : key.points ? "points" : "number"},
                   {"unit", key.unit},
                   {"settable", key.settable},
-                  {"calibrated", std::find(CalibrationKeys().begin(), CalibrationKeys().end(), key.name) !=
-                                     CalibrationKeys().end()},
+                  {"calibrated", key.calibrated},
                   {"description", key.text}};
     if (!key.points && !key.shape) {
       entry["min"] = key.min;

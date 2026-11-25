@@ -2,6 +2,7 @@
 #define MOWBITE_LOGIC_LOGIC_CORE_H
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -105,8 +106,8 @@ class LogicCore {
   std::optional<CalibrationStatus> CalibrationStatusNow(double now_s) const;
   // calibration.start: empty when CALIBRATING began, else the first reason against it (also CALIBRATION_REFUSED).
   Reason StartCalibration(double now_s);
-  // A start refused by the node (no program, the last drive still stopping): CALIBRATION_REFUSED. After a start the
-  // node hands the CalibrationGoal to calibration/run.
+  // A start refused for a reason of the node: CALIBRATION_REFUSED. Kept for the tests and journals before
+  // CalibrationStart; the node calls CalibrationStart.
   void RefuseCalibration(const Reason& why);
   // calibration.start with the client of the caller: refused for the first of problems (those of the core and the
   // node), else as StartCalibration. Accepted with the result {state: CALIBRATING}, else why and the data of a refused
@@ -426,6 +427,11 @@ class LogicCore {
   }
 
  private:
+  // A refused command: why, and the data of RefusalData with the group of the refusal event since events_before
+  // (EventCount before the command), else COMMAND_REFUSED for its reasons, else command_group.
+  void Refuse(CommandOutcome* out, const Reason& why, std::ptrdiff_t events_before,
+              const std::string& command_group) const;
+  std::ptrdiff_t EventCount() const;
   // The only way of the parts into the core.
   friend class CoreFacts;
   friend class CoreAccess;

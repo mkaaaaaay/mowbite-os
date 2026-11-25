@@ -96,10 +96,6 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
   }
 }
 
-}  // namespace
-
-namespace {
-
 // open: other keys are let through unchecked.
 std::string CheckFields(const std::string& name, const std::vector<Field>& fields, bool open, const Json& params,
                         std::string* field) {

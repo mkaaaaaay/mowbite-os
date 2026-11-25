@@ -418,6 +418,8 @@ class Program {
     return records_[step.id];
   }
   bool NeedsMet(const Step& step) const;
+  // What a step the OS ends by itself waits for holds now: the condition of done_when, the keys of geometry.
+  bool Met(const Step& step) const;
   std::string Shown(const Step& step) const;
   json Blocked(const Step& step, double now) const;
   json Values(const Step& step, double now, bool final) const;

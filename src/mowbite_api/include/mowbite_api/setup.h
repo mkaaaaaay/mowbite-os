@@ -30,6 +30,8 @@ struct SetupRole : SetupName {
 struct SetupCondition : SetupName {
   // The screen of the app a step of it opens unless the step names another, a name of SetupOpens().
   std::string open;
+  // A step of it that is ok is open again (OUTDATED) once the condition no longer holds.
+  bool reopens = false;
 };
 
 // A parameter of a check in setup.yaml. A number stays within min and max, the hard bounds of the code; without an

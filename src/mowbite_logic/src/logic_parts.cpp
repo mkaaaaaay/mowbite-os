@@ -31,20 +31,21 @@ void LogicCore::RefuseCalibration(const Reason& why) {
 CommandOutcome LogicCore::CalibrationStart(const std::vector<Reason>& problems, const std::string& client,
                                            double now_s) {
   CommandOutcome out;
-  std::string event_id;
+  const std::ptrdiff_t events_before = EventCount();
   client_ = client;
+  Reason why;
   if (problems.empty()) {
-    out.why = calibration_.StartCalibration(CoreAccess(*this), now_s, &event_id);
+    why = calibration_.StartCalibration(CoreAccess(*this), now_s);
   } else {
-    out.why = problems.front();
-    event_id = calibration_.RefuseCalibration(CoreAccess(*this), out.why);
+    why = problems.front();
+    calibration_.RefuseCalibration(CoreAccess(*this), why);
   }
   client_.clear();
-  if (out.why.empty()) {
+  if (why.empty()) {
     out.accepted = true;
     out.result = {{"state", "CALIBRATING"}};
   } else {
-    out.data = RefusalData("CALIBRATION_REFUSED", out.why, event_id);
+    Refuse(&out, why, events_before, "CALIBRATION_REFUSED");
   }
   return out;
 }
