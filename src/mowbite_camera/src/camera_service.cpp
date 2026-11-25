@@ -10,8 +10,14 @@ namespace mowbite_camera {
 
 namespace {
 
-// The group of x-reasons whose reasons the refusals of camera.stream carry.
+// The groups of x-reasons whose reasons the refusals of camera.stream and camera.unlock carry.
 constexpr char kRefused[] = "CAMERA_REFUSED";
+constexpr char kUnlockRefused[] = "CAMERA_UNLOCK_REFUSED";
+constexpr char kLocked[] = "LOCKED_AFTER_CRASH";
+// What the unlock service answers for a camera without a lock.
+constexpr char kNotLockedAnswer[] = "not locked";
+// The reason of the lock goes to the app: its first line, at most this long.
+constexpr size_t kMaxReasonBytes = 200;
 constexpr char kPathPrefix[] = "/camera/";
 constexpr char kPathSuffix[] = ".mjpg";
 // The protocols kept of a camera that cannot stream.
@@ -27,14 +33,29 @@ RpcOutcome Invalid(std::string message) {
   return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json()};
 }
 
-RpcOutcome Refuse(const std::string& reason, const std::string& message) {
-  const mowbite_api::Rating rating = mowbite_api::RateReason(kRefused, reason);
-  const Json details = {{"event", kRefused},
+RpcOutcome Refuse(const char* group, const std::string& reason, const std::string& message) {
+  const mowbite_api::Rating rating = mowbite_api::RateReason(group, reason);
+  const Json details = {{"event", group},
                         {"reason", reason},
                         {"message", message},
                         {"severity", rating.severity},
                         {"resume", rating.resume}};
   return {false, Json(), mowbite_bridge::kInvalidRequest, message, details};
+}
+
+RpcOutcome Refuse(const std::string& reason, const std::string& message) {
+  return Refuse(kRefused, reason, message);
+}
+
+// The first line of text without the blanks around it, cut to max bytes at a whole UTF-8 character.
+std::string FirstLine(const std::string& text, size_t max) {
+  std::string line = text.substr(0, text.find_first_of("\r\n"));
+  const size_t begin = line.find_first_not_of(" \t");
+  line = begin == std::string::npos ? "" : line.substr(begin, line.find_last_not_of(" \t") - begin + 1);
+  if (line.size() <= max) return line;
+  size_t end = max;
+  while (end > 0 && (static_cast<unsigned char>(line[end]) & 0xC0) == 0x80) --end;
+  return line.substr(0, end);
 }
 
 // A text field of the stream server's request, empty when it is missing or null.
@@ -51,7 +72,7 @@ CameraService::CameraService(ServiceConfig config, Clocks clocks, const RandomBy
       api_password_(RandomHex(random, kTokenBytes)), seats_(random) {}
 
 const std::vector<std::string>& CameraService::Methods() {
-  static const std::vector<std::string> methods = {"camera.list", "camera.stream"};
+  static const std::vector<std::string> methods = {"camera.list", "camera.stream", "camera.unlock"};
   return methods;
 }
 
@@ -159,6 +180,69 @@ RpcOutcome CameraService::Stream(const Json& params) {
   // Rounded down, so the client never counts on more time than the token has.
   const auto expires = static_cast<int64_t>(std::floor(clocks_.wall() + kTokenSeconds));
   return Ok({{"url", url}, {"protocol", protocol}, {"expires", expires}, {"detections", detections}});
+}
+
+std::optional<RpcOutcome> CameraService::BeginUnlock(const Json& params, std::string* id) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  if (!params.is_object() || !params.contains("id") || !params["id"].is_string()) {
+    return Invalid("camera.unlock needs the id of a camera");
+  }
+  *id = params["id"].get<std::string>();
+  if (!list_.Find(*id)) return Invalid("No camera with this id");
+  const CameraState state = list_.State(*id);
+  if (state.reason != kLocked) {
+    return Refuse(kUnlockRefused, "NOT_LOCKED", "Camera " + *id + " is not locked after a crash");
+  }
+  const std::string unrest = Unrest();
+  if (!unrest.empty()) {
+    return Refuse(kUnlockRefused, "NOT_AT_REST", "Camera " + *id + " is unlocked only at rest: " + unrest);
+  }
+  return std::nullopt;
+}
+
+RpcOutcome CameraService::EndUnlock(const std::string& id, const UnlockReply& reply) const {
+  switch (reply.kind) {
+    case UnlockReply::Kind::kNoService:
+      return Refuse(kUnlockRefused, "UNSUPPORTED", "Camera " + id + " offers no unlock service");
+    case UnlockReply::Kind::kTimeout:
+      return Refuse(kUnlockRefused, "TIMEOUT",
+                    "The unlock service of camera " + id + " gave no answer; camera.list tells whether it worked");
+    case UnlockReply::Kind::kAnswered: break;
+  }
+  const std::string message = FirstLine(reply.message, kMaxReasonBytes);
+  if (reply.success) return Ok({{"unlocked", true}, {"reason", message}});
+  if (message == kNotLockedAnswer) {
+    return Refuse(kUnlockRefused, "NOT_LOCKED", "Camera " + id + " has no lock on the mower");
+  }
+  RpcOutcome refused = Refuse(kUnlockRefused, "FAILED", "Camera " + id + " could not be unlocked: " + message);
+  refused.data["detail"] = message;
+  return refused;
+}
+
+void CameraService::OnRobotState(const std::string& state, const std::string& sub_state) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  state_ = state;
+  sub_state_ = sub_state;
+  state_at_ = clocks_.steady();
+}
+
+void CameraService::OnBlade(bool running) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  blade_running_ = running;
+  blade_at_ = clocks_.steady();
+}
+
+// At rest: IDLE without a sub state (no driving by hand, no calibration), docked or not, and the blade still; a
+// kernel crash while mowing would leave the mower without control.
+std::string CameraService::Unrest() const {
+  const double now = clocks_.steady();
+  if (state_at_ < 0 || now - state_at_ > kStateMaxAge) return "the state of the mower is not known";
+  if (state_ != "IDLE" || !sub_state_.empty()) {
+    return "the mower is in " + state_ + (sub_state_.empty() ? "" : " " + sub_state_);
+  }
+  if (blade_at_ < 0 || now - blade_at_ > kHardwareMaxAge) return "the blade is not known to stand";
+  if (blade_running_) return "the blade runs";
+  return "";
 }
 
 void CameraService::Tick() {

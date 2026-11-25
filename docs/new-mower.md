@@ -670,9 +670,9 @@ picture), `tron_side` (only the live picture of the right side camera, with `rig
 marker with a live picture) with their start in `platform.py` of the Tron and their parameters in its `platform.yaml`.
 
 The platform makes the pictures, the OS takes them to the app: `mowbite_camera` keeps the cameras of `hw/cameras`,
-answers `camera.list` and `camera.stream` (both show up in `rpc.methods` with the first camera), lets two viewers in
-at a time and gives each an address with a token of its own. The first list is what a camera process has to do, the
-second what `mowbite_camera` needs around it.
+answers `camera.list`, `camera.stream` and `camera.unlock` (all show up in `rpc.methods` with the first camera),
+lets two viewers in at a time and gives each an address with a token of its own. The first list is what a camera
+process has to do, the second what `mowbite_camera` needs around it.
 
 - A process of its own, never a component of the container: a crash of a vendor library takes nothing else along.
   Start it in `platform.py` with `start.own_process` only when the drivers run and a switch in
@@ -725,7 +725,12 @@ second what `mowbite_camera` needs around it.
   or an image. Check the model when loading it (inputs, outputs, classes against the class list), else report it and
   do not stream.
 - Before opening a camera: no other process holds it. A camera whose driver can crash the kernel gets a lock: a marker
-  before the stream starts; found after a kernel crash, the camera stays off until the lock file is deleted.
+  before the stream starts; found after a kernel crash, the camera stays off (`LOCKED_AFTER_CRASH`) until the lock
+  file is deleted. The process that owns such a camera offers `/camera/<id>/unlock` (`std_srvs/Trigger`) for
+  `camera.unlock` of the app: it deletes only the lock of that camera and answers `success` with the reason the lock
+  file held (one line) as `message`, then checks whether the camera may stream and reports it again on
+  `hw/cameras`; without a lock it answers `success: false` with `message` "not locked", on an error with a few words.
+  The OS calls it only at rest (`IDLE` without a sub state, blade still) and waits 5 s for the answer.
 - Without memory cgroups the process holds its own limits: resident memory, inferences per second, a pause when the
   SoC is hot, a deadline for frames, a few stream attempts per start. Measure them on the mower before it runs for
   long.

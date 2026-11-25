@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 63;
+constexpr int kApi = 64;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -206,7 +206,7 @@ const std::vector<Field>& LogicFields();
 const std::vector<EmergencyBit>& EmergencyBits();
 const std::vector<Command>& Commands();
 // Groups of reasons only answers carry, never an event: COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED,
-// CAMERA_REFUSED and those of mowbite-host.
+// CAMERA_REFUSED, CAMERA_UNLOCK_REFUSED and those of mowbite-host.
 const std::vector<EventEntry>& Refusals();
 // The RPC methods of the OS beyond Commands(); planner.* are the planner's, sim.* only in the simulation.
 const std::vector<Method>& Methods();

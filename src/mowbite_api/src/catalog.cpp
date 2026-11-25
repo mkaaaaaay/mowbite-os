@@ -1214,6 +1214,18 @@ const std::vector<Method>& Methods() {
                UnixTime("expires", "The connection has to begin before this"),
                Bool("detections", "Whether the boxes of the camera AI are in the picture")}),
        kCameraOffered},
+      {"camera.unlock", "mowbite_camera",
+       "Deletes the lock a camera keeps after a kernel crash while it ran (reason LOCKED_AFTER_CRASH in camera.list), "
+       "so it may stream again. The camera may have caused the crash: unlock it only when it is clear it did not. "
+       "Only at rest: IDLE without a sub state, docked or not, with the blade still. Refused (CAMERA_UNLOCK_REFUSED) "
+       "for a camera without that lock, away from rest, without an unlock service at the camera, when the camera "
+       "could not delete the lock, and after 5 s without an answer (TIMEOUT: camera.list tells whether it worked); "
+       "-32602 for an id it does not have. CAMERA_CHANGED follows once the camera reports again",
+       Object("params", "The camera", {Text("id", "An id of camera.list")}),
+       Object("result", "The lock is deleted",
+              {Bool("unlocked", "Always true"),
+               Text("reason", "What the lock said of the crash, one line, may be empty")}),
+       kCameraOffered},
       {"vision.obstacles.list", "mowbite_obstacles",
        "The obstacles the sensors of the mower saw, kept on the mower only: at most limit.entries, limit.bytes with "
        "the photos and limit.days since last seen, the least recently seen go first. Things of one place (objects "

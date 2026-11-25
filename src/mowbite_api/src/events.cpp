@@ -379,6 +379,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
       {"DONE", {"The drive arrived", {}}},
       {"DRIVER_MISSING", {"The driver of the platform does not answer or reports no status", {}}},
       {"EMERGENCY", {"An emergency stops the mower", {}}},
+      {"FAILED", {"It did not work", {Text("detail", "What went wrong, a few English words", true)}}},
       {"FOLLOWER_MISSING", {"The path follower does not answer", {Seconds(), Limit("s")}}},
       {"FOLLOWER_REFUSED", {"The path follower refused the path", {}}},
       {"FOREIGN_HOST", {"Another host talks to the board", {}}},
@@ -482,12 +483,14 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"Kamera gesperrt",
            "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre "
            "auf dem Mäher gelöscht ist.",
-           "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen."}},
+           "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz "
+           "nicht von der Kamera kam."}},
          {"en",
           {"Camera locked",
            "The operating system of the mower crashed while this camera ran. It stays off until the lock on the "
            "mower is deleted.",
-           "Keep the log for a report. Delete the lock only as the guide says."}}}}},
+           "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the "
+           "camera."}}}}},
       {"MANUAL", {"By the user", {}}},
       {"MAP_CHANGED", {"The mowing areas changed while mowing; continue plans anew", {}}},
       {"MAP_MISMATCH",
@@ -513,6 +516,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
            "Look at the mower and around it, then reset the emergency. If it happens again, keep the log for a "
            "report; the event names the part that hung."}}}}},
       {"NOT_ALLOWED", {"Outside of the areas the mower may drive in", {}}},
+      {"NOT_AT_REST", {"The mower is not at rest: it works, is driven or calibrated, or its blade runs", {}}},
       {"NOT_DOCKED",
        {"The mower is not on the docking station: a plan of the schedule starts only from there",
         {},
@@ -524,6 +528,7 @@ const std::map<std::string, ReasonText>& ReasonTexts() {
           {"Not docked",
            "The mower isn't on the docking station. A plan of the schedule starts only from there.",
            "Send the mower to the docking station."}}}}},
+      {"NOT_LOCKED", {"There is no lock to delete", {}}},
       {"NOT_MOVING", {"The mower does not move", {}}},
       {"NOT_MP3",
        {"The file is no MP3 the mower can play",
@@ -1789,6 +1794,40 @@ std::vector<ReasonEntry> CameraRefusals() {
   return reasons;
 }
 
+std::vector<ReasonEntry> CameraUnlockRefusals() {
+  return {WithTexts(R("NOT_LOCKED", "info", "user"),
+                    {{"de", {"Nicht gesperrt", "Diese Kamera ist nicht nach einem Absturz gesperrt.", "Nichts zu tun."}},
+                     {"en", {"Not locked", "This camera isn't locked after a crash.", "Nothing to do."}}}),
+          WithTexts(R("NOT_AT_REST", "info", "user"),
+                    {{"de",
+                      {"Mäher nicht in Ruhe",
+                       "Eine Kamera wird nur entsperrt, wenn der Mäher steht, nichts tut und das Messer still steht. "
+                       "Stürzt das System wieder ab, wäre der Mäher sonst ohne Steuerung.",
+                       "Warten, bis der Mäher fertig ist oder im Dock steht, dann noch einmal versuchen."}},
+                     {"en",
+                      {"Mower not at rest",
+                       "A camera is unlocked only while the mower stands, does nothing and the blade is still. If the "
+                       "system crashed again, the mower would otherwise be out of control.",
+                       "Wait until the mower is done or in the dock, then try again."}}}),
+          WithTexts(R("UNSUPPORTED", "info", "user"),
+                    {{"de", {"Nicht möglich", "Diese Kamera lässt sich nicht aus der App entsperren.", "Nichts zu tun."}},
+                     {"en", {"Not possible", "This camera can't be unlocked from the app.", "Nothing to do."}}}),
+          WithTexts(R("FAILED", "warning", "user"),
+                    {{"de",
+                      {"Entsperren fehlgeschlagen", "Die Sperre der Kamera ließ sich nicht löschen.",
+                       "Noch einmal versuchen. Bleibt es dabei, das Protokoll für eine Meldung sichern."}},
+                     {"en",
+                      {"Unlock failed", "The lock of the camera couldn't be deleted.",
+                       "Try again. If it stays, keep the log for a report."}}}),
+          WithTexts(R("TIMEOUT", "warning", "user"),
+                    {{"de",
+                      {"Keine Antwort", "Die Kamera hat auf das Entsperren nicht rechtzeitig geantwortet.",
+                       "In der Kameraliste nachsehen, ob sie wieder verfügbar ist, sonst noch einmal versuchen."}},
+                     {"en",
+                      {"No answer", "The camera didn't answer the unlock in time.",
+                       "Check the camera list whether it is available again, else try again."}}})};
+}
+
 std::vector<ReasonEntry> SoundRefusals() {
   std::vector<ReasonEntry> reasons =
       User({{"NO_FILE", "info"}, {"EMERGENCY", "info"}, {"NOT_MP3", "info"}, {"TOO_LARGE", "info"},
@@ -1918,6 +1957,8 @@ const std::vector<EventEntry>& Refusals() {
             Rated(true, {Text("event", "Always SOUND_REFUSED", true)}), SoundRefusals(), "info", "user"),
       Event("CAMERA_REFUSED", "answer", "camera.stream was refused: the data of its -32600, never an event",
             Rated(true, {Text("event", "Always CAMERA_REFUSED", true)}), CameraRefusals(), "info", "user"),
+      Event("CAMERA_UNLOCK_REFUSED", "answer", "camera.unlock was refused: the data of its -32600, never an event",
+            Rated(true, {Text("event", "Always CAMERA_UNLOCK_REFUSED", true)}), CameraUnlockRefusals(), "info", "user"),
       Event("UPDATE_REFUSED", "host",
             "mowbite-host refused a method update.* or host.*: the data of its -32600 (-32602 with INVALID), never an "
             "event",

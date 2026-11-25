@@ -17,6 +17,7 @@ find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_watch REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(std_srvs REQUIRED)
 
 # The list, the places, the HTTP server, the methods and the supervision of the stream server without ROS.
 add_library(mowbite_camera_core STATIC src/seats.cpp src/camera_list.cpp src/http_server.cpp src/route.cpp
@@ -30,7 +31,7 @@ target_link_libraries(mowbite_camera_core nlohmann_json::nlohmann_json Threads::
 
 add_executable(mowbite_camera_node src/camera_node.cpp)
 target_link_libraries(mowbite_camera_node mowbite_camera_core mowbite_watch::mowbite_watch)
-ament_target_dependencies(mowbite_camera_node ament_index_cpp rclcpp mowbite_msgs sensor_msgs)
+ament_target_dependencies(mowbite_camera_node ament_index_cpp rclcpp mowbite_msgs sensor_msgs std_srvs)
 
 install(TARGETS mowbite_camera_node DESTINATION lib/${PROJECT_NAME})
 

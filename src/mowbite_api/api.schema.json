@@ -321,6 +321,39 @@
       ],
       "type": "object"
     },
+    "camera.unlock.params": {
+      "additionalProperties": false,
+      "description": "The params of camera.unlock: The camera",
+      "properties": {
+        "id": {
+          "description": "An id of camera.list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "camera.unlock.result": {
+      "additionalProperties": false,
+      "description": "The result of camera.unlock: The lock is deleted",
+      "properties": {
+        "reason": {
+          "description": "What the lock said of the crash, one line, may be empty",
+          "type": "string"
+        },
+        "unlocked": {
+          "description": "Always true",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "unlocked",
+        "reason"
+      ],
+      "type": "object"
+    },
     "data.rollback.confirm.params": {
       "description": "The params of data.rollback.confirm: None",
       "type": "object"
@@ -2584,12 +2617,12 @@
             },
             "LOCKED_AFTER_CRASH": {
               "de": {
-                "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+                "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
                 "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
                 "name": "Kamera gesperrt"
               },
               "en": {
-                "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+                "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
                 "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
                 "name": "Camera locked"
               }
@@ -2968,12 +3001,12 @@
             },
             "LOCKED_AFTER_CRASH": {
               "de": {
-                "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+                "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
                 "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
                 "name": "Kamera gesperrt"
               },
               "en": {
-                "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+                "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
                 "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
                 "name": "Camera locked"
               }
@@ -3483,12 +3516,12 @@
             },
             "LOCKED_AFTER_CRASH": {
               "de": {
-                "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+                "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
                 "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
                 "name": "Kamera gesperrt"
               },
               "en": {
-                "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+                "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
                 "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
                 "name": "Camera locked"
               }
@@ -17088,11 +17121,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:63",
+  "$id": "urn:mowbite-os:api:64",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity and resume of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 63,
+  "x-api": 64,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17759,6 +17792,13 @@
       "offered": "with at least one camera",
       "params": "#/$defs/camera.stream.params",
       "result": "#/$defs/camera.stream.result"
+    },
+    "camera.unlock": {
+      "description": "Deletes the lock a camera keeps after a kernel crash while it ran (reason LOCKED_AFTER_CRASH in camera.list), so it may stream again. The camera may have caused the crash: unlock it only when it is clear it did not. Only at rest: IDLE without a sub state, docked or not, with the blade still. Refused (CAMERA_UNLOCK_REFUSED) for a camera without that lock, away from rest, without an unlock service at the camera, when the camera could not delete the lock, and after 5 s without an answer (TIMEOUT: camera.list tells whether it worked); -32602 for an id it does not have. CAMERA_CHANGED follows once the camera reports again",
+      "node": "mowbite_camera",
+      "offered": "with at least one camera",
+      "params": "#/$defs/camera.unlock.params",
+      "result": "#/$defs/camera.unlock.result"
     },
     "data.rollback.confirm": {
       "description": "The user checked the map after a way back of the data: the note goes and mowing by itself is free again (DATA_ROLLBACK confirmed); without a note nothing happens",
@@ -18956,12 +18996,12 @@
         "severity": "info",
         "texts": {
           "de": {
-            "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+            "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
             "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
             "name": "Kamera gesperrt"
           },
           "en": {
-            "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+            "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
             "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
             "name": "Camera locked"
           }
@@ -19102,12 +19142,12 @@
         "severity": "warning",
         "texts": {
           "de": {
-            "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+            "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
             "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
             "name": "Kamera gesperrt"
           },
           "en": {
-            "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+            "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
             "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
             "name": "Camera locked"
           }
@@ -19182,6 +19222,100 @@
             "fix": "Wait until it has cooled down.",
             "help": "The computer of the mower is too hot, so the camera pauses.",
             "name": "Too hot"
+          }
+        }
+      }
+    },
+    "CAMERA_UNLOCK_REFUSED": {
+      "FAILED": {
+        "description": "It did not work",
+        "fields": {
+          "detail": ""
+        },
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "Noch einmal versuchen. Bleibt es dabei, das Protokoll für eine Meldung sichern.",
+            "help": "Die Sperre der Kamera ließ sich nicht löschen.",
+            "name": "Entsperren fehlgeschlagen"
+          },
+          "en": {
+            "fix": "Try again. If it stays, keep the log for a report.",
+            "help": "The lock of the camera couldn't be deleted.",
+            "name": "Unlock failed"
+          }
+        }
+      },
+      "NOT_AT_REST": {
+        "description": "The mower is not at rest: it works, is driven or calibrated, or its blade runs",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Warten, bis der Mäher fertig ist oder im Dock steht, dann noch einmal versuchen.",
+            "help": "Eine Kamera wird nur entsperrt, wenn der Mäher steht, nichts tut und das Messer still steht. Stürzt das System wieder ab, wäre der Mäher sonst ohne Steuerung.",
+            "name": "Mäher nicht in Ruhe"
+          },
+          "en": {
+            "fix": "Wait until the mower is done or in the dock, then try again.",
+            "help": "A camera is unlocked only while the mower stands, does nothing and the blade is still. If the system crashed again, the mower would otherwise be out of control.",
+            "name": "Mower not at rest"
+          }
+        }
+      },
+      "NOT_LOCKED": {
+        "description": "There is no lock to delete",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun.",
+            "help": "Diese Kamera ist nicht nach einem Absturz gesperrt.",
+            "name": "Nicht gesperrt"
+          },
+          "en": {
+            "fix": "Nothing to do.",
+            "help": "This camera isn't locked after a crash.",
+            "name": "Not locked"
+          }
+        }
+      },
+      "TIMEOUT": {
+        "description": "It took too long",
+        "fields": {},
+        "resume": "user",
+        "severity": "warning",
+        "texts": {
+          "de": {
+            "fix": "In der Kameraliste nachsehen, ob sie wieder verfügbar ist, sonst noch einmal versuchen.",
+            "help": "Die Kamera hat auf das Entsperren nicht rechtzeitig geantwortet.",
+            "name": "Keine Antwort"
+          },
+          "en": {
+            "fix": "Check the camera list whether it is available again, else try again.",
+            "help": "The camera didn't answer the unlock in time.",
+            "name": "No answer"
+          }
+        }
+      },
+      "UNSUPPORTED": {
+        "description": "This mower or its system cannot do this",
+        "fields": {},
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Nichts zu tun.",
+            "help": "Diese Kamera lässt sich nicht aus der App entsperren.",
+            "name": "Nicht möglich"
+          },
+          "en": {
+            "fix": "Nothing to do.",
+            "help": "This camera can't be unlocked from the app.",
+            "name": "Not possible"
           }
         }
       }
@@ -20538,12 +20672,12 @@
         "severity": "info",
         "texts": {
           "de": {
-            "fix": "Das Protokoll für eine Meldung sichern. Die Sperre nur nach der Anleitung löschen.",
+            "fix": "Das Protokoll für eine Meldung sichern. In der App erst entsperren, wenn klar ist, dass der Absturz nicht von der Kamera kam.",
             "help": "Das Betriebssystem des Mähers ist abgestürzt, während diese Kamera lief. Sie bleibt aus, bis die Sperre auf dem Mäher gelöscht ist.",
             "name": "Kamera gesperrt"
           },
           "en": {
-            "fix": "Keep the log for a report. Delete the lock only as the guide says.",
+            "fix": "Keep the log for a report. Unlock it in the app only once it is clear the crash didn't come from the camera.",
             "help": "The operating system of the mower crashed while this camera ran. It stays off until the lock on the mower is deleted.",
             "name": "Camera locked"
           }

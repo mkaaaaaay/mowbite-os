@@ -434,8 +434,8 @@ def own_process(make, name, data_dir, logger, restarts=CONTAINER_RESTARTS, oom_s
                       name, logger, restarts, oom_score_adj)
 
 
-# mowbite_camera in a process of its own: camera.list and camera.stream for the cameras the platform reports on
-# hw/cameras. A platform with cameras starts it beside their processes; limits as own_process takes them.
+# mowbite_camera in a process of its own: camera.list, camera.stream and camera.unlock for the cameras the platform
+# reports on hw/cameras. A platform with cameras starts it beside their processes; limits as own_process takes them.
 def camera_service(files, data_dir, logger, **limits):
     return own_process(
         lambda prefix: Node(package="mowbite_camera", executable="mowbite_camera_node", name="mowbite_camera",

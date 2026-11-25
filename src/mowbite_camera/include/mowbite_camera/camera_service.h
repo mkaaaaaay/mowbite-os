@@ -49,7 +49,21 @@ struct Effects {
   std::vector<std::string> kick;
 };
 
-// camera.list and camera.stream over the cameras of hw/cameras, the places of their viewers, and who may connect:
+// How the unlock service of a camera answered camera.unlock, or that it did not.
+struct UnlockReply {
+  enum class Kind { kAnswered, kNoService, kTimeout };
+  Kind kind = Kind::kAnswered;
+  bool success = false;
+  std::string message;
+};
+
+// How long camera.unlock waits for the service, in s.
+constexpr double kUnlockSeconds = 5.0;
+// The newest bridge/robot_state and hw/status that count for camera.unlock, in s since they came.
+constexpr double kStateMaxAge = 3.0;
+constexpr double kHardwareMaxAge = 1.0;
+
+// camera.list, camera.stream and camera.unlock over the cameras of hw/cameras, the places of their viewers, and who may connect:
 // viewers of MJPEG at the HTTP server and what the stream server asks before it lets someone in. Every method may
 // be called from any thread.
 class CameraService {
@@ -67,6 +81,13 @@ class CameraService {
   void SetWebrtc(const std::string& reason, const std::string& detail);
   // nullopt for a method of another node.
   std::optional<RpcOutcome> Call(const std::string& method, const Json& params);
+  // camera.unlock: a refusal, or nullopt with the id whose unlock service the node calls now.
+  std::optional<RpcOutcome> BeginUnlock(const Json& params, std::string* id);
+  // The answer of camera.unlock to what the unlock service of the camera did.
+  RpcOutcome EndUnlock(const std::string& id, const UnlockReply& reply) const;
+  // bridge/robot_state and hw/status, for whether the mower is at rest.
+  void OnRobotState(const std::string& state, const std::string& sub_state);
+  void OnBlade(bool running);
   // Tokens nobody used in time give their place back.
   void Tick();
   Effects TakeEffects();
@@ -101,6 +122,8 @@ class CameraService {
  private:
   RpcOutcome Stream(const Json& params);
   void CollectLocked();
+  // Why the mower is not at rest now, empty when it is.
+  std::string Unrest() const;
 
   const ServiceConfig config_;
   const Clocks clocks_;
@@ -114,6 +137,13 @@ class CameraService {
   // Session -> how often in a row the stream server did not have it.
   std::map<std::string, int> missing_;
   Effects effects_;
+  // The last robot state with its sub state and whether the blade turned, each with when it came (steady s, -1 for
+  // never).
+  std::string state_;
+  std::string sub_state_;
+  double state_at_ = -1;
+  bool blade_running_ = false;
+  double blade_at_ = -1;
 };
 
 }  // namespace mowbite_camera

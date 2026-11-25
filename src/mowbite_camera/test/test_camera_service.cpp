@@ -51,19 +51,20 @@ class CameraServiceTest : public ::testing::Test {
   }
 
   // The refusal of a call with this reason, as the catalog has it.
-  void ExpectRefused(const RpcOutcome& outcome, const std::string& reason) {
+  void ExpectRefused(const RpcOutcome& outcome, const std::string& reason,
+                     const std::string& group_name = "CAMERA_REFUSED") {
     EXPECT_FALSE(outcome.ok);
     EXPECT_EQ(outcome.code, mowbite_bridge::kInvalidRequest);
     ASSERT_TRUE(outcome.data.is_object()) << outcome.message;
-    EXPECT_EQ(outcome.data.value("event", ""), "CAMERA_REFUSED");
+    EXPECT_EQ(outcome.data.value("event", ""), group_name);
     EXPECT_EQ(outcome.data.value("reason", ""), reason);
     EXPECT_EQ(outcome.data.value("message", ""), outcome.message);
-    const mowbite_api::EventEntry* group = mowbite_api::FindReasonGroup("CAMERA_REFUSED");
+    const mowbite_api::EventEntry* group = mowbite_api::FindReasonGroup(group_name);
     ASSERT_NE(group, nullptr);
     bool known = false;
     for (const auto& entry : group->reasons) known = known || entry.code == reason;
     EXPECT_TRUE(known) << reason;
-    const mowbite_api::Rating rating = mowbite_api::RateReason("CAMERA_REFUSED", reason);
+    const mowbite_api::Rating rating = mowbite_api::RateReason(group_name, reason);
     EXPECT_EQ(outcome.data.value("severity", ""), rating.severity);
     EXPECT_EQ(outcome.data.value("resume", ""), rating.resume);
   }
@@ -84,8 +85,8 @@ class CameraServiceTest : public ::testing::Test {
   CameraService service_;
 };
 
-TEST_F(CameraServiceTest, OffersItsTwoMethods) {
-  EXPECT_EQ(CameraService::Methods(), (std::vector<std::string>{"camera.list", "camera.stream"}));
+TEST_F(CameraServiceTest, OffersItsMethods) {
+  EXPECT_EQ(CameraService::Methods(), (std::vector<std::string>{"camera.list", "camera.stream", "camera.unlock"}));
   EXPECT_FALSE(service_.Call("sound.list", Json::object()).has_value());
   EXPECT_FALSE(service_.HasCameras());
   EXPECT_EQ(Call("camera.list").result, Json::array());
@@ -508,6 +509,101 @@ TEST_F(CameraServiceTest, EverythingElseTheStreamServerAsksIsKeptOut) {
   EXPECT_EQ(service_.OnAuth({1, 1, "POST", "/other", "", "{}"}).status, 404);
   // The token is still good for its session.
   EXPECT_EQ(Reader("stereo", token, "s1").status, 200);
+}
+
+class UnlockTest : public CameraServiceTest {
+ protected:
+  UnlockTest() {
+    CameraEntry entry = Obstacle();
+    entry.available = false;
+    entry.reason = "LOCKED_AFTER_CRASH";
+    entry.detail = "kernel crash 05:59";
+    service_.OnCamera(entry);
+    service_.OnCamera(Stereo());
+  }
+
+  void AtRest() {
+    service_.OnRobotState("IDLE", "");
+    service_.OnBlade(false);
+  }
+
+  std::optional<RpcOutcome> Begin(const Json& params) {
+    camera_.clear();
+    return service_.BeginUnlock(params, &camera_);
+  }
+
+  void ExpectUnlockRefused(const std::optional<RpcOutcome>& outcome, const std::string& reason) {
+    ASSERT_TRUE(outcome.has_value()) << reason;
+    ExpectRefused(*outcome, reason, "CAMERA_UNLOCK_REFUSED");
+  }
+
+  std::string camera_;
+};
+
+TEST_F(UnlockTest, OnlyALockedCameraOfTheListAndOnlyAtRest) {
+  AtRest();
+  for (const Json& params : {Json::object(), Json{{"id", 3}}, Json{{"id", "rear"}}}) {
+    const std::optional<RpcOutcome> outcome = Begin(params);
+    ASSERT_TRUE(outcome.has_value());
+    EXPECT_EQ(outcome->code, mowbite_bridge::kInvalidParams) << params.dump();
+  }
+  ExpectUnlockRefused(Begin({{"id", "stereo"}}), "NOT_LOCKED");
+  EXPECT_FALSE(Begin({{"id", "oa_left"}}).has_value());
+  EXPECT_EQ(camera_, "oa_left");
+}
+
+TEST_F(UnlockTest, NotWhileTheMowerWorksOrItsStateIsUnknown) {
+  const Json params = {{"id", "oa_left"}};
+  // Nothing came yet.
+  ExpectUnlockRefused(Begin(params), "NOT_AT_REST");
+  service_.OnBlade(false);
+  for (const auto& [state, sub_state] : std::vector<std::pair<std::string, std::string>>{
+           {"MOWING", ""}, {"DOCKING", ""}, {"PAUSED", ""}, {"IDLE", "MANUAL"}, {"IDLE", "CALIBRATION"},
+           {"SETUP", ""}}) {
+    service_.OnRobotState(state, sub_state);
+    ExpectUnlockRefused(Begin(params), "NOT_AT_REST");
+  }
+  service_.OnRobotState("IDLE", "");
+  EXPECT_FALSE(Begin(params).has_value());
+  service_.OnBlade(true);
+  ExpectUnlockRefused(Begin(params), "NOT_AT_REST");
+  service_.OnBlade(false);
+  EXPECT_FALSE(Begin(params).has_value());
+
+  // Each report counts only while it is recent.
+  steady_ += kHardwareMaxAge + 0.1;
+  ExpectUnlockRefused(Begin(params), "NOT_AT_REST");
+  service_.OnBlade(false);
+  EXPECT_FALSE(Begin(params).has_value());
+  steady_ += kStateMaxAge;
+  service_.OnBlade(false);
+  ExpectUnlockRefused(Begin(params), "NOT_AT_REST");
+}
+
+TEST_F(UnlockTest, AnswersWithWhatTheServiceDid) {
+  const RpcOutcome unlocked =
+      service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, true, "  kernel crash 05:59\nsecond line"});
+  ASSERT_TRUE(unlocked.ok) << unlocked.message;
+  EXPECT_EQ(unlocked.result, Json::parse(R"({"unlocked":true,"reason":"kernel crash 05:59"})"));
+
+  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, false, "not locked"}), "NOT_LOCKED",
+                "CAMERA_UNLOCK_REFUSED");
+  const RpcOutcome failed =
+      service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, false, "read-only file system"});
+  ExpectRefused(failed, "FAILED", "CAMERA_UNLOCK_REFUSED");
+  EXPECT_EQ(failed.data.value("detail", ""), "read-only file system");
+  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kNoService, false, ""}), "UNSUPPORTED",
+                "CAMERA_UNLOCK_REFUSED");
+  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kTimeout, false, ""}), "TIMEOUT",
+                "CAMERA_UNLOCK_REFUSED");
+}
+
+TEST_F(UnlockTest, TheReasonIsOneShortLineOfWholeCharacters) {
+  const std::string long_line = std::string(199, 'a') + "\xc3\xa4" + std::string(10, 'b');
+  const RpcOutcome unlocked = service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, true, long_line});
+  EXPECT_EQ(unlocked.result.value("reason", ""), std::string(199, 'a'));
+  const RpcOutcome empty = service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, true, "\r\n"});
+  EXPECT_EQ(empty.result.value("reason", "x"), "");
 }
 
 }  // namespace

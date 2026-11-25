@@ -24,9 +24,11 @@ import launch_testing.actions
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess, TimerAction
-from mowbite_msgs.msg import Camera
+from mowbite_msgs.msg import Camera, HardwareStatus, RobotState
+from rclpy.executors import SingleThreadedExecutor
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CompressedImage
+from std_srvs.srv import Trigger
 
 sys.path.insert(0, os.path.join(get_package_share_directory("mowbite_bringup"), "launch"))
 import stack  # noqa: E402
@@ -59,7 +61,7 @@ LISTED = {"id": "front", "name": "Front camera", "kind": "obstacle", "position":
           "detections": True, "protocols": ["mjpeg"], "available": True}
 # What CAMERA_CHANGED tells of how the camera streams.
 OFFER = {"protocols": ["mjpeg"], "width": 640, "height": 480}
-METHODS = ["camera.list", "camera.stream"]
+METHODS = ["camera.list", "camera.stream", "camera.unlock"]
 PICTURE_BYTES = 20000
 
 
@@ -177,6 +179,18 @@ class TestCamera(unittest.TestCase):
             CompressedImage, "camera/front/jpeg", QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
         cls.plain_pub = cls.node.create_publisher(
             CompressedImage, "camera/front/jpeg_plain", QoSProfile(depth=1, reliability=ReliabilityPolicy.BEST_EFFORT))
+        # The logic and the driver, while rest names a state: bridge/robot_state and hw/status with the blade off.
+        cls.state_pub = cls.node.create_publisher(RobotState, "bridge/robot_state", 10)
+        cls.status_pub = cls.node.create_publisher(HardwareStatus, "hw/status", 10)
+        cls.rest = None
+        # The unlock service of the camera, offered by a node of its own that spins.
+        cls.unlock_node = rclpy.create_node("camera_unlock_probe")
+        cls.unlock_service = None
+        cls.unlock_calls = 0
+        cls.executor = SingleThreadedExecutor()
+        cls.executor.add_node(cls.unlock_node)
+        cls.spinner = threading.Thread(target=cls.executor.spin, daemon=True)
+        cls.spinner.start()
         cls.lock = threading.Lock()
         cls.answers = {}
         cls.events = []
@@ -195,6 +209,8 @@ class TestCamera(unittest.TestCase):
             stop_process(cls.process, signal.SIGINT)
         cls.stop.set()
         cls.camera.join()
+        cls.executor.shutdown()
+        cls.unlock_node.destroy_node()
         cls.client.loop_stop()
         cls.node.destroy_node()
         rclpy.shutdown()
@@ -215,6 +231,11 @@ class TestCamera(unittest.TestCase):
         # The pictures without boxes count from PLAIN on.
         number = 0
         while not cls.stop.wait(0.1):
+            if cls.rest is not None:
+                state = RobotState()
+                state.current_state = cls.rest
+                cls.state_pub.publish(state)
+                cls.status_pub.publish(HardwareStatus())
             cls.subscribers = cls.jpeg_pub.get_subscription_count()
             cls.plain_subscribers = cls.plain_pub.get_subscription_count()
             if cls.subscribers == 0 and cls.plain_subscribers == 0:
@@ -396,6 +417,54 @@ class TestCamera(unittest.TestCase):
         self.assertEqual([viewer.head()[0] for viewer in viewers], [200, 200])
         viewers[1].close()
         type(self).viewer = viewers[0]
+
+    def unlock_refused(self, reason, camera="front"):
+        answer = self.rpc("camera.unlock", {"id": camera}, timeout=15.0)
+        self.assertEqual(answer.get("error", {}).get("code"), -32600, answer)
+        data = answer["error"]["data"]
+        self.assertEqual((data["event"], data["reason"], data["resume"]), ("CAMERA_UNLOCK_REFUSED", reason, "user"))
+        return data
+
+    def unlock(self, request, response):
+        type(self).unlock_calls += 1
+        response.success = True
+        response.message = "kernel crash at 05:59 while front streamed
+more"
+        self.report()
+        return response
+
+    def test_4b_the_app_unlocks_a_camera_after_a_crash_at_rest(self):
+        self.viewer.close()
+        self.assertEqual(self.rpc("camera.unlock", {"id": "rear"})["error"]["code"], -32602)
+        self.unlock_refused("NOT_LOCKED")
+        before = self.mark()
+        self.report(False, Camera.REASON_LOCKED_AFTER_CRASH, "crash at 05:59")
+        self.assertEqual(self.wait_event("CAMERA_CHANGED", before)["reason"], "LOCKED_AFTER_CRASH")
+        # Neither without the state of the mower nor while it mows.
+        self.unlock_refused("NOT_AT_REST")
+        type(self).rest = "MOWING"
+        time.sleep(0.5)
+        self.unlock_refused("NOT_AT_REST")
+        type(self).rest = "IDLE"
+        time.sleep(0.5)
+        # At rest, but the camera offers no service.
+        started = time.monotonic()
+        self.unlock_refused("UNSUPPORTED")
+        self.assertGreater(time.monotonic() - started, 4.5)
+        self.assertEqual(self.unlock_calls, 0)
+
+        type(self).unlock_service = self.unlock_node.create_service(Trigger, "/camera/front/unlock", self.unlock)
+        before = self.mark()
+        answer = self.rpc("camera.unlock", {"id": "front"}, timeout=15.0)
+        self.assertEqual(answer.get("result"),
+                         {"unlocked": True, "reason": "kernel crash at 05:59 while front streamed"}, answer)
+        self.assertEqual(self.unlock_calls, 1)
+        self.assertEqual(self.wait_event("CAMERA_CHANGED", before)["available"], True)
+        self.unlock_refused("NOT_LOCKED")
+        self.assertEqual(self.unlock_calls, 1)
+        type(self).rest = None
+        type(self).viewer = Viewer(self.stream())
+        self.assertEqual(self.viewer.head()[0], 200)
 
     def test_5_the_end_of_its_process_takes_the_camera(self):
         self.viewer.wait_pictures(1)

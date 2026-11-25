@@ -347,10 +347,10 @@ TEST(Catalog, EveryReasonOfTheSources) {
   EXPECT_GT(found, 40);
 }
 
-// COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED and CAMERA_REFUSED are groups of answers only: rated like an event,
-// but never one.
+// COMMAND_REFUSED, REQUEST_REFUSED, SOUND_REFUSED, CAMERA_REFUSED and CAMERA_UNLOCK_REFUSED are groups of answers
+// only: rated like an event, but never one.
 TEST(Catalog, RefusalsAreNoEvents) {
-  ASSERT_EQ(Refusals().size(), 9u);
+  ASSERT_EQ(Refusals().size(), 10u);
   const EventEntry& answers = Refusals().front();
   EXPECT_EQ(answers.type, "COMMAND_REFUSED");
   EXPECT_EQ(FindEvent("COMMAND_REFUSED"), nullptr);
@@ -383,6 +383,27 @@ TEST(Catalog, RefusalsAreNoEvents) {
     EXPECT_STREQ(rating.severity, "info") << code;
     EXPECT_STREQ(rating.resume, "user") << code;
   }
+}
+
+// camera.unlock tells each refusal in both languages, FAILED with what the camera said.
+TEST(Catalog, RefusalsOfTheCameraUnlock) {
+  const EventEntry* group = FindReasonGroup("CAMERA_UNLOCK_REFUSED");
+  ASSERT_NE(group, nullptr);
+  EXPECT_EQ(FindEvent("CAMERA_UNLOCK_REFUSED"), nullptr);
+  std::vector<std::string> codes;
+  for (const ReasonEntry& reason : group->reasons) {
+    codes.push_back(reason.code);
+    for (const char* language : {"de", "en"}) {
+      ASSERT_TRUE(reason.texts.count(language)) << reason.code;
+      const UserText& words = reason.texts.at(language);
+      EXPECT_FALSE(words.name.empty() || words.help.empty() || words.fix.empty()) << reason.code;
+    }
+    EXPECT_EQ(reason.resume, "user") << reason.code;
+  }
+  EXPECT_EQ(codes, (std::vector<std::string>{"NOT_LOCKED", "NOT_AT_REST", "UNSUPPORTED", "FAILED", "TIMEOUT"}));
+  ASSERT_EQ(group->reasons[3].fields.size(), 1u);
+  EXPECT_EQ(group->reasons[3].fields[0].name, "detail");
+  EXPECT_EQ(NodeOf("camera.unlock"), "mowbite_camera");
 }
 
 // Every reason hw/cameras may give is one of CAMERA_REFUSED and of CAMERA_CHANGED, with texts in both languages;
