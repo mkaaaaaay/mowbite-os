@@ -21,14 +21,16 @@ struct Ending {
   std::string message;
   // The recording, empty without one.
   std::string recording;
+  // version of robot.geometry the drive ran with, 0 before the dimensions were known.
+  int geometry_version = 0;
 };
 
 // calibration.result: the evaluation of the planner (format mowbite-calib/1: ready, version, based_on, warnings,
-// values, info) with the key of robot.geometry for every value, and id, time, status, reason, message, recording and
-// summary. status: done with an evaluation, not_evaluated without one (no planner, it did not answer), failed for a
-// drive that did not run to its end or an evaluation that rejected the data (error, or not ready). station_again: an
-// antenna offset that is ok differs from the old one by more than station_limit (m), and the docking station recorded
-// with the old one has to be recorded again once it is taken.
+// values, info) with the key of robot.geometry for every value, and id, time, status, reason, message, recording,
+// geometry_version and summary. status: done with an evaluation, not_evaluated without one (no planner, it did not
+// answer), failed for a drive that did not run to its end or an evaluation that rejected the data (error, or not
+// ready). station_again: an antenna offset that is ok differs from the old one by more than station_limit (m), and the
+// docking station recorded with the old one has to be recorded again once it is taken.
 json Compose(const Ending& ending, const json& evaluation, double station_limit = 0.02);
 
 // "4 of 6 values ok" for CALIBRATED, or why there are none.

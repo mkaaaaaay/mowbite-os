@@ -178,6 +178,8 @@ class Program {
 
   // Starts a drive on the lane from where base_link stands; false while one runs.
   bool Start(const Lane& lane, double now);
+  // The time a drive on the lane from the pose now should take (s), by the expected time of its phases.
+  double ExpectedSeconds(const Lane& lane) const;
   // The command for now, none for silence.
   std::optional<Twist2> Tick(double now);
   // Ends a running drive with STOPPED: one zero.
@@ -219,6 +221,8 @@ class Program {
     bool Failing(bool now_failing, double now, double hold_time);
   };
 
+  // The phases of a drive on the lane from the pose now.
+  std::vector<Step> Plan(const Lane& lane) const;
   std::optional<Problem> Common(double now);
   std::optional<Problem> StandChecks(double now);
   std::optional<Problem> TurnChecks(double rate_cmd, double now);

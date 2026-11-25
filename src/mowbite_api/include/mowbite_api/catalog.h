@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 65;
+constexpr int kApi = 66;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -294,6 +294,7 @@ const EventEntry* FindEvent(const std::string& type);
 // The event or the group of answers of this type, nullptr for neither.
 const EventEntry* FindReasonGroup(const std::string& type);
 const Command* FindCommand(const std::string& name);
+const Method* FindMethod(const std::string& name);
 // The command an action stands for, with the params it means; nullptr for an action without one.
 const Command* CommandOfAction(const std::string& action, Json* params);
 
@@ -346,6 +347,8 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
 // What is wrong with the params of a command: not an object, a field it does not take, a missing one, a wrong type,
 // value or text. Empty when all is well; field names the first field at fault.
 std::string CheckParams(const Command& command, const Json& params, std::string* field);
+// The same for another method of the OS, by the fields of its params; open params let other keys through.
+std::string CheckParams(const Method& method, const Json& params, std::string* field);
 
 // What in the newer schema takes away from the older one: a definition, field, type, value, reason, emergency bit or
 // command gone, a field of robot_state or an event no longer always there, a parameter newly required.

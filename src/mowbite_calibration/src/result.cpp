@@ -57,6 +57,7 @@ json Compose(const Ending& ending, const json& evaluation, double station_limit)
   result["reason"] = ending.reason;
   result["message"] = ending.message;
   result["recording"] = ending.recording;
+  result["geometry_version"] = ending.geometry_version;
   bool station_again = false;
   if (evaluated) {
     for (const auto& item : evaluation.items()) {

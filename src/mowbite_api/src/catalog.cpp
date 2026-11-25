@@ -891,14 +891,23 @@ const std::vector<Method>& Methods() {
                                 Number("lane_length", "m", "Length of a lane"),
                                 Number("heading", "rad", "Direction of the lanes")}))}),
        "while the calibration program runs"},
-      {"calibration.start", "mowbite_logic", "Starts the calibration drive; a refusal carries reason and message",
-       NoParams(), Object("result", "The drive began", {Text("state", "Always CALIBRATING", true, {"CALIBRATING"})}),
+      {"calibration.start", "mowbite_logic",
+       "Starts the calibration drive; a refusal is -32600 with the data of a refused command (event "
+       "CALIBRATION_REFUSED, its reason and fields, state, sub_state, event_id), -32602 for params that do not fit",
+       Open(Object("params", "None, or who sends it; other keys are ignored", {Client()}, false)),
+       Object("result", "The drive began", {Text("state", "Always CALIBRATING", true, {"CALIBRATING"})}),
        "while the calibration program runs"},
       {"calibration.abort", "mowbite_logic", "Stops the calibration drive where the mower is", NoParams(),
        Object("result", "Whether a drive ran", {Bool("ok", "A drive was stopped")}),
        "while the calibration program runs"},
       {"calibration.result", "mowbite_calibration", "The result of the last calibration, null before one",
-       NoParams(), Nullable(Object("result", "As the calibration wrote it")), ""},
+       NoParams(),
+       Nullable(Open(Object("result", "As the calibration wrote it",
+                            {Integer("geometry_version",
+                                     "version of robot.geometry the drive ran with, 0 when it was not known; missing "
+                                     "in results from before api 66",
+                                     false)}))),
+       ""},
       {"schedule.get", "mowbite_schedule", "The schedule, whether it may start, the clock and the sun", NoParams(),
        ScheduleAnswer(), ""},
       {"schedule.set", "mowbite_schedule",
@@ -1410,7 +1419,8 @@ const std::vector<Method>& Methods() {
        "to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: "
        "a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off. An update "
        "that has not begun its switch ends for it (result aborted); during a switch HOLD. UNSUPPORTED on other "
-       "mowers",
+       "mowers. A restart that fails gives the hold back and shows as usb_mode_failed {t (unix s), error} in "
+       "mowbite/host/status until the next try",
        NoParams(), Object("result", "Answered before the restart", {Bool("rebooting", "Always true")}), kHostOffered},
   };
   return methods;
@@ -1483,10 +1493,15 @@ const std::vector<SoundSituation>& SoundSituations() {
   return situations;
 }
 
-std::string NodeOf(const std::string& method) {
+const Method* FindMethod(const std::string& name) {
   for (const auto& entry : Methods()) {
-    if (entry.name == method) return entry.node;
+    if (entry.name == name) return &entry;
   }
+  return nullptr;
+}
+
+std::string NodeOf(const std::string& method) {
+  if (const Method* entry = FindMethod(method)) return entry->node;
   if (method.rfind("system.", 0) == 0 && FindCommand(method)) return "mowbite_bridge";
   return FindCommand(method) ? "mowbite_logic" : "";
 }

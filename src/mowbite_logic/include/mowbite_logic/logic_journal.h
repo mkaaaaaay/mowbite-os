@@ -106,8 +106,9 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(LogicConfig, battery_empty_volta
                                                 approach_distance, checkpoint_period, dock_contact_x,
                                                 dock_max_position_accuracy, dock_accuracy_per_m, dock_reference_limit,
                                                 undock, dock, marker, charge, calibration, obstacle, id_seed)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationStatus, problems, heading, lane_length, strip_length, strip_width,
-                                   running)
+// With defaults: rounds and expected_s came later.
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE_WITH_DEFAULT(CalibrationStatus, problems, heading, lane_length, strip_length,
+                                                strip_width, rounds, expected_s, running)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationGoal, heading, lane_length)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(CalibrationOutcome, reason, message, status, summary)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(UndockOutcome, undocked, for_drive, why)
@@ -161,7 +162,7 @@ static_assert(sizeof(LogicConfig) == 600);
 static_assert(sizeof(MarkerConfig) == 64);
 static_assert(sizeof(DockMarkerSample) == 48);
 static_assert(sizeof(DockPoseSample) == 56);
-static_assert(sizeof(CalibrationStatus) == 64);
+static_assert(sizeof(CalibrationStatus) == 80);
 static_assert(sizeof(CalibrationGoal) == 16);
 static_assert(sizeof(CalibrationOutcome) == 128);
 static_assert(sizeof(UndockOutcome) == 88);
@@ -215,7 +216,7 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
       &L::StartRun, &L::DropTasks, &L::OnDockMarker, &L::OnDockPose,
       &L::SetShapeOutside, &L::OnSetupMotion, &L::TickSetup, &L::OnSetupBlade, &L::OnObstacleStatus,
       &L::SetObstacleMode, &L::OnCutAnswer, &L::RefuseDockCheck, &L::AgeDockPose, &L::AgeObstacles,
-      &L::SetDataRollback);
+      &L::SetDataRollback, &L::CalibrationStart);
   static mowbite_logic::LogicView View(const L& core) {
     const auto state = core.RobotState();
     return {state.state, state.sub_state, state.emergency_reason, core.BladeWanted(), core.FollowerActive()};
@@ -270,6 +271,14 @@ struct mowbite_journal::CoreTraits<mowbite_logic::LogicCore> {
         [](const auto& o, Reason& why, std::string&, std::vector<std::string>&) { AnonymizeReason(o, why); });
     a.template Result<&L::StartDrive>([](const auto& o, Reason& why, double&, double&) { AnonymizeReason(o, why); });
     a.template Result<&L::StartCalibration>([](const auto& o, Reason& why, double&) { AnonymizeReason(o, why); });
+    a.template Args<&L::CalibrationStart>([](const auto& o, std::vector<Reason>& problems, std::string&, double&) {
+      for (auto& why : problems) AnonymizeReason(o, why);
+    });
+    a.template Result<&L::CalibrationStart>([](const auto& o, mowbite_logic::CommandOutcome& outcome,
+                                               std::vector<Reason>&, std::string&, double&) {
+      AnonymizeReason(o, outcome.why);
+      o.ShiftWallIn(&outcome.data, kUnixKeys);
+    });
     a.template Result<&L::StartDocking>([](const auto& o, Reason& why) { AnonymizeReason(o, why); });
     a.template Result<&L::OnDockCheck>(
         [](const auto& o, Reason& why, bool&, double&, double&, float&, std::string&) { AnonymizeReason(o, why); });

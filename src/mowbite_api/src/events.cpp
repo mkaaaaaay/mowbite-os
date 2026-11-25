@@ -1181,6 +1181,17 @@ std::vector<ReasonEntry> User(const std::vector<std::pair<std::string, std::stri
   return out;
 }
 
+// CALIBRATION_REFUSED: BATTERY_LOW is held to the charge there, so its limit is in %.
+std::vector<ReasonEntry> CalibrationRefusals(const std::vector<std::pair<std::string, std::string>>& codes) {
+  std::vector<ReasonEntry> reasons = User(codes);
+  for (auto& reason : reasons) {
+    if (reason.code != "BATTERY_LOW") continue;
+    reason.fields = {Number("battery_voltage", "V", "Voltage of the battery"),
+                     Integer("battery_percentage", "%", "Charge of the battery"), Limit("%")};
+  }
+  return reasons;
+}
+
 EventEntry Event(std::string type, std::string emitter, std::string text, std::vector<Field> fields = {},
                  std::vector<ReasonEntry> reasons = {}, std::string other_severity = "warning",
                  std::string other_resume = "user") {
@@ -1516,7 +1527,7 @@ const std::vector<EventEntry>& Events() {
               return reasons;
             }()),
       Event("CALIBRATION_REFUSED", "logic", "A start of the calibration drive was refused", Rated(true),
-            User({{"BUSY", "info"},
+            CalibrationRefusals({{"BUSY", "info"},
                   {"HOLD", "info"},
                   {"ON_DOCK", "info"},
                   {"STILL_STOPPING", "info"},
@@ -1541,7 +1552,10 @@ const std::vector<EventEntry>& Events() {
       Event("CALIBRATION", "logic", "A phase of the calibration drive began",
             {Text("phase", "The phase", true,
                   {"start", "align", "stand", "line", "spin_left", "spin_right", "evaluate", "end"}),
-             Integer("index", "", "Which round of the phase", true)}),
+             Integer("index", "", "Which round of the phase", true),
+             Integer("rounds", "", "Only at start: the rounds of the drive, the last index of line"),
+             Number("expected_s", "s",
+                    "Only at start: about how long the drive takes by its phases, without the evaluation")}),
       Event("CALIBRATED", "logic", "The calibration drive ended with its result",
             {Text("status", "How far the evaluation got", true, {"done", "not_evaluated", "failed"}),
              Text("summary", "English text of the result", true),

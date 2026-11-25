@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -55,6 +56,7 @@ std::vector<Reason> CalibrationPart::CalibrationProblems(CoreFacts core, double 
                   core.config().calibration.min_battery);
     add(Reason("BATTERY_LOW", text)
             .With("battery_percentage", static_cast<int>(core.hw().battery_percentage))
+            .With("battery_voltage", core.hw().battery_voltage)
             .With("limit", core.config().calibration.min_battery));
   }
   add(core.drivable_problem());
@@ -71,11 +73,12 @@ std::vector<Reason> CalibrationPart::CalibrationProblems(CoreFacts core, double 
   return problems;
 }
 
-Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s) {
+Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s, std::string* event_id) {
   core.CommandCancels();
   const std::vector<Reason> problems = CalibrationProblems(core, now_s);
   if (!problems.empty()) {
-    RefuseCalibration(core, problems.front());
+    const std::string id = RefuseCalibration(core, problems.front());
+    if (event_id) *event_id = id;
     return problems.front();
   }
   // NOLINTNEXTLINE(bugprone-unchecked-optional-access): no problems means CalibrationProblems found a status
@@ -87,17 +90,20 @@ Reason CalibrationPart::StartCalibration(CoreAccess core, double now_s) {
   calibration_index_ = 0;
   core.home().Reset();
   core.SetState(State::kCalibrating);
-  core.AddEvent("CALIBRATION", {{"phase", "start"}, {"index", 0}});
+  core.AddEvent("CALIBRATION", {{"phase", "start"},
+                                 {"index", 0},
+                                 {"rounds", status.rounds},
+                                 {"expected_s", std::lround(status.expected_s)}});
   core.Notify("Calibration: lanes of " + Metres(status.lane_length) + " m, heading " +
                      Degrees(status.heading) + " deg");
   return {};
 }
 
-void CalibrationPart::RefuseCalibration(CoreAccess core, const Reason& why) {
+std::string CalibrationPart::RefuseCalibration(CoreAccess core, const Reason& why) {
   core.CommandCancels();
   json details = json::object();
   PutReason(&details, "CALIBRATION_REFUSED", why);
-  core.AddEvent("CALIBRATION_REFUSED", std::move(details));
+  return core.AddEvent("CALIBRATION_REFUSED", std::move(details));
 }
 
 void CalibrationPart::OnCalibrationSign(CoreFacts core, double now_s) {

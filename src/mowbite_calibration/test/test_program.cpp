@@ -214,6 +214,7 @@ class ProgramTest : public ::testing::Test {
 
 TEST_F(ProgramTest, DrivesTheProgramAndEndsWhereItBegan) {
   StartOn(Lane{2, 3, 0.0, 3.0});
+  const double expected_s = program_.ExpectedSeconds(Lane{2, 3, 0.0, 3.0});
   std::vector<std::pair<double, double>> line_ends;
   std::vector<double> turns;
   double turn_start = 0;
@@ -235,6 +236,8 @@ TEST_F(ProgramTest, DrivesTheProgramAndEndsWhereItBegan) {
   // About 4 min without ALIGN, never backwards, at most the speeds of the program.
   EXPECT_GT(ended_s_ - start_s_, 220);
   EXPECT_LT(ended_s_ - start_s_, 300);
+  // The estimate of calibration/status within a tenth.
+  EXPECT_NEAR(ended_s_ - start_s_, expected_s, 0.1 * expected_s);
   EXPECT_GE(mower_.min_cmd_v, 0.0);
   // Out to the far end and back, twice; each turn 540 deg, left at the far end and right at the start.
   ASSERT_EQ(line_ends.size(), 4u);

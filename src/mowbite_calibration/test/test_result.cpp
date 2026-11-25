@@ -18,6 +18,7 @@ Ending Done() {
   ending.reason = "DONE";
   ending.message = "The calibration drive ran to its end";
   ending.recording = "/data/calibration/recordings/calib-20261103T120000Z.jsonl.gz";
+  ending.geometry_version = 7;
   return ending;
 }
 
@@ -44,6 +45,7 @@ TEST(Result, EveryValueGetsItsKeyOfTheGeometry) {
   EXPECT_EQ(result["status"], "done");
   EXPECT_EQ(result["id"], "calib-1793707200");
   EXPECT_EQ(result["recording"], Done().recording);
+  EXPECT_EQ(result["geometry_version"], 7);
   EXPECT_EQ(result["reason"], "DONE");
   ASSERT_EQ(result["values"].size(), 6u);
   const std::vector<std::string> keys = {"ticks_per_m", "track", "antenna_x", "antenna_y", "imu_roll", "imu_pitch"};
@@ -91,6 +93,7 @@ TEST(Result, StatusWithoutEvaluationOrWithoutAWholeDrive) {
   EXPECT_EQ(missing["status"], "not_evaluated");
   EXPECT_EQ(missing["values"], json::array());
   EXPECT_EQ(missing["recording"], Done().recording);
+  EXPECT_EQ(missing["geometry_version"], 7);
   EXPECT_EQ(missing["summary"], "Not evaluated: the recording is kept for later");
 
   const json rejected = Compose(Done(), json{{"error", "no gps lines"}});

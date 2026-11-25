@@ -1502,6 +1502,8 @@ void LogicNode::OnCalibrationStatus(const mowbite_msgs::msg::CalibrationStatus& 
   status.lane_length = msg.lane_length;
   status.strip_length = msg.strip_length;
   status.strip_width = msg.strip_width;
+  status.rounds = msg.rounds;
+  status.expected_s = msg.expected_s;
   status.running = msg.running;
   std::lock_guard<std::mutex> lock(mutex_);
   core_.Call<&LogicCore::OnCalibrationStatus>(status, MonotonicSeconds());
@@ -1555,31 +1557,38 @@ void LogicNode::OnCalibrationCheck(const mowbite_msgs::msg::RpcRequest& request)
   rpc_response_pub_->publish(msg);
 }
 
-// {"state": "CALIBRATING"} once the drive began, else -32600 with the reason, its message and fields as data, and
-// CALIBRATION_REFUSED. Parameters are not needed.
+// {"state": "CALIBRATING"} once the drive began, else -32600 with the data of a refused command and
+// CALIBRATION_REFUSED, or -32602 for params that do not fit.
 void LogicNode::OnCalibrationStart(const mowbite_msgs::msg::RpcRequest& request) {
-  Reason why;
+  using mowbite_msgs::msg::RpcError;
+  const json params = request.params.empty() ? json::object() : json::parse(request.params, nullptr, false);
+  std::string field;
+  const std::string invalid =
+      params.is_discarded() ? "The parameters are not valid JSON"
+                            : mowbite_api::CheckParams(*mowbite_api::FindMethod("calibration.start"), params, &field);
+  if (!invalid.empty()) {
+    PublishRpcError(request.id, RpcError::ERROR_INVALID_PARAMS, invalid, json{{"field", field}}.dump());
+    return;
+  }
+  const std::string client = params.value("client", "");
+  CommandOutcome outcome;
   {
     std::lock_guard<std::mutex> lock(mutex_);
     const double t = MonotonicSeconds();
-    const std::vector<Reason> problems = CalibrationProblemsLocked(t);
-    if (!problems.empty()) {
-      why = problems.front();
-      core_.Call<&LogicCore::RefuseCalibration>(why);
-    } else {
-      why = core_.Call<&LogicCore::StartCalibration>(t);
-    }
+    outcome = core_.Call<&LogicCore::CalibrationStart>(CalibrationProblemsLocked(t), client, t);
   }
-  if (why.empty()) {
-    RCLCPP_INFO(get_logger(), "calibration.start: calibrating");
+  const std::string by = client.empty() ? "" : " (client " + client + ")";
+  if (outcome.accepted) {
+    RCLCPP_INFO(get_logger(), "calibration.start%s: calibrating", by.c_str());
     mowbite_msgs::msg::RpcResponse msg;
-    msg.result = json{{"state", "CALIBRATING"}}.dump();
+    msg.result = outcome.result.dump();
     msg.id = request.id;
     rpc_response_pub_->publish(msg);
   } else {
-    RCLCPP_WARN(get_logger(), "calibration.start refused: %s (%s)", why.code.c_str(), why.message.c_str());
-    PublishRpcError(request.id, mowbite_msgs::msg::RpcError::ERROR_INVALID_REQUEST, why.message,
-                    ReasonJson(why).dump(-1, ' ', false, json::error_handler_t::replace));
+    RCLCPP_WARN(get_logger(), "calibration.start%s refused: %s (%s)", by.c_str(), outcome.why.code.c_str(),
+                outcome.why.message.c_str());
+    PublishRpcError(request.id, RpcError::ERROR_INVALID_REQUEST, outcome.why.message,
+                    outcome.data.dump(-1, ' ', false, json::error_handler_t::replace));
   }
   Step();
 }

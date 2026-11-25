@@ -274,22 +274,34 @@ bool Program::Start(const Lane& lane, double now) {
   pivot_drift_ = 0;
   antenna_origin_.reset();
   stands_.clear();
-  const double spin_up = config_.spin_rate / config_.spin_accel;
-  const double off = pose_s_ ? std::abs(Wrap(lane.heading - pose_.heading)) : M_PI / 2;
-  steps_.push_back({Phase::kStart, 0, 0.0});
-  steps_.push_back({Phase::kAlign, 0, off / config_.spin_rate + spin_up});
-  steps_.push_back({Phase::kStand, 0, config_.first_stand});
-  const double line = lane.length / config_.line_speed + config_.line_speed / config_.line_accel;
-  const double spin = config_.spin_angle / config_.spin_rate + spin_up;
-  for (int round = 1; round <= config_.rounds; round++) {
-    steps_.push_back({Phase::kLine, round, line});
-    steps_.push_back({Phase::kStand, round, config_.stand});
-    steps_.push_back({round % 2 == 1 ? Phase::kSpinLeft : Phase::kSpinRight, round, spin});
-    steps_.push_back({Phase::kStand, round, config_.stand});
-  }
+  steps_ = Plan(lane);
   running_ = true;
   Begin(0, now);
   return true;
+}
+
+std::vector<Program::Step> Program::Plan(const Lane& lane) const {
+  std::vector<Step> steps;
+  const double spin_up = config_.spin_rate / config_.spin_accel;
+  const double off = pose_s_ ? std::abs(Wrap(lane.heading - pose_.heading)) : M_PI / 2;
+  steps.push_back({Phase::kStart, 0, 0.0});
+  steps.push_back({Phase::kAlign, 0, off / config_.spin_rate + spin_up});
+  steps.push_back({Phase::kStand, 0, config_.first_stand});
+  const double line = lane.length / config_.line_speed + config_.line_speed / config_.line_accel;
+  const double spin = config_.spin_angle / config_.spin_rate + spin_up;
+  for (int round = 1; round <= config_.rounds; round++) {
+    steps.push_back({Phase::kLine, round, line});
+    steps.push_back({Phase::kStand, round, config_.stand});
+    steps.push_back({round % 2 == 1 ? Phase::kSpinLeft : Phase::kSpinRight, round, spin});
+    steps.push_back({Phase::kStand, round, config_.stand});
+  }
+  return steps;
+}
+
+double Program::ExpectedSeconds(const Lane& lane) const {
+  double total = 0;
+  for (const Step& step : Plan(lane)) total += step.expected;
+  return total;
 }
 
 void Program::Begin(size_t index, double now) {

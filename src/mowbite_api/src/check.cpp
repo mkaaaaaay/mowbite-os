@@ -98,6 +98,37 @@ void CheckField(const std::string& where, const Field& field, const Json& value,
 
 }  // namespace
 
+namespace {
+
+// open: other keys are let through unchecked.
+std::string CheckFields(const std::string& name, const std::vector<Field>& fields, bool open, const Json& params,
+                        std::string* field) {
+  const auto fail = [field](const std::string& key, const std::string& text) {
+    if (field) *field = key;
+    return text;
+  };
+  if (!params.is_object()) return fail("", name + ": the params are not an object");
+  for (const auto& [key, value] : params.items()) {
+    const auto entry =
+        std::find_if(fields.begin(), fields.end(), [&key](const Field& param) { return param.name == key; });
+    if (entry == fields.end()) {
+      if (open) continue;
+      return fail(key, name + " takes no " + key);
+    }
+    std::vector<std::string> problems;
+    CheckField(name, *entry, value, &problems);
+    if (!problems.empty()) return fail(key, problems.front());
+  }
+  for (const auto& param : fields) {
+    if (param.required && !params.contains(param.name)) {
+      return fail(param.name, name + "." + param.name + " is missing");
+    }
+  }
+  return "";
+}
+
+}  // namespace
+
 std::vector<std::string> CheckEvent(const std::string& type, const Json& details, bool strict) {
   std::vector<std::string> problems;
   if (!details.is_object()) return {type + ": the details are not an object"};
@@ -157,25 +188,11 @@ std::vector<std::string> CheckEvent(const std::string& type, const Json& details
 }
 
 std::string CheckParams(const Command& command, const Json& params, std::string* field) {
-  const auto fail = [field](const std::string& name, const std::string& text) {
-    if (field) *field = name;
-    return text;
-  };
-  if (!params.is_object()) return fail("", command.name + ": the params are not an object");
-  for (const auto& [key, value] : params.items()) {
-    const auto entry = std::find_if(command.params.begin(), command.params.end(),
-                                    [&key](const Field& param) { return param.name == key; });
-    if (entry == command.params.end()) return fail(key, command.name + " takes no " + key);
-    std::vector<std::string> problems;
-    CheckField(command.name, *entry, value, &problems);
-    if (!problems.empty()) return fail(key, problems.front());
-  }
-  for (const auto& param : command.params) {
-    if (param.required && !params.contains(param.name)) {
-      return fail(param.name, command.name + "." + param.name + " is missing");
-    }
-  }
-  return "";
+  return CheckFields(command.name, command.params, false, params, field);
+}
+
+std::string CheckParams(const Method& method, const Json& params, std::string* field) {
+  return CheckFields(method.name, method.params.fields, method.params.open, params, field);
 }
 
 }  // namespace mowbite_api

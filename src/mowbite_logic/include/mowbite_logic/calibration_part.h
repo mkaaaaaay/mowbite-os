@@ -16,8 +16,10 @@ class CalibrationPart {
   void OnCalibrationStatus(const CalibrationStatus& status, double now_s);
   std::vector<Reason> CalibrationProblems(CoreFacts core, double now_s) const;
   std::optional<CalibrationStatus> CalibrationStatusNow(CoreFacts core, double now_s) const;
-  Reason StartCalibration(CoreAccess core, double now_s);
-  void RefuseCalibration(CoreAccess core, const Reason& why);
+  // event_id: the id of CALIBRATION_REFUSED when refused.
+  Reason StartCalibration(CoreAccess core, double now_s, std::string* event_id = nullptr);
+  // The id of the event CALIBRATION_REFUSED.
+  std::string RefuseCalibration(CoreAccess core, const Reason& why);
   void OnCalibrationSign(CoreFacts core, double now_s);
   void OnCalibrationFeedback(CoreAccess core, const std::string& phase, int index, double now_s);
   void OnCalibrationEnded(CoreAccess core, const CalibrationOutcome& outcome);

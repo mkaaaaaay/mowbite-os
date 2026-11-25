@@ -151,13 +151,28 @@
     },
     "calibration.result.result": {
       "description": "The result of calibration.result: As the calibration wrote it",
+      "properties": {
+        "geometry_version": {
+          "description": "version of robot.geometry the drive ran with, 0 when it was not known; missing in results from before api 66",
+          "type": "integer"
+        }
+      },
+      "required": [],
       "type": [
         "object",
         "null"
       ]
     },
     "calibration.start.params": {
-      "description": "The params of calibration.start: None",
+      "description": "The params of calibration.start: None, or who sends it; other keys are ignored",
+      "properties": {
+        "client": {
+          "description": "Who sent the command (app, ha), for the log and the events of its step",
+          "pattern": "^[a-z][a-z0-9_-]{0,15}$",
+          "type": "string"
+        }
+      },
+      "required": [],
       "type": "object"
     },
     "calibration.start.result": {
@@ -1315,6 +1330,11 @@
           "pattern": "^[a-z][a-z0-9_-]{0,15}$",
           "type": "string"
         },
+        "expected_s": {
+          "description": "Only at start: about how long the drive takes by its phases, without the evaluation",
+          "type": "number",
+          "x-unit": "s"
+        },
         "id": {
           "description": "Random id of the event, 32 letters and digits",
           "type": "string"
@@ -1340,6 +1360,10 @@
             "end"
           ],
           "type": "string"
+        },
+        "rounds": {
+          "description": "Only at start: the rounds of the drive, the last index of line",
+          "type": "integer"
         },
         "session_id": {
           "description": "The session of the logic since its start",
@@ -17295,11 +17319,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:65",
+  "$id": "urn:mowbite-os:api:66",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 65,
+  "x-api": 66,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -17971,7 +17995,7 @@
       "result": "#/$defs/calibration.result.result"
     },
     "calibration.start": {
-      "description": "Starts the calibration drive; a refusal carries reason and message",
+      "description": "Starts the calibration drive; a refusal is -32600 with the data of a refused command (event CALIBRATION_REFUSED, its reason and fields, state, sub_state, event_id), -32602 for params that do not fit",
       "node": "mowbite_logic",
       "offered": "while the calibration program runs",
       "params": "#/$defs/calibration.start.params",
@@ -18069,7 +18093,7 @@
       "result": "#/$defs/host.restart_os.result"
     },
     "host.usb_mode": {
-      "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off. An update that has not begun its switch ends for it (result aborted); during a switch HOLD. UNSUPPORTED on other mowers",
+      "description": "Tron only: restarts the mower into the USB mode of its loader, where the installer on a PC takes over (back to the vendor system, or writing again). Only through the gate of a switch without the charging contacts: a running MowBite OS idles without an emergency and grants its hold, so wheels and blade stay off. An update that has not begun its switch ends for it (result aborted); during a switch HOLD. UNSUPPORTED on other mowers. A restart that fails gives the hold back and shows as usb_mode_failed {t (unix s), error} in mowbite/host/status until the next try",
       "node": "mowbite_host",
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.usb_mode.params",
@@ -19005,7 +19029,7 @@
         "fields": {
           "battery_percentage": "%",
           "battery_voltage": "V",
-          "limit": "V"
+          "limit": "%"
         },
         "resume": "user",
         "severity": "warning"

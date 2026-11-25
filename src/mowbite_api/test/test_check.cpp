@@ -182,3 +182,16 @@ TEST(CheckParams, EachRowOfAListOfObjects) {
   EXPECT_NE(CheckParams(start, Json{{"tasks", Json::array({Json::object()})}}, &field).find("tasks[0].area_id"),
             std::string::npos);
 }
+
+// calibration.start takes client and lets other keys through, as before api 66.
+TEST(CheckParams, AMethodWithOpenParams) {
+  const Method* start = FindMethod("calibration.start");
+  ASSERT_NE(start, nullptr);
+  std::string field;
+  EXPECT_EQ(CheckParams(*start, Json::object(), &field), "");
+  EXPECT_EQ(CheckParams(*start, Json{{"client", "app"}, {"other", 1}}, &field), "");
+  EXPECT_NE(CheckParams(*start, Json{{"client", "App!"}}, &field), "");
+  EXPECT_EQ(field, "client");
+  EXPECT_NE(CheckParams(*start, Json::array(), &field), "");
+  EXPECT_EQ(FindMethod("mowing.start"), nullptr);
+}

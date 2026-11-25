@@ -108,6 +108,10 @@ class LogicCore {
   // A start refused by the node (no program, the last drive still stopping): CALIBRATION_REFUSED. After a start the
   // node hands the CalibrationGoal to calibration/run.
   void RefuseCalibration(const Reason& why);
+  // calibration.start with the client of the caller: refused for the first of problems (those of the core and the
+  // node), else as StartCalibration. Accepted with the result {state: CALIBRATING}, else why and the data of a refused
+  // command (event CALIBRATION_REFUSED, its reason and fields, state, sub_state, event_id).
+  CommandOutcome CalibrationStart(const std::vector<Reason>& problems, const std::string& client, double now_s);
   // A sign of the program: the goal taken, or feedback, which also tells the phase (event CALIBRATION when it changes).
   void OnCalibrationSign(double now_s);
   void OnCalibrationFeedback(const std::string& phase, int index, double now_s);

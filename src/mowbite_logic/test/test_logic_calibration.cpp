@@ -41,6 +41,8 @@ CalibrationStatus Lane(double heading = 0.5, double length = 3.0) {
   status.lane_length = length;
   status.strip_length = length + 1.88;
   status.strip_width = 1.88;
+  status.rounds = 4;
+  status.expected_s = 245.4;
   return status;
 }
 
@@ -144,6 +146,8 @@ TEST(Calibration, StartsOnTheLawnAndEndsCalibrated) {
   EXPECT_EQ(events[0].details["sub_state"], "CALIBRATING");
   EXPECT_EQ(events[1].details["phase"], "start");
   EXPECT_EQ(events[1].details["index"], 0);
+  EXPECT_EQ(events[1].details["rounds"], 4);
+  EXPECT_EQ(events[1].details["expected_s"], 245);
   // The lane the start was checked with, once.
   const auto goal = core.TakeCalibrationGoal();
   ASSERT_TRUE(goal);
@@ -175,6 +179,56 @@ TEST(Calibration, StartsOnTheLawnAndEndsCalibrated) {
   // The program ended by itself, nothing to cancel.
   EXPECT_FALSE(core.TakeCalibrationCancel());
   EXPECT_FALSE(core.Docking());
+}
+
+// calibration.start: the answer of a command, the client in its events, a refusal with the data of a refused command.
+TEST(Calibration, StartAnswersLikeACommand) {
+  {
+    TestCore core = Ready();
+    const CommandOutcome out = core.CalibrationStart(core.CalibrationProblems(10.5), "app", 10.5);
+    ASSERT_TRUE(out.accepted);
+    EXPECT_EQ(out.result, (json{{"state", "CALIBRATING"}}));
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE", "CALIBRATION"}));
+    EXPECT_EQ(events[1].details["client"], "app");
+    // Later events are the program's, without the client.
+    core.OnCalibrationFeedback("stand", 0, 11.0);
+    EXPECT_FALSE(DetailsOf(core.TakeEvents(), "CALIBRATION").contains("client"));
+  }
+  {
+    TestCore core = Ready();
+    HardwareSnapshot hw = Healthy();
+    hw.emergency = true;
+    hw.emergency_reason = kEmergencyStop;
+    core.OnHardwareStatus(hw);
+    core.TakeEvents();
+    const CommandOutcome out = core.CalibrationStart(core.CalibrationProblems(11.0), "ha", 11.0);
+    EXPECT_FALSE(out.accepted);
+    EXPECT_EQ(out.why.code, "EMERGENCY");
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), std::vector<std::string>{"CALIBRATION_REFUSED"});
+    EXPECT_EQ(events[0].details["client"], "ha");
+    EXPECT_EQ(out.data["event"], "CALIBRATION_REFUSED");
+    EXPECT_EQ(out.data["reason"], "EMERGENCY");
+    EXPECT_EQ(out.data["severity"], "error");
+    EXPECT_EQ(out.data["state"], "IDLE");
+    EXPECT_EQ(out.data["sub_state"], "");
+    EXPECT_EQ(out.data["event_id"], events[0].id);
+    EXPECT_FALSE(core.Calibrating());
+  }
+  {
+    // A reason only the node knows, without a client.
+    TestCore core = Ready();
+    const CommandOutcome out =
+        core.CalibrationStart({Reason("CALIBRATION_MISSING", "The calibration program is not running")}, "", 10.5);
+    EXPECT_EQ(out.data["reason"], "CALIBRATION_MISSING");
+    const auto events = core.TakeEvents();
+    ASSERT_EQ(Types(events), std::vector<std::string>{"CALIBRATION_REFUSED"});
+    EXPECT_EQ(out.data["event_id"], events[0].id);
+    EXPECT_FALSE(events[0].details.contains("client"));
+    EXPECT_FALSE(core.Calibrating());
+    EXPECT_FALSE(core.TakeCalibrationGoal());
+  }
 }
 
 TEST(Calibration, NotEvaluatedIsAWarning) {
@@ -252,6 +306,8 @@ TEST(Calibration, EveryReasonAgainstAStart) {
     core.OnHardwareStatus(hw);
     const Event e = refused(core, "BATTERY_LOW");
     EXPECT_EQ(e.details["battery_percentage"], 25);
+    EXPECT_DOUBLE_EQ(e.details["battery_voltage"].get<double>(), 24.5);
+    // In % here, as x-reasons of CALIBRATION_REFUSED says.
     EXPECT_EQ(e.details["limit"], 30);
     hw.battery_ok = false;
     core.OnHardwareStatus(hw);

@@ -157,6 +157,9 @@ struct CalibrationStatus {
   double lane_length = 0;
   double strip_length = 0;
   double strip_width = 0;
+  // A drive on the lane: its rounds and the time it should take (s).
+  int rounds = 0;
+  double expected_s = 0;
   bool running = false;
 };
 

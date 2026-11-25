@@ -416,6 +416,8 @@ class CalibrationNode : public rclcpp::Node {
         if (lane_->lane) {
           msg.heading = lane_->lane->heading;
           msg.lane_length = lane_->lane->length;
+          msg.rounds = program_.config().rounds;
+          msg.expected_s = program_.ExpectedSeconds(*lane_->lane);
         }
       }
     }
@@ -492,6 +494,7 @@ class CalibrationNode : public rclcpp::Node {
       Refuse("BUSY", "A calibration drive runs already");
       return;
     }
+    ending_.geometry_version = dimensions_->version;
     OpenRecording(lane);
     evaluating_ = false;
     feedback_s_ = 0;

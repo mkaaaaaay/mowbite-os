@@ -10,5 +10,9 @@ float64 heading
 float64 lane_length
 float64 strip_length
 float64 strip_width
+# A drive on that lane: its rounds and the time it should take (s) by the expected time of its phases, without the
+# evaluation; 0 without room.
+int32 rounds
+float64 expected_s
 # A drive runs.
 bool running
