@@ -14,6 +14,8 @@ User=mowbite
 Group=mowbite
 EnvironmentFile=/usr/lib/mowbite/os.defaults
 EnvironmentFile=-/etc/mowbite/os.conf
+# As root on the mounted /userdata: systemd-tmpfiles-setup may run before the nofail mount and leave them hidden.
+ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/mowbite-os.conf
 ExecStart=/usr/lib/mowbite/run-os
 # ros2 launch stops its nodes on SIGINT (the driver switches the blade off); the rest is killed after the timeout.
 KillSignal=SIGINT

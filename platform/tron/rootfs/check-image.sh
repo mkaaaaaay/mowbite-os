@@ -230,6 +230,9 @@ test "$(grep -cE "^mowbite namespaces=\"$namespaces\" ssh-ed25519 " "$TREE/etc/m
 result "two keys in allowed_signers" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-os.service")" = ../mowbite-os.service
 result "mowbite-os.service enabled" $?
+grep -qxF 'ExecStartPre=+/usr/bin/systemd-tmpfiles --create /usr/lib/tmpfiles.d/mowbite-os.conf' \
+    "$TREE/etc/systemd/system/mowbite-os.service"
+result "mowbite-os creates its data folders on /userdata as root before it starts" $?
 test "$(readlink "$TREE/etc/systemd/system/multi-user.target.wants/mowbite-update-recover.service")" = \
     ../mowbite-update-recover.service
 result "mowbite-update-recover.service enabled" $?
