@@ -38,6 +38,7 @@
 #include "mowbite_stats/incidents.h"
 #include "mowbite_stats/sensor_history.h"
 #include "mowbite_stats/stats_rpc.h"
+#include "mowbite_stats/stop_book.h"
 #include "mowbite_watch/attach.h"
 
 namespace mowbite_stats {
@@ -47,6 +48,7 @@ namespace {
 constexpr char kStateFile[] = "stats/state.json";
 constexpr char kHoursFile[] = "stats/hours.json";
 constexpr char kPartsFile[] = "stats/parts.json";
+constexpr char kStopsFile[] = "stats/stops.json";
 // hours.json at kMaxHours rows is about 0.5 MB.
 constexpr size_t kMaxFileBytes = size_t{2} * 1024 * 1024;
 // The state goes to the disk this often (s); at most this much counting is lost when the OS stops hard.
@@ -91,13 +93,15 @@ rclcpp::QoS LatchedQos(size_t depth) {
 // the blade hours of the parts since they were last seen to; stats.get, .part_done and .part_due through the bridge,
 // stats/parts for the pushes of mowbite_net; min, mean and max of the number sensors of bridge/sensor_value per
 // minute for sensors.history. Files under <data_dir>/stats. The incidents of the journal in journal_dir/incidents
-// (journal.status, incidents.*, event INCIDENT): Incidents. Reads only, moves nothing.
+// (journal.status, incidents.*, event INCIDENT): Incidents. The stop book in stats/stops.json for stats.stops:
+// StopBook, whose unexplained stops open incidents. Reads only, moves nothing.
 class StatsNode : public rclcpp::Node {
  public:
   explicit StatsNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_stats", mowbite_component::StartupOnly(options)),
         data_dir_(declare_parameter("data_dir", std::string())),
         counter_(Read(kStateFile), Read(kHoursFile), Read(kPartsFile), WallSeconds()),
+        stops_(Read(kStopsFile)),
         reserve_bytes_(std::max(0.0, declare_parameter("journal_reserve_mb", mowbite_journal::Options().reserve_mb)) *
                        1e6),
         writer_(WriteOrRemove, [this](const mowbite_hold::FileWriter::Done& done) {
@@ -108,6 +112,12 @@ class StatsNode : public rclcpp::Node {
     incidents_ = std::make_unique<Incidents>(
         ReadIncidentsConfig(*this, reserve_bytes_ / 1e6, data_dir_), FreeBytes,
         [this](const std::string& why) { RCLCPP_WARN(get_logger(), "%s", why.c_str()); });
+    stops_.SetIncidents({[this](const std::string& reason) {
+                           std::string id;
+                           Publish(incidents_->OnStop(reason, mowbite_journal::MonotonicNs(), WallSeconds(), &id));
+                           return id;
+                         },
+                         [this] { return incidents_->Collecting(); }});
     parts_pub_ = create_publisher<mowbite_msgs::msg::PartsUse>("stats/parts", LatchedQos(1));
     methods_pub_ = create_publisher<mowbite_msgs::msg::RpcMethods>("bridge/rpc/methods", LatchedQos(50));
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
@@ -151,6 +161,7 @@ class StatsNode : public rclcpp::Node {
           if (msg.topic != "events/json") return;
           const json event = json::parse(msg.payload, nullptr, false);
           Publish(incidents_->OnEvent(event, mowbite_journal::MonotonicNs(), WallSeconds()));
+          stops_.OnEvent(event, MonotonicSeconds(), WallSeconds());
         });
     log_sub_ = create_subscription<rcl_interfaces::msg::Log>(
         "/rosout", rclcpp::QoS(100), [this](const rcl_interfaces::msg::Log& msg) {
@@ -172,6 +183,7 @@ class StatsNode : public rclcpp::Node {
         });
     incidents_timer_ = create_wall_timer(std::chrono::seconds(1), [this] {
       Publish(incidents_->Tick(mowbite_journal::MonotonicNs(), WallSeconds()));
+      if (stops_.Tick(MonotonicSeconds())) SaveStops();
     });
     watch_ = mowbite_watch::Attach(*this);
   }
@@ -310,7 +322,12 @@ class StatsNode : public rclcpp::Node {
     sample.x = state.pose_x;
     sample.y = state.pose_y;
     if (counter_.Add(sample).hour_closed) Save(true);
+    if (stops_.OnPose(!state.pause_reason.empty(), sample.pose, sample.x, sample.y, sample.mono, sample.wall)) {
+      SaveStops();
+    }
   }
+
+  void SaveStops() { Write(kStopsFile, stops_.Json(WallSeconds())); }
 
   void Save(bool hours) {
     if (hours) Write(kHoursFile, counter_.HoursJson());
@@ -348,11 +365,16 @@ class StatsNode : public rclcpp::Node {
       out.error = RpcError{kInvalidParams, "The parameters are not valid JSON", nullptr};
     } else if (request.method == kHistoryMethod) {
       out = HandleHistory(history_, params, WallSeconds());
+    } else if (request.method == kStopsMethod) {
+      out = HandleStops(stops_, counter_, params, WallSeconds());
     } else if (std::find(Incidents::Methods().begin(), Incidents::Methods().end(), request.method) !=
                Incidents::Methods().end()) {
       Incidents::Notices notices;
       out = incidents_->Handle(request.method, params, mowbite_journal::MonotonicNs(), WallSeconds(), &notices);
       Publish(notices);
+      // A mark without a stop before it is a stop the book missed.
+      const bool marked = request.method == "incidents.mark" && !out.error;
+      if (marked && stops_.OnMark(out.result.value("id", ""), WallSeconds())) SaveStops();
     } else {
       out = HandleStats(counter_, request.method, params, WallSeconds());
     }
@@ -378,6 +400,7 @@ class StatsNode : public rclcpp::Node {
 
   const std::string data_dir_;
   Counter counter_;
+  StopBook stops_;
   SensorHistory history_;
   const double reserve_bytes_;
   // A write of the sensor history failed: the next save writes every hour.

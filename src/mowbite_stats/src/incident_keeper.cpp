@@ -17,11 +17,6 @@ int64_t Ns(double s) {
   return static_cast<int64_t>(std::llround(s * 1e9));
 }
 
-std::string Text(const json& object, const char* key) {
-  const auto it = object.find(key);
-  return it != object.end() && it->is_string() ? it->get<std::string>() : std::string();
-}
-
 // The names of emergency bits as in x-emergency-bits.
 std::string BitNames(uint64_t bits) {
   std::string names;
@@ -46,8 +41,8 @@ int64_t FromNs(const Trigger& trigger, const IncidentLimits& limits) {
 
 std::optional<Trigger> TriggerOfEvent(const json& event, int64_t t_ns, const std::string& utc) {
   if (!event.is_object()) return std::nullopt;
-  const std::string type = Text(event, "type");
-  const std::string reason = Text(event, "reason");
+  const std::string type = TextOf(event, "type");
+  const std::string reason = TextOf(event, "reason");
   Trigger trigger;
   trigger.t_ns = t_ns;
   trigger.utc = utc;

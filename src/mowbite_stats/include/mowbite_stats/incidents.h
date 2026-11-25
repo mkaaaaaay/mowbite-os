@@ -64,6 +64,10 @@ class Incidents {
   // An event of events/json, the emergency bits of hw/status, the state for the manifest, a log line.
   Notices OnEvent(const json& event, int64_t now_ns, double wall_s);
   Notices OnEmergency(uint32_t bits, int64_t now_ns, double wall_s);
+  // A stop of the stop book no event explained (STOP); opened: its incident, empty when throttled or none are kept.
+  Notices OnStop(const std::string& reason, int64_t now_ns, double wall_s, std::string* opened);
+  // The incident collecting now, empty for none.
+  std::string Collecting() const;
   void OnRobot(json robot);
   // journal_enabled of the logic: journal_dir/disabled turns the journal off from the next start of each process.
   void SetJournalEnabled(bool enabled);

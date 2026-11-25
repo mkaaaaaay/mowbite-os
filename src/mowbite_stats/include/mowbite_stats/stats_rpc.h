@@ -8,6 +8,7 @@
 
 #include "mowbite_stats/counter.h"
 #include "mowbite_stats/sensor_history.h"
+#include "mowbite_stats/stop_book.h"
 
 namespace mowbite_stats {
 
@@ -33,12 +34,15 @@ std::optional<RpcOutcome> CheckKeys(const json& params, const std::set<std::stri
 std::optional<RpcOutcome> CheckClient(const json& params);
 
 constexpr char kHistoryMethod[] = "sensors.history";
+constexpr char kStopsMethod[] = "stats.stops";
 
 // All methods of mowbite_stats: stats.*, sensors.history, journal.status and incidents.* (Incidents::Methods).
 const std::vector<std::string>& StatsMethods();
 
-// The answer to one of StatsMethods but sensors.history; params as sent (null without any), now in unix s.
+// The answer to stats.get, .part_done and .part_due; params as sent (null without any), now in unix s.
 RpcOutcome HandleStats(Counter& counter, const std::string& method, const json& params, double now);
+// The answer to stats.stops: the book with the blade hours of each week from the counter.
+RpcOutcome HandleStops(const StopBook& book, const Counter& counter, const json& params, double now);
 // The answer to sensors.history.
 RpcOutcome HandleHistory(const SensorHistory& history, const json& params, double now);
 

@@ -104,6 +104,11 @@ Counter::Counter(const json& state, const json& hours, const json& parts, double
   }
 }
 
+std::string TextOf(const json& object, const char* key) {
+  const auto found = object.find(key);
+  return found != object.end() && found->is_string() ? found->get<std::string>() : std::string();
+}
+
 Changed Counter::Add(const Sample& sample) {
   Changed changed;
   // What comes without a set clock goes into the hour 0, and from there into the first hour with a set clock.
@@ -168,25 +173,30 @@ json Counter::PartsJson() const {
   return out;
 }
 
+std::vector<Hour> Counter::HoursSince(int64_t from) const {
+  std::vector<Hour> picked;
+  for (const Hour& h : hours_) {
+    if (h.t >= from) picked.push_back(h);
+  }
+  if (!hour_.amounts.Empty() && hour_.t != 0 && hour_.t >= from) picked.push_back(hour_);
+  return picked;
+}
+
 json Counter::Get(std::optional<int64_t> from, double now) const {
   const int64_t start = from.value_or(YearStart(now));
-  std::vector<const Hour*> picked;
-  for (const Hour& h : hours_) {
-    if (h.t >= start) picked.push_back(&h);
-  }
-  if (!hour_.amounts.Empty() && hour_.t != 0 && hour_.t >= start) picked.push_back(&hour_);
+  std::vector<Hour> picked = HoursSince(start);
   // Cut to the newest; from then says where the hours begin.
   int64_t begins = start;
   // About 0.7 MB of JSON at the most, well below what MQTT carries.
   const size_t most = mowbite_api::kStatsMaxAnswerHours;
   if (picked.size() > most) {
     picked.erase(picked.begin(), picked.end() - static_cast<std::ptrdiff_t>(most));
-    begins = picked.front()->t;
+    begins = picked.front().t;
   }
   json rows = json::array();
-  for (const Hour* h : picked) {
-    json row = {{"t", h->t}};
-    row.update(AmountsJson(h->amounts));
+  for (const Hour& h : picked) {
+    json row = {{"t", h.t}};
+    row.update(AmountsJson(h.amounts));
     rows.push_back(row);
   }
   return {{"schema", 1},         {"since", std::llround(since_)}, {"from", begins}, {"total", AmountsJson(total_)},

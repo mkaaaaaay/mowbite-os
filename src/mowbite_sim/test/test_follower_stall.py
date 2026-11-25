@@ -15,12 +15,12 @@ import unittest
 
 import rclpy
 from composition_interfaces.srv import ListNodes, UnloadNode
-from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState
+from mowbite_msgs.msg import MapStatus, MqttPublish, RobotPose, RobotState, RpcError, RpcRequest, RpcResponse
 from mowbite_msgs.srv import ReplaceMap, SetPose
 from std_msgs.msg import String
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E402
+from sim_common import LATCHED, SimProbe, sim_description, sim_files, wait_until  # noqa: E402
 
 WORK = tempfile.mkdtemp(prefix="mowbite_stall_")
 STATE, FLAGS, RX, _ = sim_files(WORK)
@@ -60,6 +60,9 @@ class Probe(SimProbe):
         self.set_pose = self.node.create_client(SetPose, "localization/set_pose")
         self.list_nodes = self.node.create_client(ListNodes, "/mowbite/_container/list_nodes")
         self.unload_node = self.node.create_client(UnloadNode, "/mowbite/_container/unload_node")
+        self.node.create_subscription(RpcResponse, "bridge/rpc/response", self._response, 10)
+        self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
+        self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.start()
 
 
@@ -124,3 +127,20 @@ class TestFollowerStall(unittest.TestCase):
         time.sleep(3.0)
         self.assertEqual(p.robot.current_state, "PAUSED")
         self.assertIsNone(p.event(since, "BLADES", 0.1, enabled=True))
+
+    def test_04_the_stop_book_has_the_stop_without_a_cause(self):
+        # FOLLOWER_MISSING only names the part that went silent: a stop no event explains (FP23 B2c).
+        p = self.probe
+
+        def book():
+            result = (p.rpc("stats.stops", timeout=3) or {}).get("result") or {}
+            return result if result.get("last") else None
+
+        result = wait_until(book, 10, poll=0.5)
+        self.assertTrue(result, p.rpc("stats.stops"))
+        entry = result["last"][0]
+        self.assertEqual((entry["activity"], entry["kind"], entry["reason"], entry["class"], entry["explained"]),
+                         ("MOWING", "stop", "STATE/FOLLOWER_MISSING", "symptom", False), result["last"])
+        week = result["weeks"][-1]
+        self.assertEqual((week["stops"], week["unexplained"], len(result["last"])), (1, 1, 1), result)
+        self.assertIn("blade_h", week)

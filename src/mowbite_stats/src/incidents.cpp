@@ -266,6 +266,19 @@ Incidents::Notices Incidents::OnEmergency(uint32_t bits, int64_t now_ns, double 
   return trigger ? Open(*trigger, wall_s) : Notices();
 }
 
+Incidents::Notices Incidents::OnStop(const std::string& reason, int64_t now_ns, double wall_s, std::string* opened) {
+  Trigger trigger;
+  trigger.kind = "STOP";
+  trigger.reason = reason;
+  trigger.t_ns = now_ns;
+  trigger.utc = IsoUtc(wall_s);
+  return Open(trigger, wall_s, opened);
+}
+
+std::string Incidents::Collecting() const {
+  return keeper_.collecting() ? keeper_.collecting()->id : "";
+}
+
 void Incidents::SetJournalEnabled(bool enabled) {
   if (config_.journal_dir.empty() || enabled == Enabled()) return;
   const std::string path = (fs::path(config_.journal_dir) / mowbite_journal::kDisabledFile).string();

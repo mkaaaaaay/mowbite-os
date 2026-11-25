@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <set>
 
 #include "mowbite_api/catalog.h"
@@ -14,6 +15,30 @@ constexpr double kNow = 1794564000;
 json Reason(const RpcOutcome& out) {
   EXPECT_TRUE(out.error.has_value());
   return out.error ? out.error->data : json();
+}
+
+const mowbite_api::Method& MethodOf(const char* name) {
+  const auto& methods = mowbite_api::Methods();
+  const auto found = std::find_if(methods.begin(), methods.end(), [&](const auto& m) { return m.name == name; });
+  EXPECT_NE(found, methods.end()) << name;
+  return *found;
+}
+
+std::set<std::string> Keys(const json& object) {
+  std::set<std::string> out;
+  for (const auto& item : object.items()) out.insert(item.key());
+  return out;
+}
+
+std::set<std::string> Names(const std::vector<mowbite_api::Field>& fields) {
+  std::set<std::string> out;
+  for (const auto& field : fields) out.insert(field.name);
+  return out;
+}
+
+const std::vector<mowbite_api::Field>& FieldsOf(const std::vector<mowbite_api::Field>& fields,
+                                                 const std::string& name) {
+  return std::find_if(fields.begin(), fields.end(), [&](const auto& field) { return field.name == name; })->fields;
 }
 
 }  // namespace
@@ -31,14 +56,7 @@ TEST(StatsRpc, GetGivesTheKeysOfTheCatalog) {
   Counter c(nullptr, nullptr, nullptr, kNow);
   const RpcOutcome out = HandleStats(c, "stats.get", nullptr, kNow);
   ASSERT_FALSE(out.error);
-  std::set<std::string> keys;
-  for (const auto& item : out.result.items()) keys.insert(item.key());
-  std::set<std::string> catalog;
-  for (const auto& method : mowbite_api::Methods()) {
-    if (method.name != "stats.get") continue;
-    for (const auto& field : method.result.fields) catalog.insert(field.name);
-  }
-  EXPECT_EQ(keys, catalog);
+  EXPECT_EQ(Keys(out.result), Names(MethodOf("stats.get").result.fields));
   EXPECT_FALSE(out.parts_changed);
 }
 
@@ -73,35 +91,38 @@ TEST(StatsRpc, PartsChange) {
   EXPECT_EQ(out.result["parts"][1]["done_at"], static_cast<int64_t>(kNow + 5));
 }
 
+TEST(StatsRpc, StopsGiveTheKeysOfTheCatalogAndTheBladeHours) {
+  Counter c(nullptr, nullptr, nullptr, kNow - 3600);
+  for (int i = 0; i <= 1800; i++) c.Add({kNow - 3600 + i, static_cast<double>(i), true, "MOWING", true, 0, 0});
+  StopBook book(nullptr);
+  book.OnEvent({{"type", "STATE"}, {"state", "MOWING"}}, 0, kNow - 100);
+  book.OnEvent({{"type", "STATE"}, {"state", "IDLE"}}, 1, kNow - 99);
+  book.Tick(5);
+  const RpcOutcome out = HandleStops(book, c, json::parse(R"({"client": "app"})"), kNow);
+  ASSERT_FALSE(out.error);
+  const auto& result = MethodOf(kStopsMethod).result.fields;
+  EXPECT_EQ(Keys(out.result), Names(result));
+  ASSERT_EQ(out.result["weeks"].size(), 1u);
+  EXPECT_EQ(Keys(out.result["weeks"][0]), Names(FieldsOf(result, "weeks")));
+  EXPECT_EQ(Keys(out.result["weeks"][0]["reasons"][0]), Names(FieldsOf(FieldsOf(result, "weeks"), "reasons")));
+  EXPECT_EQ(Keys(out.result["last"][0]), Names(FieldsOf(result, "last")));
+  EXPECT_DOUBLE_EQ(out.result["weeks"][0]["blade_h"].get<double>(), 0.5);
+  EXPECT_EQ(Reason(HandleStops(book, c, json::parse(R"({"x": 1})"), kNow))["reason"], "unknown");
+  EXPECT_EQ(Reason(HandleStops(book, c, json::parse(R"({"client": 5})"), kNow))["reason"], "type");
+  EXPECT_FALSE(HandleStops(book, c, nullptr, kNow).error);
+}
+
 TEST(StatsRpc, HistoryGivesTheKeysOfTheCatalog) {
   SensorHistory h;
   ASSERT_TRUE(h.Describe("v", "Battery", "V", true));
   h.Add("v", 25, kNow - 30);
   const RpcOutcome out = HandleHistory(h, nullptr, kNow);
   ASSERT_FALSE(out.error);
-  const mowbite_api::Method* method = nullptr;
-  for (const auto& entry : mowbite_api::Methods()) {
-    if (entry.name == kHistoryMethod) method = &entry;
-  }
-  ASSERT_NE(method, nullptr);
-  const auto names = [](const std::vector<mowbite_api::Field>& fields) {
-    std::set<std::string> out;
-    for (const auto& field : fields) out.insert(field.name);
-    return out;
-  };
-  const auto keys = [](const json& object) {
-    std::set<std::string> out;
-    for (const auto& item : object.items()) out.insert(item.key());
-    return out;
-  };
-  EXPECT_EQ(keys(out.result), names(method->result.fields));
+  const mowbite_api::Method& method = MethodOf(kHistoryMethod);
+  EXPECT_EQ(Keys(out.result), Names(method.result.fields));
   ASSERT_EQ(out.result["sensors"].size(), 1u);
-  for (const auto& field : method->result.fields) {
-    if (field.name == "sensors") {
-      EXPECT_EQ(keys(out.result["sensors"][0]), names(field.fields));
-    }
-  }
-  EXPECT_EQ(names(method->params.fields), std::set<std::string>({"client", "sensor_ids", "from", "to", "step"}));
+  EXPECT_EQ(Keys(out.result["sensors"][0]), Names(FieldsOf(method.result.fields, "sensors")));
+  EXPECT_EQ(Names(method.params.fields), std::set<std::string>({"client", "sensor_ids", "from", "to", "step"}));
   EXPECT_EQ(out.result["sensors"][0]["points"], json::parse("[[1794563940, 25, 25, 25]]"));
 }
 

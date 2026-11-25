@@ -247,6 +247,7 @@ class TestIncidents(unittest.TestCase):
         since = len(p.events)
         t0 = time.monotonic()
         marked = p.result("incidents.mark", {"note": "the mower stood still for no reason"})
+        TestIncidents.marked = marked["id"]
         event = p.event(since, "INCIDENT", 5, incident=marked["id"])
         self.assertEqual((event or {}).get("reason"), "MARK", event)
         # While it collects, another mark grows it.
@@ -270,3 +271,12 @@ class TestIncidents(unittest.TestCase):
         self.assertEqual(status["incidents"]["throttled"], [{"kind": "MARK", "count": 1}] if throttled else [], status)
         # The journal itself keeps its segments.
         self.assertTrue(unpacked(JOURNAL))
+
+    def test_7_a_mark_without_a_stop_is_in_the_stop_book(self):
+        # The stop button while idle stops nothing; the mark counts once as a stop the book missed (FP23 B2c).
+        result = self.probe.result("stats.stops")
+        rows = [(e["kind"], e["activity"], e["reason"], e["explained"], e["incident"]) for e in result["last"]]
+        self.assertEqual(rows, [("mark", "IDLE", "MARK", False, TestIncidents.marked)], result)
+        week = result["weeks"][-1]
+        self.assertEqual((week["stops"], week["unexplained"], week["reasons"]),
+                         (0, 1, [{"reason": "MARK", "class": "symptom", "count": 1}]), week)

@@ -44,6 +44,9 @@ struct Part {
   int64_t done_at = 0;      // unix s, 0 not since counting started
 };
 
+// A text field of a JSON object, empty when it is missing or no text.
+std::string TextOf(const json& object, const char* key);
+
 // One reading, once a second: blade from hw/status, state and pose from robot_state.
 struct Sample {
   double wall = 0;  // unix s
@@ -76,6 +79,8 @@ class Counter {
   // stats/parts.json.
   json PartsJson() const;
 
+  // The hours from from on (unix s), oldest first, the one going on last when it has something in it.
+  std::vector<Hour> HoursSince(int64_t from) const;
   // The answer of stats.get: hours from from on (unix s), at most kMaxAnswerHours of the newest.
   json Get(std::optional<int64_t> from, double now) const;
   // false for a part that does not exist.

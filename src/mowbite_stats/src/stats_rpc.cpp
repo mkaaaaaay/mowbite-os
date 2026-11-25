@@ -1,5 +1,7 @@
 #include "mowbite_stats/stats_rpc.h"
 
+#include <cmath>
+#include <map>
 #include <regex>
 #include <set>
 
@@ -56,10 +58,9 @@ std::optional<RpcOutcome> CheckClient(const json& params) {
 }
 
 const std::vector<std::string>& StatsMethods() {
-  static const std::vector<std::string> methods = {"stats.get",       "stats.part_done", "stats.part_due",
-                                                   kHistoryMethod,    "journal.status",  "incidents.list",
-                                                   "incidents.get",   "incidents.download", "incidents.mark",
-                                                   "incidents.delete"};
+  static const std::vector<std::string> methods = {
+      "stats.get",      "stats.part_done", "stats.part_due",     kStopsMethod,     kHistoryMethod,   "journal.status",
+      "incidents.list", "incidents.get",   "incidents.download", "incidents.mark", "incidents.delete"};
   return methods;
 }
 
@@ -90,6 +91,17 @@ RpcOutcome HandleStats(Counter& counter, const std::string& method, const json& 
   if (hours < 1 || hours > mowbite_api::kStatsMaxDueHours) return BadParam("hours", "range", range);
   counter.PartDue(params["part"].get<std::string>(), static_cast<double>(hours));
   return {counter.Get(static_cast<int64_t>(now), now), std::nullopt, true};
+}
+
+RpcOutcome HandleStops(const StopBook& book, const Counter& counter, const json& params, double now) {
+  if (auto bad = CheckKeys(params, {"client"}, true)) return *bad;
+  if (auto bad = CheckClient(params)) return *bad;
+  std::map<int64_t, double> blade_h;
+  for (const Hour& hour : counter.HoursSince(OldestWeek(now))) {
+    blade_h[WeekStart(static_cast<double>(hour.t))] += hour.amounts.blade_s / 3600.0;
+  }
+  for (auto& [week, hours] : blade_h) hours = std::round(hours * 100.0) / 100.0;
+  return {book.Json(now, &blade_h), std::nullopt, false};
 }
 
 RpcOutcome HandleHistory(const SensorHistory& history, const json& params, double now) {

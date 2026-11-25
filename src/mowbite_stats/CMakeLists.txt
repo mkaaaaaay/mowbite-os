@@ -22,9 +22,10 @@ find_package(OpenSSL REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(std_msgs REQUIRED)
 
-# The counter, the sensor history, the incident keeper and the answers of stats.* and sensors.history without clock,
-# files or ROS.
-add_library(mowbite_stats_core STATIC src/counter.cpp src/sensor_history.cpp src/stats_rpc.cpp src/incident_keeper.cpp)
+# The counter, the sensor history, the incident keeper, the stop book and the answers of stats.* and sensors.history
+# without clock, files or ROS.
+add_library(mowbite_stats_core STATIC src/counter.cpp src/sensor_history.cpp src/stats_rpc.cpp src/incident_keeper.cpp
+  src/stop_book.cpp)
 target_include_directories(mowbite_stats_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -57,7 +58,7 @@ install(TARGETS mowbite_stats_core mowbite_stats_incidents mowbite_stats_compone
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_stats_test test/test_counter.cpp test/test_sensor_history.cpp test/test_stats_rpc.cpp
-    test/test_incident_keeper.cpp)
+    test/test_incident_keeper.cpp test/test_stop_book.cpp)
   target_link_libraries(mowbite_stats_test mowbite_stats_core)
   ament_add_gtest(mowbite_stats_incidents_test test/test_incidents.cpp)
   target_link_libraries(mowbite_stats_incidents_test mowbite_stats_incidents)
