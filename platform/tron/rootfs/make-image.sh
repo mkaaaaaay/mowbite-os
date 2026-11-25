@@ -157,6 +157,9 @@ fi
 PACK=var/lib/mowbite/pack
 PACK_LEN=268435456
 if [ -n "$INSTALLER" ]; then
+    # SSH is off until the owner switches it on (host.ssh): the socket is not enabled, as after systemctl disable.
+    tar -f "$work/all.tar" --delete ./etc/systemd/system/sockets.target.wants/ssh.socket \
+        ./etc/systemd/system/ssh.service.requires/ssh.socket
     # Filled with the empty mark instead of zeros: mke2fs leaves zero blocks out, the pack needs them all.
     mkdir -p "$work/k/var/lib/mowbite"
     python3 -I -B - "$HERE/files/usr/lib/mowbite/unpack" "$work/k/$PACK" "$PACK_LEN" <<'PY'

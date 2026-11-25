@@ -65,6 +65,15 @@ if [ -e "$IMG.json" ]; then
     # Base image of the installer: no key for root, the pack file empty at the place its .json names.
     ! "$DEBUGFS" -c -R "stat /root/.ssh/authorized_keys" "$IMG" 2>&1 | grep -q '^Inode:'
     result "no authorized_keys" $?
+    # SSH is the owner's to switch on: the unit is there, not enabled, and root has no password to log in with.
+    ! "$DEBUGFS" -c -R "stat /etc/systemd/system/sockets.target.wants/ssh.socket" "$IMG" 2>&1 | grep -q '^Inode:' \
+        && ! "$DEBUGFS" -c -R "stat /etc/systemd/system/ssh.service.requires/ssh.socket" "$IMG" 2>&1 | grep -q '^Inode:' \
+        && ! "$DEBUGFS" -c -R "stat /etc/systemd/system/multi-user.target.wants/ssh.service" "$IMG" 2>&1 | grep -q '^Inode:' \
+        && "$DEBUGFS" -c -R "stat /usr/lib/systemd/system/ssh.socket" "$IMG" 2>/dev/null | grep -q '^Inode:'
+    result "ssh.socket there, not enabled" $?
+    "$DEBUGFS" -c -R "cat /etc/shadow" "$IMG" 2>/dev/null \
+        | awk -F: '$1 == "root" { ok = ($2 == "*" || $2 ~ /^!/) } END { exit !ok }'
+    result "root password locked" $?
     test "$(stat_of /var/lib/mowbite/pack)" = "0600 0:0"; result "pack 0600 root" $?
     # System parts of the pack (modules, firmware) before module loading and udev; nothing in it may wait for mounts.
     unit=$("$DEBUGFS" -c -R "cat /etc/systemd/system/mowbite-unpack.service" "$IMG" 2>/dev/null)
