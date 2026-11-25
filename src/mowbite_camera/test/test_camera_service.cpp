@@ -529,7 +529,7 @@ class UnlockTest : public CameraServiceTest {
 
   std::optional<RpcOutcome> Begin(const Json& params) {
     camera_.clear();
-    return service_.BeginUnlock(params, &camera_);
+    return service_.BeginUnlock("r1", params, &camera_);
   }
 
   void ExpectUnlockRefused(const RpcOutcome& outcome, const std::string& reason) {
@@ -598,6 +598,52 @@ TEST_F(UnlockTest, AnswersWithWhatTheServiceDid) {
   EXPECT_EQ(failed.data.value("detail", ""), "read-only file system");
   ExpectUnlockRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kNoService, false, ""}), "UNSUPPORTED");
   ExpectUnlockRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kTimeout, false, ""}), "TIMEOUT");
+}
+
+TEST_F(UnlockTest, ACallIsSentOnceItsServiceIsThereAndAnsweredOnce) {
+  AtRest();
+  ASSERT_FALSE(Begin({{"id", "oa_left"}}).has_value());
+  EXPECT_TRUE(service_.SendUnlocks([](const std::string&) { return false; }).empty());
+  const std::vector<UnlockCall> calls =
+      service_.SendUnlocks([](const std::string& id) { return id == "oa_left"; });
+  ASSERT_EQ(calls.size(), 1u);
+  EXPECT_EQ(calls[0].camera, "oa_left");
+  EXPECT_TRUE(service_.SendUnlocks([](const std::string&) { return true; }).empty());
+  steady_ += kUnlockSeconds - 0.1;
+  EXPECT_TRUE(service_.ExpiredUnlocks().empty());
+  const std::optional<UnlockAnswer> answer =
+      service_.AnswerUnlock(calls[0].key, {UnlockReply::Kind::kAnswered, true, "kernel crash 05:59"});
+  ASSERT_TRUE(answer.has_value());
+  EXPECT_EQ(answer->request_id, "r1");
+  EXPECT_EQ(answer->camera, "oa_left");
+  EXPECT_TRUE(answer->outcome.ok);
+  EXPECT_FALSE(service_.AnswerUnlock(calls[0].key, {UnlockReply::Kind::kAnswered, true, ""}).has_value());
+  steady_ += 1.0;
+  EXPECT_TRUE(service_.ExpiredUnlocks().empty());
+}
+
+TEST_F(UnlockTest, WithoutTheServiceOrItsAnswerACallEndsAfterItsTime) {
+  AtRest();
+  const Json params = {{"id", "oa_left"}};
+  ASSERT_FALSE(service_.BeginUnlock("silent", params, &camera_).has_value());
+  const std::vector<UnlockCall> calls = service_.SendUnlocks([](const std::string&) { return true; });
+  ASSERT_EQ(calls.size(), 1u);
+  steady_ += 1.0;
+  ASSERT_FALSE(service_.BeginUnlock("missing", params, &camera_).has_value());
+  EXPECT_TRUE(service_.SendUnlocks([](const std::string&) { return false; }).empty());
+  steady_ += kUnlockSeconds - 1.0 + 0.01;
+  std::vector<UnlockAnswer> expired = service_.ExpiredUnlocks();
+  ASSERT_EQ(expired.size(), 1u);
+  EXPECT_EQ(expired[0].request_id, "silent");
+  ExpectUnlockRefused(expired[0].outcome, "TIMEOUT");
+  // An answer after its time finds no call.
+  EXPECT_FALSE(service_.AnswerUnlock(calls[0].key, {UnlockReply::Kind::kAnswered, true, ""}).has_value());
+  steady_ += 1.0;
+  expired = service_.ExpiredUnlocks();
+  ASSERT_EQ(expired.size(), 1u);
+  EXPECT_EQ(expired[0].request_id, "missing");
+  ExpectUnlockRefused(expired[0].outcome, "UNSUPPORTED");
+  EXPECT_TRUE(service_.ExpiredUnlocks().empty());
 }
 
 TEST_F(UnlockTest, TheReasonIsOneShortLineOfWholeCharacters) {

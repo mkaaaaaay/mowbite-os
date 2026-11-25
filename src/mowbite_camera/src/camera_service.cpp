@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 
-#include "mowbite_api/catalog.h"
 #include "mowbite_bridge/json_rpc.h"
 
 namespace mowbite_camera {
@@ -25,28 +24,15 @@ const std::vector<std::string> kNone;
 // A session the stream server lacks this often in a row is over.
 constexpr int kMissingLimit = 2;
 
-RpcOutcome Ok(Json result) {
-  return {true, std::move(result), 0, "", Json()};
-}
+using mowbite_bridge::Ok;
+using mowbite_bridge::Refusal;
 
 RpcOutcome Invalid(std::string message) {
-  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json()};
+  return mowbite_bridge::InvalidParams(std::move(message));
 }
 
-// details: fields of the reason beside the ones every refusal has.
-RpcOutcome Refuse(const std::string& reason, const std::string& message, const char* group = kRefused,
-                  Json details = Json::object()) {
-  const mowbite_api::Rating rating = mowbite_api::RateReason(group, reason);
-  details["event"] = group;
-  details["reason"] = reason;
-  details["message"] = message;
-  details["severity"] = rating.severity;
-  details["resume"] = rating.resume;
-  return {false, Json(), mowbite_bridge::kInvalidRequest, message, details};
-}
-
-RpcOutcome RefuseUnlock(const std::string& reason, const std::string& message, Json details = Json::object()) {
-  return Refuse(reason, message, kUnlockRefused, std::move(details));
+RpcOutcome RefuseUnlock(const std::string& reason, const std::string& message, const Json& details = Json::object()) {
+  return Refusal(kUnlockRefused, reason, message, details);
 }
 
 // The first line of text without the blanks around it, cut to max bytes at a whole UTF-8 character.
@@ -145,7 +131,7 @@ RpcOutcome CameraService::Stream(const Json& params) {
   }
   const CameraState state = list_.State(id);
   if (!state.available) {
-    return Refuse(state.reason, "Camera " + id + " cannot stream now: " + state.reason +
+    return Refusal(kRefused, state.reason, "Camera " + id + " cannot stream now: " + state.reason +
                                     (state.detail.empty() ? "" : " (" + state.detail + ")"));
   }
   bool detections = camera->detections;
@@ -159,16 +145,17 @@ RpcOutcome CameraService::Stream(const Json& params) {
   const std::string view = ViewOf(id, camera->detections && !detections);
   if (protocol.empty()) protocol = camera->protocols.front();
   if (protocol == kWebrtc && !list_.webrtc_reason().empty()) {
-    return Refuse(list_.webrtc_reason(), "Camera " + id + " cannot stream with webrtc now: " + list_.webrtc_detail());
+    return Refusal(kRefused, list_.webrtc_reason(),
+                   "Camera " + id + " cannot stream with webrtc now: " + list_.webrtc_detail());
   }
   const std::string host = config_.public_host.empty() ? route_() : config_.public_host;
   if (host.empty()) {
-    return Refuse(kNotSetUp, "The mower has no default route to take its address from: set public_host");
+    return Refusal(kRefused, kNotSetUp, "The mower has no default route to take its address from: set public_host");
   }
   std::string token;
   switch (seats_.Grant(id, view, protocol, clocks_.steady(), &token)) {
     case Seats::Granted::kOk: break;
-    case Seats::Granted::kBusy: return Refuse("CAMERA_BUSY", "Two viewers are watching already");
+    case Seats::Granted::kBusy: return Refusal(kRefused, "CAMERA_BUSY", "Two viewers are watching already");
     case Seats::Granted::kNoRandom:
       return {false, Json(), mowbite_bridge::kInternalError, "No random numbers for a token", Json()};
   }
@@ -182,7 +169,8 @@ RpcOutcome CameraService::Stream(const Json& params) {
   return Ok({{"url", url}, {"protocol", protocol}, {"expires", expires}, {"detections", detections}});
 }
 
-std::optional<RpcOutcome> CameraService::BeginUnlock(const Json& params, std::string* id) {
+std::optional<RpcOutcome> CameraService::BeginUnlock(const std::string& request_id, const Json& params,
+                                                     std::string* id) {
   const std::lock_guard<std::mutex> lock(mutex_);
   if (!params.is_object() || !params.contains("id") || !params["id"].is_string()) {
     return Invalid("camera.unlock needs the id of a camera");
@@ -197,7 +185,44 @@ std::optional<RpcOutcome> CameraService::BeginUnlock(const Json& params, std::st
   if (!unrest.empty()) {
     return RefuseUnlock("NOT_AT_REST", "Camera " + *id + " is unlocked only at rest: " + unrest);
   }
+  unlocks_[next_unlock_++] = {request_id, *id, clocks_.steady() + kUnlockSeconds, false};
   return std::nullopt;
+}
+
+std::vector<UnlockCall> CameraService::SendUnlocks(const std::function<bool(const std::string&)>& ready) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  std::vector<UnlockCall> calls;
+  for (auto& [key, unlock] : unlocks_) {
+    if (unlock.sent || !ready(unlock.camera)) continue;
+    unlock.sent = true;
+    calls.push_back({key, unlock.camera});
+  }
+  return calls;
+}
+
+std::vector<UnlockAnswer> CameraService::ExpiredUnlocks() {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  const double now = clocks_.steady();
+  std::vector<UnlockAnswer> answers;
+  for (auto it = unlocks_.begin(); it != unlocks_.end();) {
+    if (now < it->second.deadline) {
+      ++it;
+      continue;
+    }
+    const UnlockReply::Kind kind = it->second.sent ? UnlockReply::Kind::kTimeout : UnlockReply::Kind::kNoService;
+    answers.push_back({it->second.request_id, it->second.camera, EndUnlock(it->second.camera, {kind, false, ""})});
+    it = unlocks_.erase(it);
+  }
+  return answers;
+}
+
+std::optional<UnlockAnswer> CameraService::AnswerUnlock(uint64_t key, const UnlockReply& reply) {
+  const std::lock_guard<std::mutex> lock(mutex_);
+  const auto found = unlocks_.find(key);
+  if (found == unlocks_.end()) return std::nullopt;
+  UnlockAnswer answer{found->second.request_id, found->second.camera, EndUnlock(found->second.camera, reply)};
+  unlocks_.erase(found);
+  return answer;
 }
 
 RpcOutcome CameraService::EndUnlock(const std::string& id, const UnlockReply& reply) const {

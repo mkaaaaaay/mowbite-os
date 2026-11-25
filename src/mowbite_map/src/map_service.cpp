@@ -19,11 +19,7 @@ std::string RandomId() {
 }
 
 RpcOutcome Failure(int code, std::string message) {
-  RpcOutcome outcome;
-  outcome.ok = false;
-  outcome.code = code;
-  outcome.message = std::move(message);
-  return outcome;
+  return mowbite_bridge::Error(code, std::move(message));
 }
 
 // The SAVE_FAILED code of an edit for a failure of Commit.

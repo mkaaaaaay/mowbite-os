@@ -30,7 +30,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS data_schema.json)
 # events link it for BuildEvent.
 add_library(mowbite_bridge_core STATIC src/text.cpp src/json_rpc.cpp src/method_table.cpp src/app_json.cpp
   src/param_table.cpp src/event_builder.cpp src/warn_log.cpp src/bridge_core.cpp src/event_log.cpp src/track.cpp
-  src/pose_window.cpp src/health.cpp src/system_stats.cpp src/compat.cpp)
+  src/pose_window.cpp src/health.cpp src/system_stats.cpp src/compat.cpp src/rpc_outcome.cpp)
 target_include_directories(mowbite_bridge_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)

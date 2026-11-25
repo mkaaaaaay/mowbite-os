@@ -426,7 +426,7 @@ struct UploadFixture : Fixture {
     for (int part = 0; part < parts; ++part) {
       const auto outcome = Part(situation, part, parts, file.substr(part * size, size), sha);
       if (!outcome->ok) return *outcome;
-      if (outcome->job) return Finish(*outcome->job);
+      if (auto job = service->TakeUploadJob()) return Finish(*job);
       EXPECT_EQ(outcome->result, (Json{{"received", part}}));
     }
     ADD_FAILURE() << "the last part brought no job";
@@ -482,9 +482,10 @@ TEST(SoundUpload, PlaysInsteadOfTheVendorsSoundUntilDeleted) {
   EXPECT_EQ(f.List("MOWING_START")["source"], "vendor");
   ASSERT_TRUE(f.Part("MOWING_START", 1, 3, file.substr(kMaxPartBytes, kMaxPartBytes), Sha(file))->ok);
   const auto last = f.Part("MOWING_START", 2, 3, file.substr(2 * kMaxPartBytes), Sha(file));
-  ASSERT_TRUE(last && last->ok && last->job);
+  const auto job = f.service->TakeUploadJob();
+  ASSERT_TRUE(last && last->ok && job);
   EXPECT_EQ(f.List("MOWING_START")["source"], "vendor");
-  const auto done = f.Finish(*last->job);
+  const auto done = f.Finish(*job);
   ASSERT_TRUE(done.ok) << done.message;
   EXPECT_EQ(done.result, (Json{{"situation", "MOWING_START"}, {"source", "upload"}, {"duration_s", 2.0},
                                {"sha256", Sha(file)}}));
@@ -579,13 +580,14 @@ TEST(SoundUpload, PartsComeInOrderAndOneUploadAtATime) {
   EXPECT_FALSE(f.Part("RAIN_DETECTED", 0, 1, Sound(1), Sha(Sound(1)))->data.contains("state"));
 
   ASSERT_TRUE(f.Part("MOWING_START", 1, 3, piece(1), sha)->ok);
-  const auto last = f.Part("MOWING_START", 2, 3, piece(2), sha);
-  ASSERT_TRUE(last->job);
+  ASSERT_TRUE(f.Part("MOWING_START", 2, 3, piece(2), sha)->ok);
+  const auto job = f.service->TakeUploadJob();
+  ASSERT_TRUE(job);
   // Being checked: every upload waits, and so does deleting this situation.
   EXPECT_EQ(reason(f.Part("MOWING_START", 0, 3, piece(0), sha)), "BUSY");
   EXPECT_EQ(reason(f.service->Call("sound.delete", {{"situation", "MOWING_START"}}, 0)), "BUSY");
   EXPECT_TRUE(f.service->Call("sound.delete", {{"situation", "RAIN_DETECTED"}}, 0)->ok);
-  ASSERT_TRUE(f.Finish(*last->job).ok);
+  ASSERT_TRUE(f.Finish(*job).ok);
   EXPECT_EQ(ReadAll(f.UploadFile("MOWING_START", file, ".mp3")), file);
   EXPECT_TRUE(f.Upload("RAIN_DETECTED", Sound(1)).ok);
 }
@@ -596,9 +598,10 @@ TEST(SoundUpload, AnUnfinishedUploadIsDropped60sAfterItsLastPart) {
   ASSERT_TRUE(f.Part("MOWING_START", 0, 3, file.substr(0, kMaxPartBytes), Sha(file), 0)->ok);
   ASSERT_TRUE(f.Part("MOWING_START", 1, 3, file.substr(kMaxPartBytes, kMaxPartBytes), Sha(file), 50)->ok);
   EXPECT_EQ(f.Part("RAIN_DETECTED", 0, 1, Sound(1), Sha(Sound(1)), 50 + kUploadExpiry)->data["reason"], "BUSY");
-  const auto rain = f.Part("RAIN_DETECTED", 0, 1, Sound(1), Sha(Sound(1)), 50.1 + kUploadExpiry);
-  ASSERT_TRUE(rain->job);
-  ASSERT_TRUE(f.Finish(*rain->job).ok);
+  ASSERT_TRUE(f.Part("RAIN_DETECTED", 0, 1, Sound(1), Sha(Sound(1)), 50.1 + kUploadExpiry)->ok);
+  const auto rain = f.service->TakeUploadJob();
+  ASSERT_TRUE(rain);
+  ASSERT_TRUE(f.Finish(*rain).ok);
   const auto late = f.Part("MOWING_START", 2, 3, file.substr(2 * kMaxPartBytes), Sha(file), 120);
   EXPECT_EQ(late->data["reason"], "PART_ORDER");
   EXPECT_EQ(late->data["expected"], 0);
@@ -646,9 +649,10 @@ TEST(SoundUpload, AHoldRefusesUploadAndDeleteAnEmergencyDoesNot) {
 TEST(SoundUpload, InvalidParamsAreRefusedWithInvalidParams) {
   UploadFixture f;
   const Json good = {{"situation", "MOWING_START"}, {"part", 0}, {"parts", 1}, {"data", "AAAA"}, {"sha256", kSha}};
-  const auto taken = f.service->Call("sound.upload", good, 0);
-  ASSERT_TRUE(taken->job);
-  f.Finish(*taken->job);
+  ASSERT_TRUE(f.service->Call("sound.upload", good, 0)->ok);
+  const auto taken = f.service->TakeUploadJob();
+  ASSERT_TRUE(taken);
+  f.Finish(*taken);
   const auto with = [&](const char* key, Json value) {
     Json params = good;
     if (value.is_null()) {

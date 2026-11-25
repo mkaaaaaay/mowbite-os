@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_bridge/rpc_outcome.h"
+
 namespace mowbite_sound {
 
 using Json = nlohmann::ordered_json;
@@ -87,16 +89,7 @@ struct UploadJob {
   FreeBytes free_bytes;
 };
 
-struct RpcOutcome {
-  bool ok = true;
-  Json result;
-  int code = 0;
-  std::string message;
-  // Details of a refusal, null for none.
-  Json data;
-  // The last part of an upload: the answer is CompleteUpload of FinishUpload of this job.
-  std::optional<UploadJob> job;
-};
+using mowbite_bridge::RpcOutcome;
 
 struct SoundConfig {
   // Where the originals, WAVs and sounds.json are kept; uploads in <dir>/upload.
@@ -148,6 +141,8 @@ class SoundService {
   // Takes the result of FinishUpload into sounds.json and gives the answer to the last part; until then every upload
   // is BUSY.
   RpcOutcome CompleteUpload(const UploadResult& result);
+  // The job of the last part of an upload, once: its answer is CompleteUpload of FinishUpload of the job.
+  std::optional<UploadJob> TakeUploadJob();
 
   // An event of events/json.
   void OnEvent(const Json& event, double now);
@@ -211,6 +206,7 @@ class SoundService {
   std::map<std::string, SoundFile> files_;
   std::map<std::string, SoundFile> uploads_;
   std::optional<Upload> upload_;
+  std::optional<UploadJob> upload_job_;
   int volume_;
   int64_t hold_until_ = 0;
   Emergency driver_;

@@ -25,7 +25,8 @@ add_library(mowbite_map_core STATIC src/map_model.cpp src/map_store.cpp src/map_
 target_include_directories(mowbite_map_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_link_libraries(mowbite_map_core mowbite_api::mowbite_api_core nlohmann_json::nlohmann_json OpenSSL::Crypto)
+target_link_libraries(mowbite_map_core mowbite_api::mowbite_api_core mowbite_bridge::mowbite_bridge_core
+  nlohmann_json::nlohmann_json OpenSSL::Crypto)
 set_target_properties(mowbite_map_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 add_library(mowbite_map_component SHARED src/map_node.cpp)
@@ -56,5 +57,5 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_mowbite_map HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_api)
+ament_export_dependencies(mowbite_api mowbite_bridge)
 ament_package()

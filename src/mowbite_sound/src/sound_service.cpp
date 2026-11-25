@@ -31,26 +31,18 @@ constexpr int64_t kMaxParts = (static_cast<int64_t>(kMaxMp3Bytes) + kMaxPartByte
 // Base64 of a part of kMaxPartBytes.
 constexpr size_t kMaxPartText = (static_cast<size_t>(kMaxPartBytes) + 2) / 3 * 4;
 
-RpcOutcome Ok(Json result) {
-  return {true, std::move(result), 0, "", Json(), std::nullopt};
-}
+using mowbite_bridge::Ok;
 
 RpcOutcome Invalid(std::string message) {
-  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json(), std::nullopt};
+  return mowbite_bridge::InvalidParams(std::move(message));
 }
 
 RpcOutcome Internal(std::string message) {
-  return {false, Json(), mowbite_bridge::kInternalError, std::move(message), Json(), std::nullopt};
+  return mowbite_bridge::Error(mowbite_bridge::kInternalError, std::move(message));
 }
 
-RpcOutcome Refuse(const std::string& reason, const std::string& message, Json details = Json::object()) {
-  const mowbite_api::Rating rating = mowbite_api::RateReason(kRefused, reason);
-  details["event"] = kRefused;
-  details["reason"] = reason;
-  details["message"] = message;
-  details["severity"] = rating.severity;
-  details["resume"] = rating.resume;
-  return {false, Json(), mowbite_bridge::kInvalidRequest, message, details, std::nullopt};
+RpcOutcome Refuse(const std::string& reason, const std::string& message, const Json& details = Json::object()) {
+  return mowbite_bridge::Refusal(kRefused, reason, message, details);
 }
 
 std::string Mb(int64_t bytes) {
@@ -575,10 +567,15 @@ RpcOutcome SoundService::ReceivePart(const Json& params, double now) {
   upload_->next = index + 1;
   upload_->last = now;
   if (!upload_->Checked()) return Ok(Json{{"received", index}});
-  RpcOutcome later = Ok(Json());
-  later.job = UploadJob{name,        hash,          std::move(upload_->bytes), UploadDir(),
-                        StoredBytes(name), config_.reserve_bytes, config_.free_bytes};
-  return later;
+  upload_job_ = UploadJob{name,        hash,          std::move(upload_->bytes), UploadDir(),
+                          StoredBytes(name), config_.reserve_bytes, config_.free_bytes};
+  return Ok(Json());
+}
+
+std::optional<UploadJob> SoundService::TakeUploadJob() {
+  std::optional<UploadJob> job = std::move(upload_job_);
+  upload_job_.reset();
+  return job;
 }
 
 RpcOutcome SoundService::Delete(const Json& params) {
@@ -608,8 +605,8 @@ RpcOutcome SoundService::Delete(const Json& params) {
 }
 
 RpcOutcome SoundService::RefuseInHold(const std::string& what) const {
-  return {false, Json(), mowbite_bridge::kHold, "An update holds the mower. " + what + " after it",
-          Json{{"reason", "HOLD"}, {"until", hold_until_}}, std::nullopt};
+  return mowbite_bridge::Error(mowbite_bridge::kHold, "An update holds the mower. " + what + " after it",
+                               Json{{"reason", "HOLD"}, {"until", hold_until_}});
 }
 
 std::vector<std::string> VendorDirs(const std::vector<std::string>& patterns) {

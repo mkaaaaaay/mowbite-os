@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_bridge/rpc_outcome.h"
 #include "mowbite_light/effect.h"
 
 namespace mowbite_light {
@@ -20,14 +21,7 @@ constexpr double kStopReleasingS = 2.0;
 // The STOP gesture as hw/button reports it.
 enum class StopPress { kHeld, kLong, kCanceled };
 
-struct RpcOutcome {
-  bool ok = true;
-  Json result;
-  int code = 0;
-  std::string message;
-  // Details of a refusal, null for none.
-  Json data;
-};
+using mowbite_bridge::RpcOutcome;
 
 struct LightConfig {
   size_t leds = 55;

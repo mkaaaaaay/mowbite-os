@@ -8,6 +8,7 @@
 #include "mowbite_api/catalog.h"
 #include "mowbite_bridge/compat.h"
 #include "mowbite_bridge/event_builder.h"
+#include "mowbite_bridge/rpc_outcome.h"
 #include "mowbite_bridge/text.h"
 
 namespace mowbite_bridge {
@@ -281,11 +282,9 @@ void BridgeCore::Answer(const RpcCall& call, const Reply& to) {
 
 std::string BridgeCore::RefuseRequest(const Json& id, const std::string& reason, const std::string& message,
                                       Json fields) {
-  const mowbite_api::Rating rating = mowbite_api::RateReason(kRequestRefused, reason);
-  Json data = {{"event", kRequestRefused}, {"state", state_}, {"sub_state", sub_state_}, {"reason", reason},
-               {"message", message},       {"severity", rating.severity}, {"resume", rating.resume}};
-  for (auto& [key, value] : fields.items()) data[key] = value;
-  return ErrorReply(id, kInvalidRequest, message, data);
+  Json extra = {{"state", state_}, {"sub_state", sub_state_}};
+  for (auto& [key, value] : fields.items()) extra[key] = value;
+  return ErrorReply(id, kInvalidRequest, message, RefusalData(kRequestRefused, reason, message, extra));
 }
 
 void BridgeCore::OnRobotState(const RobotStateView& state) {

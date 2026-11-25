@@ -27,6 +27,7 @@
 
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_bridge/json_rpc.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_camera/camera_service.h"
 #include "mowbite_camera/http_server.h"
 #include "mowbite_camera/stream_config.h"
@@ -37,6 +38,8 @@
 namespace mowbite_camera {
 
 namespace {
+
+using mowbite_bridge::Dump;
 
 // How long the HTTP thread waits in one round, in ms; it signs its watch after each.
 constexpr int kPollMs = 500;
@@ -62,10 +65,6 @@ double SteadySeconds() {
 double WallSeconds() {
   using namespace std::chrono;
   return duration<double>(system_clock::now().time_since_epoch()).count();
-}
-
-std::string Dump(const Json& json) {
-  return json.dump(-1, ' ', false, Json::error_handler_t::replace);
 }
 
 // The image puts the stream server next to the packages, under <install>/mediamtx.
@@ -214,8 +213,7 @@ class CameraNode : public rclcpp::Node {
     Json params = Json::object();
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
     if (params.is_discarded()) {
-      Answer(request.method, request.id,
-             {false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()});
+      Answer(request.method, request.id, mowbite_bridge::InvalidParams("The parameters are not valid JSON"));
       return;
     }
     if (request.method == "camera.unlock") {
@@ -227,80 +225,52 @@ class CameraNode : public rclcpp::Node {
   }
 
   void Answer(const std::string& method, const std::string& id, const RpcOutcome& outcome) {
-    if (outcome.ok) {
-      mowbite_msgs::msg::RpcResponse response;
-      response.result = Dump(outcome.result);
-      response.id = id;
-      response_pub_->publish(response);
-      return;
-    }
-    RCLCPP_INFO(get_logger(), "%s refused: %s", method.c_str(), outcome.message.c_str());
-    mowbite_msgs::msg::RpcError refused;
-    refused.code = outcome.code;
-    refused.message = outcome.message;
-    refused.id = id;
-    if (!outcome.data.is_null()) refused.data = Dump(outcome.data);
-    error_pub_->publish(refused);
+    if (!outcome.ok) RCLCPP_INFO(get_logger(), "%s refused: %s", method.c_str(), outcome.message.c_str());
+    mowbite_bridge::PublishOutcome(id, outcome, *response_pub_, *error_pub_);
   }
 
   // camera.unlock calls camera/<id>/unlock of the process that owns the camera once that service is there, and
   // answers when it did or after kUnlockSeconds.
   void BeginUnlock(const std::string& request_id, const Json& params) {
     std::string camera;
-    const std::optional<RpcOutcome> refused = service_->BeginUnlock(params, &camera);
+    const std::optional<RpcOutcome> refused = service_->BeginUnlock(request_id, params, &camera);
     if (refused) {
       Answer("camera.unlock", request_id, *refused);
       return;
     }
     auto& client = unlock_clients_[camera];
     if (!client) client = create_client<std_srvs::srv::Trigger>("/camera/" + camera + "/unlock");
-    const uint64_t key = next_unlock_++;
-    unlocks_[key] = {request_id, camera, SteadySeconds() + kUnlockSeconds, false};
     RCLCPP_WARN(get_logger(), "Camera %s: the app asks to delete its lock after a crash", camera.c_str());
     SendUnlocks();
   }
 
   void SendUnlocks() {
-    const double now = SteadySeconds();
-    for (auto it = unlocks_.begin(); it != unlocks_.end();) {
-      const uint64_t key = it->first;
-      Unlock& unlock = it->second;
-      const auto& client = unlock_clients_[unlock.camera];
-      if (!unlock.sent && client->service_is_ready()) {
-        unlock.sent = true;
-        client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>(),
-                                   [this, key](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
-                                     const auto response = future.get();
-                                     EndUnlock(key, {UnlockReply::Kind::kAnswered, response->success,
-                                                     response->message});
-                                   });
-      }
-      if (now < unlock.deadline) {
-        ++it;
-        continue;
-      }
-      const UnlockReply::Kind kind = unlock.sent ? UnlockReply::Kind::kTimeout : UnlockReply::Kind::kNoService;
-      ++it;
-      EndUnlock(key, {kind, false, ""});
+    const auto ready = [this](const std::string& camera) { return unlock_clients_.at(camera)->service_is_ready(); };
+    for (const UnlockCall& call : service_->SendUnlocks(ready)) {
+      unlock_clients_.at(call.camera)
+          ->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>(),
+                               [this, key = call.key](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
+                                 const auto response = future.get();
+                                 const UnlockReply reply{UnlockReply::Kind::kAnswered, response->success,
+                                                         response->message};
+                                 const std::optional<UnlockAnswer> answer = service_->AnswerUnlock(key, reply);
+                                 if (answer) {
+                                   EndUnlock(*answer);
+                                 } else {
+                                   RCLCPP_WARN(get_logger(), "Late answer of an unlock service: success %d, %s",
+                                               reply.success, reply.message.c_str());
+                                 }
+                               });
     }
+    for (const UnlockAnswer& answer : service_->ExpiredUnlocks()) EndUnlock(answer);
   }
 
-  // An answer after the deadline finds no unlock any more and is only logged.
-  void EndUnlock(uint64_t key, const UnlockReply& reply) {
-    const auto found = unlocks_.find(key);
-    if (found == unlocks_.end()) {
-      RCLCPP_WARN(get_logger(), "Late answer of an unlock service: success %d, %s", reply.success,
-                  reply.message.c_str());
-      return;
+  void EndUnlock(const UnlockAnswer& answer) {
+    if (answer.outcome.ok) {
+      RCLCPP_WARN(get_logger(), "Camera %s unlocked by the app; its lock said: %s", answer.camera.c_str(),
+                  answer.outcome.result.value("reason", "").c_str());
     }
-    const Unlock unlock = found->second;
-    unlocks_.erase(found);
-    const RpcOutcome outcome = service_->EndUnlock(unlock.camera, reply);
-    if (outcome.ok) {
-      RCLCPP_WARN(get_logger(), "Camera %s unlocked by the app; its lock said: %s", unlock.camera.c_str(),
-                  outcome.result.value("reason", "").c_str());
-    }
-    Answer("camera.unlock", unlock.request_id, outcome);
+    Answer("camera.unlock", answer.request_id, answer.outcome);
   }
 
   // What the service left to do: events for the bridge, connections and sessions to end.
@@ -425,15 +395,7 @@ class CameraNode : public rclcpp::Node {
   std::atomic<bool> running_{true};
   std::thread thread_;
   std::vector<Json> pending_events_;
-  // The calls of camera.unlock that wait for the unlock service of their camera.
-  struct Unlock {
-    std::string request_id;
-    std::string camera;
-    double deadline = 0;
-    bool sent = false;
-  };
-  std::map<uint64_t, Unlock> unlocks_;
-  uint64_t next_unlock_ = 0;
+  // The unlock service of each camera camera.unlock was called for.
   std::map<std::string, rclcpp::Client<std_srvs::srv::Trigger>::SharedPtr> unlock_clients_;
 
   rclcpp::Publisher<mowbite_msgs::msg::MqttPublish>::SharedPtr publish_pub_;

@@ -26,6 +26,7 @@
 
 #include "mowbite_bridge/event_builder.h"
 #include "mowbite_bridge/json_rpc.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_obstacles/obstacle_service.h"
 #include "mowbite_obstacles/tracker.h"
 #include "mowbite_watch/attach.h"
@@ -47,9 +48,7 @@ double Seconds(const builtin_interfaces::msg::Time& stamp) {
   return static_cast<double>(stamp.sec) + static_cast<double>(stamp.nanosec) * 1e-9;
 }
 
-std::string Dump(const Json& json) {
-  return json.dump(-1, ' ', false, Json::error_handler_t::replace);
-}
+using mowbite_bridge::Dump;
 
 Frame ToFrame(const mowbite_msgs::msg::Obstacles& msg) {
   Frame frame;
@@ -307,23 +306,12 @@ class ObstaclesNode : public rclcpp::Node {
     if (std::find(methods.begin(), methods.end(), request.method) == methods.end()) return;
     Json params = Json::object();
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
-    const Outcome outcome =
+    const RpcOutcome outcome =
         params.is_discarded()
-            ? Outcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON"}
+            ? mowbite_bridge::InvalidParams("The parameters are not valid JSON")
             : service_->Call(request.method, params);
-    if (outcome.ok) {
-      mowbite_msgs::msg::RpcResponse response;
-      response.result = Dump(outcome.result);
-      response.id = request.id;
-      response_pub_->publish(response);
-    } else {
-      RCLCPP_INFO(get_logger(), "%s refused: %s", request.method.c_str(), outcome.message.c_str());
-      mowbite_msgs::msg::RpcError refused;
-      refused.code = outcome.code;
-      refused.message = outcome.message;
-      refused.id = request.id;
-      error_pub_->publish(refused);
-    }
+    if (!outcome.ok) RCLCPP_INFO(get_logger(), "%s refused: %s", request.method.c_str(), outcome.message.c_str());
+    mowbite_bridge::PublishOutcome(request.id, outcome, *response_pub_, *error_pub_);
     Publish();
   }
 

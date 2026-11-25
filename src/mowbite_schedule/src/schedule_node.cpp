@@ -28,6 +28,7 @@
 #include <std_msgs/msg/int64.hpp>
 #include <std_msgs/msg/string.hpp>
 
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_hold/file_writer.h"
 #include "mowbite_logic/logic_params.h"
@@ -467,10 +468,8 @@ class ScheduleNode : public rclcpp::Node {
       Refuse(request.id, *error);
       return;
     }
-    mowbite_msgs::msg::RpcResponse response;
-    response.id = request.id;
-    response.result = result.dump();
-    response_pub_->publish(response);
+    mowbite_bridge::PublishOutcome(request.id, mowbite_bridge::Ok(mowbite_bridge::Json(result)), *response_pub_,
+                                   *error_pub_);
   }
 
   // A change is answered once schedule.json is on the disk (an off or a pause has to survive a restart).
@@ -484,12 +483,9 @@ class ScheduleNode : public rclcpp::Node {
 
   void Refuse(const std::string& id, const RpcError& error) {
     RCLCPP_WARN(get_logger(), "schedule refused: %s", error.message.c_str());
-    mowbite_msgs::msg::RpcError msg;
-    msg.id = id;
-    msg.code = error.code;
-    msg.message = error.message;
-    msg.data = error.data.is_null() ? "" : error.data.dump();
-    error_pub_->publish(msg);
+    const mowbite_bridge::RpcOutcome outcome =
+        mowbite_bridge::Error(error.code, error.message, mowbite_bridge::Json(error.data));
+    mowbite_bridge::PublishOutcome(id, outcome, *response_pub_, *error_pub_);
   }
 
   mowbite_journal::Journal* journal_;

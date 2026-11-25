@@ -20,6 +20,7 @@ find_package(mowbite_hold REQUIRED)
 find_package(mowbite_journal REQUIRED)
 find_package(mowbite_watch REQUIRED)
 find_package(mowbite_logic REQUIRED)
+find_package(mowbite_bridge REQUIRED)
 
 # The schedule without clock, files or ROS: time zones, the schedule and its checks, the decision, the answers of
 # schedule.*.
@@ -32,7 +33,8 @@ set_target_properties(mowbite_schedule_core PROPERTIES POSITION_INDEPENDENT_CODE
 
 add_library(mowbite_schedule_component SHARED src/schedule_node.cpp)
 target_link_libraries(mowbite_schedule_component mowbite_schedule_core mowbite_logic::mowbite_logic_core
-  mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch)
+  mowbite_hold::mowbite_hold_core mowbite_journal::mowbite_journal mowbite_watch::mowbite_watch
+  mowbite_bridge::mowbite_bridge_core)
 ament_target_dependencies(mowbite_schedule_component rclcpp rclcpp_components std_msgs sensor_msgs mowbite_msgs)
 mowbite_component_register(mowbite_schedule_component
   PLUGIN "mowbite_schedule::ScheduleNode"

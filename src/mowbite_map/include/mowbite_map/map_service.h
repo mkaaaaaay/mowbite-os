@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_bridge/rpc_outcome.h"
 #include "mowbite_map/datum.h"
 #include "mowbite_map/map_model.h"
 #include "mowbite_map/map_store.h"
@@ -14,24 +15,16 @@
 namespace mowbite_map {
 
 // JSON-RPC error codes of the answers
-constexpr int kRpcInvalidParams = -32602;
-constexpr int kRpcInternal = -32603;
+constexpr int kRpcInvalidParams = mowbite_bridge::kInvalidParams;
+constexpr int kRpcInternal = mowbite_bridge::kInternalError;
 // A valid request the mower does not do now
 constexpr int kRpcRefused = -32000;
 // The map is not the one the caller last read (map/replace with expected_sha256)
 constexpr int kRpcMapChanged = -32001;
 // An update holds the mower (system.hold): a rollback would drop the change without a word
-constexpr int kRpcHold = -32004;
+constexpr int kRpcHold = mowbite_bridge::kHold;
 
-// The answer of an RPC method: a result, or an error with its code.
-struct RpcOutcome {
-  bool ok = true;
-  json result;
-  int code = 0;
-  std::string message;
-  // Details of an error for the caller, null for none.
-  json data;
-};
+using mowbite_bridge::RpcOutcome;
 
 // The answer to an edit for the logic: the id of what was added, or why it was refused.
 struct EditResult {

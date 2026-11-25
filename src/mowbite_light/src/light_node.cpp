@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "mowbite_bridge/json_rpc.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_light/light_service.h"
 #include "mowbite_light/output.h"
 #include "mowbite_light/ws2812.h"
@@ -223,24 +224,12 @@ class LightNode : public rclcpp::Node {
       outcome = service_.Call(request.method, params, MonotonicSeconds());
     } else if (const auto& methods = LightService::Methods();
                std::find(methods.begin(), methods.end(), request.method) != methods.end()) {
-      outcome = RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json()};
+      outcome = mowbite_bridge::InvalidParams("The parameters are not valid JSON");
     }
     // A method of another node, which answers it.
     if (!outcome) return;
-    if (outcome->ok) {
-      mowbite_msgs::msg::RpcResponse response;
-      response.result = outcome->result.dump();
-      response.id = request.id;
-      response_pub_->publish(response);
-    } else {
-      RCLCPP_WARN(get_logger(), "%s refused: %s", request.method.c_str(), outcome->message.c_str());
-      mowbite_msgs::msg::RpcError error;
-      error.code = outcome->code;
-      error.message = outcome->message;
-      error.id = request.id;
-      if (!outcome->data.is_null()) error.data = outcome->data.dump();
-      error_pub_->publish(error);
-    }
+    if (!outcome->ok) RCLCPP_WARN(get_logger(), "%s refused: %s", request.method.c_str(), outcome->message.c_str());
+    mowbite_bridge::PublishOutcome(request.id, *outcome, *response_pub_, *error_pub_);
   }
 
   NodeConfig config_;

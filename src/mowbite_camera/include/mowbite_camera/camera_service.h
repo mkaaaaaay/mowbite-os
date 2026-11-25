@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_bridge/rpc_outcome.h"
 #include "mowbite_camera/camera_list.h"
 #include "mowbite_camera/http_server.h"
 #include "mowbite_camera/route.h"
@@ -17,14 +18,7 @@
 
 namespace mowbite_camera {
 
-struct RpcOutcome {
-  bool ok = true;
-  Json result;
-  int code = 0;
-  std::string message;
-  // Details of a refusal, null for none.
-  Json data;
-};
+using mowbite_bridge::RpcOutcome;
 
 struct ServiceConfig {
   uint16_t mjpeg_port = 8890;
@@ -57,6 +51,19 @@ struct UnlockReply {
   std::string message;
 };
 
+// A call of camera.unlock to send to the unlock service of its camera now.
+struct UnlockCall {
+  uint64_t key = 0;
+  std::string camera;
+};
+
+// The answer to a call of camera.unlock, for the request with that id.
+struct UnlockAnswer {
+  std::string request_id;
+  std::string camera;
+  RpcOutcome outcome;
+};
+
 // How long camera.unlock waits for the service, in s.
 constexpr double kUnlockSeconds = 5.0;
 // The newest bridge/robot_state and hw/status that count for camera.unlock, in s since they came.
@@ -81,8 +88,15 @@ class CameraService {
   void SetWebrtc(const std::string& reason, const std::string& detail);
   // nullopt for a method of another node.
   std::optional<RpcOutcome> Call(const std::string& method, const Json& params);
-  // camera.unlock: a refusal, or nullopt with the id whose unlock service the node calls now.
-  std::optional<RpcOutcome> BeginUnlock(const Json& params, std::string* id);
+  // camera.unlock: a refusal, or nullopt with the id of the camera; then the call waits for its unlock service
+  // (SendUnlocks) and its answer (AnswerUnlock) until kUnlockSeconds have passed (ExpiredUnlocks).
+  std::optional<RpcOutcome> BeginUnlock(const std::string& request_id, const Json& params, std::string* id);
+  // The waiting calls not sent yet whose camera has its service now (ready, called with the lock held); sent from now.
+  std::vector<UnlockCall> SendUnlocks(const std::function<bool(const std::string&)>& ready);
+  // The calls past their time: UNSUPPORTED when never sent, else TIMEOUT.
+  std::vector<UnlockAnswer> ExpiredUnlocks();
+  // What the unlock service answered to call key; nullopt when the call ended before.
+  std::optional<UnlockAnswer> AnswerUnlock(uint64_t key, const UnlockReply& reply);
   // The answer of camera.unlock to what the unlock service of the camera did.
   RpcOutcome EndUnlock(const std::string& id, const UnlockReply& reply) const;
   // bridge/robot_state and hw/status, for whether the mower is at rest.
@@ -144,6 +158,15 @@ class CameraService {
   double state_at_ = -1;
   bool blade_running_ = false;
   double blade_at_ = -1;
+  // The calls of camera.unlock that wait for the unlock service of their camera, by key.
+  struct WaitingUnlock {
+    std::string request_id;
+    std::string camera;
+    double deadline = 0;
+    bool sent = false;
+  };
+  std::map<uint64_t, WaitingUnlock> unlocks_;
+  uint64_t next_unlock_ = 0;
 };
 
 }  // namespace mowbite_camera

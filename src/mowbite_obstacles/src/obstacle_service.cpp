@@ -23,8 +23,8 @@ constexpr size_t kMaxListBytes = 4u << 20;
 constexpr size_t kMaxImageBytes = 200u * 1024u;
 constexpr double kSameStamp = 1e-6;
 
-Outcome Refused(std::string message) {
-  return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message)};
+RpcOutcome Refused(std::string message) {
+  return mowbite_bridge::InvalidParams(std::move(message));
 }
 
 // A whole number of params, or the fallback without one; false for another type.
@@ -276,15 +276,15 @@ void ObstacleService::Flush() {
   }
 }
 
-Outcome ObstacleService::Call(const std::string& method, const Json& params) {
+RpcOutcome ObstacleService::Call(const std::string& method, const Json& params) {
   if (!params.is_object()) return Refused("The parameters are no object");
   if (method == "vision.obstacles.list") return List(params);
   if (method == "vision.obstacles.image") return Piece(params);
   if (method == "vision.obstacles.clear") return Clear(params);
-  return {false, Json(), mowbite_bridge::kMethodNotFound, "No method " + method};
+  return mowbite_bridge::Error(mowbite_bridge::kMethodNotFound, "No method " + method);
 }
 
-Outcome ObstacleService::List(const Json& params) const {
+RpcOutcome ObstacleService::List(const Json& params) const {
   double since = 0.0;
   const auto it = params.find("since");
   if (it != params.end() && !it->is_null()) {
@@ -299,10 +299,10 @@ Outcome ObstacleService::List(const Json& params) const {
                  {"sight", {{"ok", sight_.ok}, {"reason", sight_.ok ? Json() : Json(sight_.reason)}}},
                  {"limit", {{"entries", limits.entries}, {"bytes", limits.bytes}, {"days", limits.days}}},
                  {"obstacles", list_.ToJson(since)}};
-  return {true, std::move(result), 0, ""};
+  return mowbite_bridge::Ok(std::move(result));
 }
 
-Outcome ObstacleService::Piece(const Json& params) const {
+RpcOutcome ObstacleService::Piece(const Json& params) const {
   const auto name = params.find("name");
   if (name == params.end() || !name->is_string()) return Refused("name is the name of an image of the list");
   const uint32_t entry_id = list_.ByPhoto(name->get<std::string>());
@@ -318,21 +318,18 @@ Outcome ObstacleService::Piece(const Json& params) const {
   const auto read = mowbite_hold::ReadSmallFile((std::filesystem::path(config_.dir) / photo.name).string(),
                                                 kMaxImageBytes, &bytes, &error);
   if (read != mowbite_hold::FileRead::kText) {
-    return {false, Json(), mowbite_bridge::kInternalError, "The image cannot be read"};
+    return mowbite_bridge::Error(mowbite_bridge::kInternalError, "The image cannot be read");
   }
   if (offset > static_cast<int64_t>(bytes.size())) return Refused("offset is past the end of the image");
   const std::string piece = bytes.substr(static_cast<size_t>(offset), static_cast<size_t>(size));
-  return {true,
-          {{"size", bytes.size()},
-           {"offset", offset},
-           {"data", mowbite_ntrip::Base64(piece)},
-           {"sha256", photo.sha256},
-           {"type", "image/jpeg"}},
-          0,
-          ""};
+  return mowbite_bridge::Ok({{"size", bytes.size()},
+                             {"offset", offset},
+                             {"data", mowbite_ntrip::Base64(piece)},
+                             {"sha256", photo.sha256},
+                             {"type", "image/jpeg"}});
 }
 
-Outcome ObstacleService::Clear(const Json& params) {
+RpcOutcome ObstacleService::Clear(const Json& params) {
   uint32_t id = 0;
   const auto it = params.find("id");
   if (it != params.end() && !it->is_null()) {
@@ -351,7 +348,7 @@ Outcome ObstacleService::Clear(const Json& params) {
   dirty_ = true;
   Flush();
   events_.push_back({"OBSTACLES_CLEARED", {{"obstacle_id", id == 0 ? Json() : Json(id)}}});
-  return {true, {{"removed", before - list_.size()}}, 0, ""};
+  return mowbite_bridge::Ok({{"removed", before - list_.size()}});
 }
 
 std::vector<std::pair<std::string, Json>> ObstacleService::TakeEvents() {

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "mowbite_bridge/event_builder.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_map/map_service.h"
 #include "mowbite_watch/attach.h"
 
@@ -154,26 +155,14 @@ class MapNode : public rclcpp::Node {
     if (params.is_discarded()) {
       if (std::find(MapService::Methods().begin(), MapService::Methods().end(), request.method) !=
           MapService::Methods().end()) {
-        outcome = RpcOutcome{false, json(), kRpcInvalidParams, "The parameters are not valid JSON", json()};
+        outcome = mowbite_bridge::InvalidParams("The parameters are not valid JSON");
       }
     } else {
       outcome = service_.Call(request.method, params);
     }
     // A method of another node, which answers it.
     if (!outcome) return;
-    if (outcome->ok) {
-      mowbite_msgs::msg::RpcResponse response;
-      response.result = outcome->result.dump();
-      response.id = request.id;
-      response_pub_->publish(response);
-    } else {
-      mowbite_msgs::msg::RpcError error;
-      error.code = static_cast<int16_t>(outcome->code);
-      error.message = outcome->message;
-      error.id = request.id;
-      if (!outcome->data.is_null()) error.data = outcome->data.dump();
-      error_pub_->publish(error);
-    }
+    mowbite_bridge::PublishOutcome(request.id, *outcome, *response_pub_, *error_pub_);
     Flush();
   }
 

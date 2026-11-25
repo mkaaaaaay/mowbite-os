@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "mowbite_bridge/json_rpc.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_journal/journal.h"
 #include "mowbite_sound/convert.h"
 #include "mowbite_sound/player.h"
@@ -253,15 +254,13 @@ class SoundNode : public rclcpp::Node {
     if (std::find(methods.begin(), methods.end(), request.method) == methods.end()) return;
     Json params = Json::object();
     if (!request.params.empty()) params = Json::parse(request.params, nullptr, false);
-    std::optional<RpcOutcome> outcome =
-        params.is_discarded()
-            ? RpcOutcome{false, Json(), mowbite_bridge::kInvalidParams, "The parameters are not valid JSON", Json(),
-                         std::nullopt}
-            : service_.Call(request.method, params, MonotonicSeconds());
+    const std::optional<RpcOutcome> outcome =
+        params.is_discarded() ? mowbite_bridge::InvalidParams("The parameters are not valid JSON")
+                              : service_.Call(request.method, params, MonotonicSeconds());
     if (!outcome) return;
-    if (outcome->job) {
+    if (std::optional<UploadJob> job = service_.TakeUploadJob()) {
       upload_id_ = request.id;
-      checked_ = std::async(std::launch::async, [job = std::move(*outcome->job), convert = Converter()] {
+      checked_ = std::async(std::launch::async, [job = std::move(*job), convert = Converter()] {
         return FinishUpload(job, convert);
       });
       upload_timer_ = create_wall_timer(std::chrono::duration<double>(kUploadPoll), [this] { OnUploadPoll(); });
@@ -279,20 +278,8 @@ class SoundNode : public rclcpp::Node {
   }
 
   void Answer(const std::string& method, const std::string& id, const RpcOutcome& outcome) {
-    if (outcome.ok) {
-      mowbite_msgs::msg::RpcResponse response;
-      response.result = outcome.result.dump();
-      response.id = id;
-      response_pub_->publish(response);
-    } else {
-      RCLCPP_WARN(get_logger(), "%s refused: %s", method.c_str(), outcome.message.c_str());
-      mowbite_msgs::msg::RpcError error;
-      error.code = outcome.code;
-      error.message = outcome.message;
-      error.id = id;
-      if (!outcome.data.is_null()) error.data = outcome.data.dump();
-      error_pub_->publish(error);
-    }
+    if (!outcome.ok) RCLCPP_WARN(get_logger(), "%s refused: %s", method.c_str(), outcome.message.c_str());
+    mowbite_bridge::PublishOutcome(id, outcome, *response_pub_, *error_pub_);
   }
 
   rclcpp::Clock steady_clock_{RCL_STEADY_TIME};

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mowbite_api/catalog.h"
+#include "mowbite_bridge/rpc_outcome.h"
 #include "mowbite_obstacles/obstacle_list.h"
 
 namespace mowbite_obstacles {
@@ -16,12 +17,7 @@ namespace mowbite_obstacles {
 // obstacle_mode, its value the index in mowbite_api::ObstacleModes().
 enum class Mode { kOff = 0, kShow = 1, kStop = 2, kAvoid = 3 };
 
-struct Outcome {
-  bool ok = false;
-  Json result;
-  int code = 0;
-  std::string message;
-};
+using mowbite_bridge::RpcOutcome;
 
 struct ServiceConfig {
   // The folder of the list and the photos; empty: kept in memory only.
@@ -82,7 +78,7 @@ class ObstacleService {
   void Flush();
 
   // vision.obstacles.*; -32601 for another method.
-  Outcome Call(const std::string& method, const Json& params);
+  RpcOutcome Call(const std::string& method, const Json& params);
   // Details of OBSTACLE_SEEN, OBSTACLE_AVOIDED and OBSTACLES_CLEARED by type, in their order.
   std::vector<std::pair<std::string, Json>> TakeEvents();
 
@@ -96,9 +92,9 @@ class ObstacleService {
   void SavePhoto(uint32_t entry, const Image& image, const Shot& shot);
   void Seen(uint32_t entry);
   void RemovePhotos(const std::vector<std::string>& names);
-  Outcome List(const Json& params) const;
-  Outcome Piece(const Json& params) const;
-  Outcome Clear(const Json& params);
+  RpcOutcome List(const Json& params) const;
+  RpcOutcome Piece(const Json& params) const;
+  RpcOutcome Clear(const Json& params);
 
   ServiceConfig config_;
   std::function<void(const std::string&)> warn_;

@@ -38,6 +38,7 @@
 #include "mowbite_api/catalog.h"
 #include "mowbite_api/setup.h"
 #include "mowbite_bridge/event_builder.h"
+#include "mowbite_bridge/rpc_reply.h"
 #include "mowbite_hold/file_io.h"
 #include "mowbite_hold/file_writer.h"
 #include "mowbite_hold/lock.h"
@@ -668,19 +669,11 @@ class SetupNode : public rclcpp::Node {
   }
 
   void Reply(const std::string& id, const json& result) {
-    mowbite_msgs::msg::RpcResponse msg;
-    msg.result = result.dump(-1, ' ', false, json::error_handler_t::replace);
-    msg.id = id;
-    response_pub_->publish(msg);
+    mowbite_bridge::PublishOutcome(id, mowbite_bridge::Ok(result), *response_pub_, *error_pub_);
   }
 
   void ReplyError(const std::string& id, int code, const std::string& message, const json& data) {
-    RpcError msg;
-    msg.code = code;
-    msg.message = message;
-    msg.id = id;
-    msg.data = data.dump(-1, ' ', false, json::error_handler_t::replace);
-    error_pub_->publish(msg);
+    mowbite_bridge::PublishOutcome(id, mowbite_bridge::Error(code, message, data), *response_pub_, *error_pub_);
   }
 
   void ReplyRefusal(const std::string& id, const Refusal& refusal) {
@@ -689,14 +682,9 @@ class SetupNode : public rclcpp::Node {
                  {{"field", refusal.field}, {"reason", "INVALID"}});
       return;
     }
-    const mowbite_api::Rating rating = mowbite_api::RateReason(kRefused, refusal.reason);
-    json data = {{"event", kRefused},
-                 {"reason", refusal.reason},
-                 {"message", refusal.message},
-                 {"severity", rating.severity},
-                 {"resume", rating.resume}};
-    for (const auto& item : refusal.data.items()) data[item.key()] = item.value();
-    ReplyError(id, RpcError::ERROR_INVALID_REQUEST, refusal.message, data);
+    const mowbite_bridge::RpcOutcome outcome =
+        mowbite_bridge::Refusal(kRefused, refusal.reason, refusal.message, refusal.data);
+    mowbite_bridge::PublishOutcome(id, outcome, *response_pub_, *error_pub_);
   }
 
   // setup.image: a piece of an image, base64.

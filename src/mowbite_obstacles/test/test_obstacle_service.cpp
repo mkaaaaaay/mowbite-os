@@ -74,7 +74,7 @@ class ServiceTest : public ::testing::Test {
   }
 
   Json Call(const std::string& method, const Json& params = Json::object()) {
-    const Outcome outcome = service->Call(method, params);
+    const RpcOutcome outcome = service->Call(method, params);
     if (!outcome.ok) return Json{{"error", outcome.code}, {"message", outcome.message}};
     return outcome.result;
   }
