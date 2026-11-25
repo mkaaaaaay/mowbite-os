@@ -364,41 +364,6 @@ CommandOutcome LogicCore::Command(const std::string& name, const json& params, c
   return out;
 }
 
-// Effects may go away while a command runs, events never: its events are those after the ones before it.
-std::ptrdiff_t LogicCore::EventCount() const {
-  return std::count_if(effects_.begin(), effects_.end(),
-                       [](const Effect& effect) { return std::holds_alternative<Event>(effect); });
-}
-
-void LogicCore::Refuse(CommandOutcome* out, const Reason& why, std::ptrdiff_t events_before,
-                       const std::string& command_group) const {
-  out->why = why;
-  // The refusal that went out as an event of its own names the group; else the group whose reason it is.
-  std::string group;
-  std::string event_id;
-  json action;
-  std::ptrdiff_t seen = 0;
-  for (const Effect& effect : effects_) {
-    const Event* found = std::get_if<Event>(&effect);
-    if (!found || seen++ < events_before) continue;
-    const Event& event = *found;
-    const bool refused = event.type.size() > 8 && event.type.compare(event.type.size() - 8, 8, "_REFUSED") == 0;
-    if (!refused || event.details.value("reason", "") != why.code) continue;
-    group = event.type;
-    event_id = event.id;
-    if (event.details.contains("action")) action = event.details["action"];
-  }
-  if (group.empty()) {
-    const mowbite_api::EventEntry* answers = mowbite_api::FindReasonGroup("COMMAND_REFUSED");
-    for (const auto& reason : answers->reasons) {
-      if (reason.code == why.code) group = "COMMAND_REFUSED";
-    }
-  }
-  if (group.empty()) group = command_group;
-  out->data = RefusalData(group, why, event_id);
-  if (!action.is_null()) out->data["action"] = action;
-}
-
 json LogicCore::CommandAnswer(const json& fields) const {
   const RobotStateData state = RobotState();
   json answer = {{"state", state.state}, {"sub_state", state.sub_state}};

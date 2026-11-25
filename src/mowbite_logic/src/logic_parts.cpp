@@ -1,7 +1,10 @@
-// The calls of LogicCore that belong to one of its parts.
+// The calls of LogicCore that belong to one of its parts, and the refusal of a command they share with Command.
+#include <algorithm>
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "mowbite_logic/logic_core.h"
@@ -48,6 +51,41 @@ CommandOutcome LogicCore::CalibrationStart(const std::vector<Reason>& problems, 
     Refuse(&out, why, events_before, "CALIBRATION_REFUSED");
   }
   return out;
+}
+
+// Effects may go away while a command runs, events never: its events are those after the ones before it.
+std::ptrdiff_t LogicCore::EventCount() const {
+  return std::count_if(effects_.begin(), effects_.end(),
+                       [](const Effect& effect) { return std::holds_alternative<Event>(effect); });
+}
+
+void LogicCore::Refuse(CommandOutcome* out, const Reason& why, std::ptrdiff_t events_before,
+                       const std::string& command_group) const {
+  out->why = why;
+  // The refusal that went out as an event of its own names the group; else the group whose reason it is.
+  std::string group;
+  std::string event_id;
+  json action;
+  std::ptrdiff_t seen = 0;
+  for (const Effect& effect : effects_) {
+    const Event* found = std::get_if<Event>(&effect);
+    if (!found || seen++ < events_before) continue;
+    const Event& event = *found;
+    const bool refused = event.type.size() > 8 && event.type.compare(event.type.size() - 8, 8, "_REFUSED") == 0;
+    if (!refused || event.details.value("reason", "") != why.code) continue;
+    group = event.type;
+    event_id = event.id;
+    if (event.details.contains("action")) action = event.details["action"];
+  }
+  if (group.empty()) {
+    const mowbite_api::EventEntry* answers = mowbite_api::FindReasonGroup("COMMAND_REFUSED");
+    for (const auto& reason : answers->reasons) {
+      if (reason.code == why.code) group = "COMMAND_REFUSED";
+    }
+  }
+  if (group.empty()) group = command_group;
+  out->data = RefusalData(group, why, event_id);
+  if (!action.is_null()) out->data["action"] = action;
 }
 
 void LogicCore::OnCalibrationSign(double now_s) {

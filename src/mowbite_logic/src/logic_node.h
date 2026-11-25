@@ -89,6 +89,8 @@ namespace mowbite_logic {
 
 // The planner does not offer its services.
 Reason PlannerMissing();
+// " (client <client>)" for a log line, empty without one.
+std::string ClientSuffix(const std::string& client);
 
 class LogicNode : public rclcpp::Node {
   using PlanTransit = mowbite_planner_os_interfaces::srv::PlanTransit;
