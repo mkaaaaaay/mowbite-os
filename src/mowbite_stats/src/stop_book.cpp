@@ -92,9 +92,14 @@ void StopBook::OnEvent(const json& event, double mono, double wall) {
   if (!seen.id.empty() && std::any_of(seen_.begin(), seen_.end(), same)) return;
   static const std::set<std::string> commands = {"MANUAL", "SCHEDULE", "TEST"};
   seen.commanded = !TextOf(event, "client").empty() || commands.count(seen.reason) != 0;
-  seen.arrived = TextOf(event, "phase") == "end" && event.value("arrived", false) == true;
+  // A field of another type is no true: value() would throw for it.
+  const auto is_true = [&](const char* key) {
+    const auto it = event.find(key);
+    return it != event.end() && *it == true;
+  };
+  seen.arrived = TextOf(event, "phase") == "end" && is_true("arrived");
   const auto bits = event.find("reason");
-  const bool began = event.value("emergency", false) == true;
+  const bool began = is_true("emergency");
   if (seen.type == "EMERGENCY" && began && bits != event.end() && bits->is_number_integer()) {
     seen.bits = bits->get<int64_t>();
   }

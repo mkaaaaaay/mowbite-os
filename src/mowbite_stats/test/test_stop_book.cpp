@@ -140,6 +140,16 @@ TEST(StopBook, ASymptomAloneOpensAnIncident) {
   EXPECT_EQ(week["unexplained"], 2);
 }
 
+TEST(StopBook, FieldsOfAnotherTypeAreNoTrue) {
+  Book b;
+  b.At(0, State("MOWING"));
+  EXPECT_NO_THROW(b.At(10, Event("EMERGENCY", {{"emergency", "yes"}, {"reason", 1 << 3}})));
+  EXPECT_NO_THROW(b.At(10.1, Event("DRIVE", {{"phase", "end"}, {"arrived", "yes"}})));
+  b.At(10.2, State("IDLE"));
+  EXPECT_TRUE(b.Tick(13));
+  EXPECT_FALSE(b.Last().explained);
+}
+
 TEST(StopBook, AnEmergencyExplainsByTheClassOfItsBits) {
   Book b;
   b.At(0, State("MOWING"));

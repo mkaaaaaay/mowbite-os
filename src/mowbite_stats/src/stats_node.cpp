@@ -160,8 +160,13 @@ class StatsNode : public rclcpp::Node {
         "bridge/publish", 100, [this](const mowbite_msgs::msg::MqttPublish& msg) {
           if (msg.topic != "events/json") return;
           const json event = json::parse(msg.payload, nullptr, false);
-          Publish(incidents_->OnEvent(event, mowbite_journal::MonotonicNs(), WallSeconds()));
-          stops_.OnEvent(event, MonotonicSeconds(), WallSeconds());
+          // The statistics never take the container and its safety node down with them.
+          try {
+            Publish(incidents_->OnEvent(event, mowbite_journal::MonotonicNs(), WallSeconds()));
+            stops_.OnEvent(event, MonotonicSeconds(), WallSeconds());
+          } catch (const std::exception& e) {
+            RCLCPP_WARN(get_logger(), "An event left out of the statistics: %s", e.what());
+          }
         });
     log_sub_ = create_subscription<rcl_interfaces::msg::Log>(
         "/rosout", rclcpp::QoS(100), [this](const rcl_interfaces::msg::Log& msg) {
