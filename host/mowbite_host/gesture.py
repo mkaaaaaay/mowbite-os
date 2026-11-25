@@ -101,13 +101,15 @@ class Gesture:
 
     def __init__(self, paths, run):
         self.paths, self.run = paths, run
-        self.config = read_config(paths.wifi_gesture)
+        # The file of the platform, read by start().
+        self.config = None
         self._asked = threading.Event()
         self._thread = None
         # The thread that plays the last tone.
         self.player = None
 
     def start(self):
+        self.config = read_config(self.paths.wifi_gesture)
         if self.config and self._thread is None:
             self._thread = threading.Thread(target=self.reader, daemon=True)
             self._thread.start()

@@ -726,6 +726,8 @@ class GestureTest(CallsBase):
         self.commands.on(["systemctl", "--no-block", "restart", "ap.service"], (0, "", ""))
         self.commands.on(["aplay"], (0, "", ""))
         self.host = service.Host(self.paths, self.updater, self.watch, self.fake, self.published, self.commands)
+        # As start() reads it, without the thread that reads the device.
+        self.host.gesture.config = gesture.read_config(self.paths.wifi_gesture)
         self.out = StringIO()
 
     def press(self, events, clock=lambda: 0.0):
