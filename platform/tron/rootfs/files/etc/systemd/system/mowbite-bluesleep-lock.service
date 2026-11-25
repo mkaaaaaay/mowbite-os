@@ -1,0 +1,14 @@
+[Unit]
+Description=Hide the vendor bluesleep entries, reading them oopses the kernel
+DefaultDependencies=no
+ConditionPathIsDirectory=/proc/bluetooth/sleep
+Before=sysinit.target shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/mowbite/bluesleep-lock
+
+[Install]
+WantedBy=sysinit.target

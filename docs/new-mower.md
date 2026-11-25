@@ -555,6 +555,11 @@ A silent one ends the process (code 86) and the launch starts a latched driver, 
   answers 0. While the lock is held, a host started again waits without the broker and `mowbite-update` refuses to
   install, roll back and recover. A bundle of the host does not renew such a tool: the path of the lock and that
   command stay as they are.
+- A vendor kernel may crash on a plain read of one of its `/proc` entries, and a crash restarts the mower. On the
+  Tron reading `/proc/bluetooth/sleep/btwrite` oopses the kernel: `mowbite-bluesleep-lock.service` (before
+  `sysinit.target`) takes every mode bit off that folder and lays an empty read-only tmpfs over it. Tools and scripts
+  of the rootfs read only single entries of `/proc` (a process's `cmdline`, `fd`, `stat`), never walk, grep or pack
+  it; `check-image.sh` refuses a file of `files/` that does.
 - The app comes from `mowbite-web` (`web/mowbite_web.py`, standard library only): port 80 from
   `mowbite-web.socket`, the service as its own user `mowbite-web` in no group, no root, no capability, nothing to
   write. GET and HEAD only, `/cgi-bin/*` is always 404 (the app reads that as "no container"); only `/app.json`,

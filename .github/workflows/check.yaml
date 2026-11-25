@@ -94,7 +94,7 @@ jobs:
         run: |
           for t in platform/tron/bundle/test_update.py platform/tron/rootfs/test_stereo_ae.py \
                    platform/tron/rootfs/test_base_packages.py platform/tron/rootfs/test_unpack.py \
-                   platform/tron/rootfs/test_setup_ap.py \
+                   platform/tron/rootfs/test_setup_ap.py platform/tron/rootfs/test_bluesleep_lock.py \
                    host/test/test_compat.py host/test/test_updater.py \
                    host/test/test_components.py host/test/test_host_update.py host/test/test_service.py \
                    host/test/test_e2e.py web/test/test_web.py; do

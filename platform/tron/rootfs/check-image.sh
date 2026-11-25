@@ -37,7 +37,8 @@ for f in /etc/mowbite/probezeit /usr/lib/mowbite/probezeit /usr/lib/mowbite/tron
          /etc/systemd/system/multi-user.target.wants/mowbite-tron-stereo-gain.service \
          /usr/lib/udev/rules.d/60-mowbite-rear.rules \
          /etc/systemd/system/sysinit.target.wants/systemd-pstore.service /usr/lib/mowbite/vendor-files \
-         /usr/lib/mowbite/setup-ap /etc/systemd/system/multi-user.target.wants/mowbite-setup-ap.service; do
+         /usr/lib/mowbite/setup-ap /etc/systemd/system/multi-user.target.wants/mowbite-setup-ap.service \
+         /usr/lib/mowbite/bluesleep-lock /etc/systemd/system/sysinit.target.wants/mowbite-bluesleep-lock.service; do
     "$DEBUGFS" -c -R "stat $f" "$IMG" 2>/dev/null | grep -q '^Inode:'; result "present: $f" $?
 done
 for t in motd-news apt-daily apt-daily-upgrade; do
@@ -136,6 +137,20 @@ TREE=$WORK
 done > "$WORK/files.diff"
 test ! -s "$WORK/files.diff"; result "files/ of the repo unchanged in the image" $?
 cat "$WORK/files.diff"
+# Reading /proc/bluetooth/sleep/btwrite oopses the vendor kernel: the lock runs before sysinit, and no file of ours
+# walks or packs /proc or names the bluesleep folder (only per-process entries are read).
+unit="$TREE/etc/systemd/system/mowbite-bluesleep-lock.service"
+grep -qx 'DefaultDependencies=no' "$unit" && grep -q '^Before=.*\bsysinit.target\b' "$unit" \
+    && grep -qx 'ExecStart=/usr/lib/mowbite/bluesleep-lock' "$unit" \
+    && grep -q 'mount -t tmpfs -o ro,' "$TREE/usr/lib/mowbite/bluesleep-lock"
+result "bluesleep lock before sysinit" $?
+(cd "$HERE/files" && find . -type f ! -path ./usr/lib/mowbite/bluesleep-lock \
+    ! -path ./etc/systemd/system/mowbite-bluesleep-lock.service) | while read -r f; do
+    grep -aqE '/proc/bluetooth|(find|tar|du|rsync|zip|cp +-[A-Za-z]*[rRa]|grep +-[A-Za-z]*[rR]|walk\(|glob\()[^|;&]*["'"'"' (]/proc/?(["'"'"' )*]|$)' \
+        "$TREE/$f" && echo "  touches /proc as a whole: $f"
+done > "$WORK/proc.txt"
+test ! -s "$WORK/proc.txt"; result "no file of ours walks /proc or names /proc/bluetooth" $?
+cat "$WORK/proc.txt"
 # Only the MowBite file sets the panic values; a later file would override it.
 test "$(grep -rlE '^[[:space:]]*kernel\.panic' "$TREE/etc/sysctl.conf" "$TREE/etc/sysctl.d" "$TREE/usr/lib/sysctl.d" \
     2>/dev/null)" = "$TREE/etc/sysctl.d/60-mowbite-panic.conf"

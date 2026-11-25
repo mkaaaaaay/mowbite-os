@@ -1,0 +1,12 @@
+#!/bin/sh
+# Reading /proc/bluetooth/sleep/btwrite oopses the vendor kernel (bluesleep), and an oops restarts the mower.
+# Mode 000 keeps every other user out of the entries in any proc mount; an empty read-only tmpfs on top hides them
+# from root as well. Bluetooth works without them.
+#   bluesleep-lock [folder]   (default /proc/bluetooth/sleep; another folder only for the test)
+set -eu
+d=${1:-/proc/bluetooth/sleep}
+[ -d "$d" ] || exit 0
+mountpoint -q "$d" && exit 0
+# chmod changes the entry only, it never calls the read or write handlers; the tmpfs counts even if it fails.
+chmod 000 "$d"/* "$d" || echo "bluesleep-lock: mode not changed everywhere" >&2
+mount -t tmpfs -o ro,mode=000,size=4k,nr_inodes=1 bluesleep-lock "$d"
