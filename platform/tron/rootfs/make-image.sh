@@ -8,7 +8,8 @@
 # "-" for the vendor rootfs or the host keys leaves them out (probe image for QEMU, keys made on the first boot).
 #   make-image.sh --installer <base .tar> <new .img>
 # The base image of the installer: no vendor parts, keys or password, a reserved pack file (/var/lib/mowbite/pack,
-# 256 MiB, unpacked by mowbite-unpack on the first boot) and <new .img>.json with the byte ranges it covers.
+# 256 MiB, unpacked by mowbite-unpack on the first boot), <new .img>.json with the byte ranges it covers and <new .img>.zst,
+# the image as a release carries it.
 # Prints no secrets; work files lie next to the image and are removed at the end.
 set -euo pipefail
 INSTALLER=
@@ -204,11 +205,13 @@ h = hashlib.sha256()
 with open(out, "rb") as f:
     while chunk := f.read(8 << 20):
         h.update(chunk)
+# The release carries the image packed; size and sha256 are those of the image itself.
 print(json.dumps({"schema": 1, "platform": "tron", "base": base,
-                  "file": os.path.basename(out), "size": os.path.getsize(out), "sha256": h.hexdigest(),
+                  "file": os.path.basename(out) + ".zst", "size": os.path.getsize(out), "sha256": h.hexdigest(),
                   "pack": pieces}, indent=2))
 PY
+    zstd -q -f -T0 -19 "$OUT" -o "$OUT.zst"
 fi
 echo "image $OUT: ${#items[@]} vendor items, ${#parents[@]} new parent directories," \
      "${#private[@]} key and WLAN files, root password: $([ -n "$ROOTHASH" ] && echo set || echo none)," \
-     "pack: $([ -n "$INSTALLER" ] && echo "$OUT.json" || echo none)"
+     "pack: $([ -n "$INSTALLER" ] && echo "$OUT.json, packed $OUT.zst" || echo none)"

@@ -95,7 +95,7 @@ loader = importlib.machinery.SourceFileLoader("unpack", script)
 unpack = importlib.util.module_from_spec(importlib.util.spec_from_loader("unpack", loader))
 loader.exec_module(unpack)
 j = json.load(open(meta))
-assert j["size"] == os.path.getsize(img) and j["file"] == os.path.basename(img)
+assert j["size"] == os.path.getsize(img) and j["file"] == os.path.basename(img) + ".zst"
 assert type(j["base"]) is int and j["base"] == int(base)
 h = hashlib.sha256()
 with open(img, "rb") as f:
@@ -110,6 +110,8 @@ with open(img, "rb") as f:
     assert got == (unpack.EMPTY * (len(got) // len(unpack.EMPTY) + 1))[:len(got)] and len(got) == 268435456
 PY
     result "base .json: size, sha256, base number and the empty pack in its ranges" $?
+    test "$(zstd -dc "$IMG.zst" | sha256sum | cut -d' ' -f1)" = "$(sha256sum "$IMG" | cut -d' ' -f1)"
+    result "the packed image unpacks to the image" $?
 else
     test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
     test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
