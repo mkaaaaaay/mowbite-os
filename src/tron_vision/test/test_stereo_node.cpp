@@ -136,17 +136,25 @@ class Driver {
   void Stop() {
     sending_ = false;
   }
+  // The motor still reports rpm, for a blade that runs down after off.
+  void Rpm(int16_t rpm) {
+    rpm_ = rpm;
+    Send();
+  }
 
  private:
   void Send() {
     HardwareStatus msg;
     msg.telemetry_ok = true;
     msg.blade_on = blade_;
+    msg.blade_motor.ok = true;
+    msg.blade_motor.rpm = rpm_;
     pub_->publish(msg);
   }
 
   rclcpp::Publisher<HardwareStatus>::SharedPtr pub_;
   std::atomic<bool> blade_{false};
+  std::atomic<int16_t> rpm_{0};
   std::atomic<bool> sending_{true};
   std::atomic<bool> running_{true};
   std::thread thread_;
@@ -363,6 +371,29 @@ TEST_F(StereoNodeTest, BladeAndSilentDriverEndTheStream) {
   ASSERT_TRUE(spinner.WaitForCamera([](const Camera& m) { return !m.available; }, 3.0, &c));
   EXPECT_EQ(c.reason, Camera::REASON_DRIVER_MISSING);
   EXPECT_LT(std::chrono::duration<double>(Clock::now() - silent_at).count(), 1.0 + 0.2 + 0.3);
+}
+
+// A blade that runs down after off still counts as turning: no stream until the motor reports 0 rpm.
+TEST_F(StereoNodeTest, ARunningDownBladeKeepsTheStreamOff) {
+  Rig rig;
+  auto node = rig.Make();
+  Spinner spinner;
+  spinner.Add(node);
+  Driver driver(spinner.Listener());
+  spinner.Start();
+  ASSERT_TRUE(spinner.WaitForCamera([](const Camera& c) { return c.available; }, 15.0));
+
+  driver.Rpm(1800);
+  Camera c;
+  ASSERT_TRUE(spinner.WaitForCamera([](const Camera& m) { return !m.available; }, 2.0, &c));
+  EXPECT_EQ(c.reason, Camera::REASON_BLADE_RUNNING);
+  test::Client client(rig.port);
+  EXPECT_FALSE(rig.Play(client));
+  std::this_thread::sleep_for(500ms);
+  EXPECT_EQ(rig.device.ons, 1);
+
+  driver.Rpm(0);
+  ASSERT_TRUE(spinner.WaitForCamera([](const Camera& m) { return m.available; }, 2.0));
 }
 
 // Reads the stream for this long; the bytes that came, 0 once the server has closed.

@@ -95,6 +95,7 @@ struct MowerView {
   bool received = false;
   // When the message came, on the clock of the loop, not its stamp.
   double received_at = 0.0;
+  // BladeMayTurn: commanded on or still turning, also while it runs down.
   bool blade_on = false;
   bool moving = false;
 };

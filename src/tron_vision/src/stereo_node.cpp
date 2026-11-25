@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include <mowbite_msgs/blade.hpp>
+
 #include "mowbite_serial/serial_port.h"
 #include "tron_vision/encoder_library.h"
 
@@ -275,7 +277,7 @@ StereoNode::~StereoNode() {
 }
 
 void StereoNode::OnStatus(const mowbite_msgs::msg::HardwareStatus& msg) {
-  const MowerView mower{true, MonotonicSeconds(), msg.blade_on, msg.moving};
+  const MowerView mower{true, MonotonicSeconds(), mowbite_msgs::BladeMayTurn(msg), msg.moving};
   std::lock_guard<std::mutex> lock(mower_mutex_);
   mower_ = mower;
 }
