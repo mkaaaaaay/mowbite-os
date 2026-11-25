@@ -220,8 +220,8 @@ class TestHomeDirect(unittest.TestCase):
         p = self.probe
         self.carry(2.0, 0.8, 90.0)
         self.silence()
-        since = len(p.events)
-        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
+        since, answer = p.started(lambda: p.rpc("docking.start"))
+        self.assertEqual(answer, {"result": {"state": "DOCKING", "sub_state": ""}})
         docking = p.event(since, "DOCKING", 5)
         self.assertIsNotNone(docking, p.events[since:])
         self.assertEqual(docking["reason"], "MANUAL", docking)
@@ -244,8 +244,8 @@ class TestHomeDirect(unittest.TestCase):
         # 0.6 m from the end of the yard: no room to turn there with the margin.
         self.carry(3.2, 2.0, 180.0)
         self.silence()
-        since = len(p.events)
-        self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
+        since, answer = p.started(lambda: p.rpc("docking.start"))
+        self.assertEqual(answer, {"result": {"state": "DOCKING", "sub_state": ""}})
         retry = p.event(since, "DOCKING_RETRY", PLAN_TIMEOUT + 8)
         self.assertIsNotNone(retry, p.events[since:])
         self.assertEqual(retry["reason"], "approach_failed", retry)

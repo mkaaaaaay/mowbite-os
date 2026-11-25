@@ -147,8 +147,7 @@ class TestDriverCrash(unittest.TestCase):
 
     def test_2_the_blade_turns_and_the_mower_drives(self):
         p = self.probe
-        since = len(p.events)
-        p.act("mower_logic:idle/start_mowing")
+        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
         self.assertIsNotNone(p.event(since, "STATE", 10, state="MOWING"), [e["type"] for e in p.events[since:]])
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")

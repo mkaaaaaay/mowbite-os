@@ -150,8 +150,7 @@ class TestNx60iGoingHome(unittest.TestCase):
         p = self.probe
         set_flags(blade_temperature=45.0)
         time.sleep(1.5)
-        since = len(p.events)
-        p.act(START)
+        since, _ = p.started(lambda: p.act(START))
         refused = p.event(since, "MOWING_REFUSED", 10)
         self.assertIsNotNone(refused, p.events[since:])
         self.assertEqual((refused["reason"], refused["severity"]), ("MOTOR_HOT", "warning"), refused)
@@ -160,8 +159,7 @@ class TestNx60iGoingHome(unittest.TestCase):
         # At the default temperature of fake_xcore it starts.
         set_flags()
         time.sleep(1.5)
-        since = len(p.events)
-        p.act(START)
+        since, _ = p.started(lambda: p.act(START))
         self.assertIsNotNone(p.event(since, "STATE", 30, state="MOWING"), p.events[since:])
 
     def test_3_while_mowing_heat_pauses_without_a_way_home(self):

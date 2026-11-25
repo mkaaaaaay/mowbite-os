@@ -93,8 +93,7 @@ class TestFollowerStall(unittest.TestCase):
 
     def test_02_the_blade_turns_on_the_first_mow_path(self):
         p = self.probe
-        since = len(p.events)
-        p.act("mower_logic:idle/start_mowing")
+        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
         self.assertIsNotNone(p.event(since, "STATE", 10, state="MOWING"), [e["type"] for e in p.events[since:]])
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         # Well on the path, between two feedbacks of the follower.

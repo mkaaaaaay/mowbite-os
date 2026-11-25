@@ -153,8 +153,7 @@ class TestStackCrash(unittest.TestCase):
         p = self.probe
         os.mkdir(SESSION + ".tmp")
         try:
-            since = len(p.events)
-            p.act("mower_logic:idle/start_mowing")
+            since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
             refused = p.event(since, "MOWING_REFUSED", 10)
             self.assertTrue(refused, [e["type"] for e in p.events[since:]])
             self.assertEqual((refused["reason"], refused["file"]), ("STORAGE_NOT_WRITABLE", "os-session.json"), refused)

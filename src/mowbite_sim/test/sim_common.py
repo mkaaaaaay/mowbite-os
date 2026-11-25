@@ -44,6 +44,11 @@ HISTORY = QoSProfile(depth=50, reliability=ReliabilityPolicy.RELIABLE, durabilit
 ROSOUT = QoSProfile(depth=1000, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 # A node stopped by launch ends with 0 or by its signal (SIGINT, SIGTERM; negative or 128 + n).
 EXIT_CODES = [0, -2, -15, 130, 143]
+# The logic looks for the planner and the follower in its own view of the graph at every start and refuses until it
+# has found them; under load that is seconds after a test sees them. SimProbe.started tries again on these only.
+NOT_FOUND_YET = ("PLANNER_MISSING", "FOLLOWER_MISSING")
+# What follows a start of the logic: a refusal or the change of state it began.
+START_ANSWERS = ("MOWING_REFUSED", "DRIVE_REFUSED", "STATE")
 
 LIBC = ctypes.CDLL(None, use_errno=True)
 LIBC.ptrace.argtypes = [ctypes.c_long, ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p]
@@ -756,6 +761,19 @@ class SimProbe:
     def logged(self, text, timeout=10.0, since=0):
         """Whether a log line with that text came within timeout s, among the lines from index since on."""
         return self.wait(lambda: any(text in line for line in self.logs[since:]), timeout)
+
+    def started(self, send, timeout=60.0):
+        """send() starts mowing, a drive or docking; again on a refusal with a code of NOT_FOUND_YET until timeout s.
+        Needs bridge/publish on _publish. (index of the events before the last send(), its value)."""
+        end = time.time() + timeout
+        while True:
+            since = len(self.events)
+            value = send()
+            answer = self.wait(lambda: next((e for e in self.events[since:] if e["type"] in START_ANSWERS), None), 10.0)
+            refused = answer is not None and answer["type"] != "STATE" and answer.get("reason") in NOT_FOUND_YET
+            if not refused or time.time() >= end:
+                return since, value
+            time.sleep(0.5)
 
     def act(self, action):
         """An action of the app on mower_logic/actions (self.action_pub)."""

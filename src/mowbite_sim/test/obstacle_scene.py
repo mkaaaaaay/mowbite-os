@@ -189,5 +189,5 @@ class ObstacleSim:
         self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
         self.assertTrue(p.wait(lambda: p.obstacles is not None and p.obstacles.sight, 20), "the camera sees nothing")
-        p.act("mower_logic:idle/start_mowing")
+        p.started(lambda: p.act("mower_logic:idle/start_mowing"))
         self.assertIsNotNone(p.event(0, "BLADES", 120, enabled=True), "the blade never ran")

@@ -206,8 +206,8 @@ class TestDock(Base):
 
     def test_02_a_job_from_the_station_ends_docked(self):
         p = self.probe
-        sim_since, since = sim_time(), len(p.events)
-        p.act(START)
+        sim_since = sim_time()
+        since, _ = p.started(lambda: p.act(START))
         self.assertIsNotNone(p.event(since, "UNDOCKED", 30), p.events[since:])
         self.assertIsNotNone(p.event(since, "JOB_COMPLETE", 600), p.events[since:])
         docking_from = len(p.events)

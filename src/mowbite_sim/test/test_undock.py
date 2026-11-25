@@ -135,8 +135,8 @@ class TestUndock(unittest.TestCase):
     def test_02_a_way_out_that_ends_outside_of_the_areas(self):
         p = self.probe
         p.replace(FAR_LAWN)
-        before, since = p.truth(), len(p.events)
-        p.act(START)
+        before = p.truth()
+        since, _ = p.started(lambda: p.act(START))
         refused = p.event(since, "MOWING_REFUSED", 10)
         self.assertIsNotNone(refused, p.events[since:])
         self.assertEqual(refused["reason"], "DOCK_UNREACHABLE", refused)
@@ -149,8 +149,8 @@ class TestUndock(unittest.TestCase):
 
     def test_03_start_on_the_station_undocks_then_mows(self):
         p = self.probe
-        sim_since, since = sim_time(), len(p.events)
-        p.act(START)
+        sim_since = sim_time()
+        since, _ = p.started(lambda: p.act(START))
         undocked = p.event(since, "UNDOCKED", 30)
         self.assertIsNotNone(undocked, p.events[since:])
         undocked_at, truth = sim_time(), p.truth()

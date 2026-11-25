@@ -117,8 +117,7 @@ class TestGoingHome(unittest.TestCase):
         # The defaults of fake_tron arrived with the last battery and motor report (1 Hz).
         self.assertTrue(p.wait(lambda: p.hw.battery_voltage > EMPTY + 1.0 and p.hw.blade_motor.temperature < MOTOR_COLD
                                and not p.hw.rain, 5), p.hw)
-        since = len(p.events)
-        p.act(START)
+        since, _ = p.started(lambda: p.act(START))
         self.assertIsNotNone(p.event(since, "STATE", 60, state="MOWING"), p.events[since:])
         self.assertTrue(p.wait(lambda: p.truth()["x"] > 0.5, 60), p.truth())
         return since
@@ -155,8 +154,7 @@ class TestGoingHome(unittest.TestCase):
 
     def refused(self, reason, **fields):
         p = self.probe
-        since = len(p.events)
-        p.act(START)
+        since, _ = p.started(lambda: p.act(START))
         event = p.event(since, "MOWING_REFUSED", 10)
         self.assertIsNotNone(event, p.events[since:])
         self.assertEqual(event["reason"], reason, event)

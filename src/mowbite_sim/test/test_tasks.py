@@ -112,8 +112,7 @@ class TestTasks(unittest.TestCase):
 
     def test_03_mows_the_first_of_the_list(self):
         p = self.probe
-        since = len(p.events)
-        answer = p.rpc("mowing.start", tasks("near", "far"))
+        since, answer = p.started(lambda: p.rpc("mowing.start", tasks("near", "far")))
         self.assertIn("result", answer or {}, answer)
         state = p.event(since, "STATE", 10, state="MOWING")
         self.assertIsNotNone(state, [e["type"] for e in p.events[since:]])

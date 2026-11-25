@@ -96,9 +96,6 @@ class TestButtons(unittest.TestCase):
         p.call(p.set_pose, request)
         self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
-        planner = {"/mowbite_planner/plan_coverage", "/mowbite_planner/plan_transit"}
-        self.assertTrue(p.wait(lambda: planner <= {name for name, _ in p.node.get_service_names_and_types()}, 60),
-                        "the planner offers no plan_coverage and plan_transit")
         self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "IDLE", 30))
 
         # HOME held stands for nothing: no step.
@@ -107,7 +104,7 @@ class TestButtons(unittest.TestCase):
         time.sleep(2.0)
         self.assertEqual([e for e in p.events[since:] if e["type"] == "STATE"], [])
 
-        p.press(ButtonEvent.BUTTON_START, ButtonEvent.PRESS_HELD)
+        since, _ = p.started(lambda: p.press(ButtonEvent.BUTTON_START, ButtonEvent.PRESS_HELD))
         self.state_by_button(since, "MOWING")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 60), "no mowing")
 

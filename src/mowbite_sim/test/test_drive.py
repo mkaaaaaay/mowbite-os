@@ -107,9 +107,8 @@ class TestDrive(unittest.TestCase):
 
     def test_02_drive_from_the_front_lawn_to_the_back_over_the_path(self):
         p = self.probe
-        since = len(p.events)
         track_from = len(p.track)
-        answer = p.drive(15, 1.0, 0.0, True)
+        since, answer = p.started(lambda: p.drive(15, 1.0, 0.0, True))
         self.assertTrue(answer.success, answer.message)
         self.assertTrue(answer.message.startswith("driving "), answer.message)
         ended = p.drive_ended(since, 200)
