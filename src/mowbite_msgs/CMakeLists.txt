@@ -78,5 +78,16 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES builtin_interfaces std_msgs geometry_msgs diagnostic_msgs action_msgs
 )
 
+# Rules on the messages for their users, beside the generated headers.
+install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+  ament_add_gtest(mowbite_msgs_test test/test_blade.cpp)
+  target_include_directories(mowbite_msgs_test PRIVATE include)
+  target_link_libraries(mowbite_msgs_test ${cpp_typesupport_target})
+endif()
+
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()

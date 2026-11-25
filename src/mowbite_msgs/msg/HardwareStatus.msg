@@ -72,7 +72,8 @@ uint8 BLADE_OFF_DOCK = 4
 uint8 BLADE_OFF_RECONNECT = 5
 # The blade motor reported a fault (stall, overload, over-current, ...).
 uint8 BLADE_OFF_MOTOR_FAULT = 6
-# Blade commanded on, and why it went off the last time.
+# Blade commanded on, and why it went off the last time. Whether the blade may still turn: BladeMayTurn of
+# mowbite_msgs/blade.hpp, for every gate that needs it still.
 bool blade_on
 uint8 blade_off_reason
 

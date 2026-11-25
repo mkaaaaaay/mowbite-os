@@ -7,6 +7,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mowbite_msgs/blade.hpp>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
@@ -158,7 +159,7 @@ class CameraNode : public rclcpp::Node {
         });
     hardware_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
         "hw/status", 1, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
-          service_->OnBlade(msg->blade_on || (msg->blade_motor.ok && msg->blade_motor.rpm != 0));
+          service_->OnBlade(mowbite_msgs::BladeMayTurn(*msg));
         });
     fast_timer_ = create_wall_timer(kFastPeriod, [this] { OnFast(); });
     slow_timer_ = create_wall_timer(kSlowPeriod, [this] { OnSlow(); });
