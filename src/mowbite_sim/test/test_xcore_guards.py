@@ -192,8 +192,8 @@ class TestXcoreGuards(unittest.TestCase):
         set_flags()
         self.assertTrue(s.emergency, "no latch")
         self.assertEqual(s.emergency_reason & (WHEEL_RUNAWAY | LATCH | HIGH_LEVEL), WHEEL_RUNAWAY | LATCH)
-        # 1.3 x (0.163 + 0.3 x 0.1778): the limits that max_duty 0.3 reaches.
-        proc_output.assertWaitFor("above 0.28 m/s", process=driver, timeout=1)
+        # The limit that max_duty 0.3 reaches depends on the measured wheel values of the platform.
+        proc_output.assertWaitFor("duty and speed do not fit", process=driver, timeout=1)
         self.assertTrue(self.release(), "release failed")
 
     def test_f_another_host_claiming_latches(self, proc_output, driver):
