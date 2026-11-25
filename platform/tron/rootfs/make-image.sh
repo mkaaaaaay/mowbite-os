@@ -182,9 +182,12 @@ test "$(stat -c %s "$OUT")" -eq "$SIZE"
 if [ -n "$INSTALLER" ]; then
     # Where the pack lies in the image: its runs of blocks in file order, as byte offset and length.
     /usr/sbin/debugfs -R "stat /$PACK" "$OUT" 2>/dev/null > "$work/pack.stat"
-    python3 -I - "$work/pack.stat" "$OUT" "$BASE" "$PACK_LEN" > "$OUT.json" <<'PY'
+    # The number of the base as the image carries it, the one the bundles ask for.
+    /usr/sbin/debugfs -R "cat /usr/lib/mowbite/base" "$OUT" 2>/dev/null > "$work/base.number"
+    python3 -I - "$work/pack.stat" "$OUT" "$work/base.number" "$PACK_LEN" > "$OUT.json" <<'PY'
 import hashlib, json, os, re, sys
-stat, out, base, length = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+stat, out, length = sys.argv[1], sys.argv[2], int(sys.argv[4])
+base = int(open(sys.argv[3]).read())
 pieces, next_block = [], 0
 for a, b, p, q in (tuple(map(int, m)) for m in re.findall(r"\((\d+)-(\d+)\):(\d+)-(\d+)", open(stat).read())):
     assert a == next_block and q - p == b - a, f"pack extents out of order: {a}-{b}:{p}-{q}"
@@ -198,7 +201,7 @@ h = hashlib.sha256()
 with open(out, "rb") as f:
     while chunk := f.read(8 << 20):
         h.update(chunk)
-print(json.dumps({"schema": 1, "platform": "tron", "base": os.path.basename(base).removesuffix(".tar"),
+print(json.dumps({"schema": 1, "platform": "tron", "base": base,
                   "file": os.path.basename(out), "size": os.path.getsize(out), "sha256": h.hexdigest(),
                   "pack": pieces}, indent=2))
 PY

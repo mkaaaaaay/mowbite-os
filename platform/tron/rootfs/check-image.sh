@@ -78,14 +78,16 @@ if [ -e "$IMG.json" ]; then
         "stat /etc/systemd/system/multi-user.target.wants/mowbite-unpack-inbox.service" "$IMG" 2>/dev/null \
         | grep -q '^Inode:'
     result "unpack units enabled" $?
-    python3 -I -B - "$IMG" "$IMG.json" "$HERE/files/usr/lib/mowbite/unpack" <<'PY'
+    python3 -I -B - "$IMG" "$IMG.json" "$HERE/files/usr/lib/mowbite/unpack" \
+        "$(/usr/sbin/debugfs -R "cat /usr/lib/mowbite/base" "$IMG" 2>/dev/null)" <<'PY'
 import hashlib, importlib.machinery, importlib.util, json, os, sys
-img, meta, script = sys.argv[1:4]
+img, meta, script, base = sys.argv[1:5]
 loader = importlib.machinery.SourceFileLoader("unpack", script)
 unpack = importlib.util.module_from_spec(importlib.util.spec_from_loader("unpack", loader))
 loader.exec_module(unpack)
 j = json.load(open(meta))
 assert j["size"] == os.path.getsize(img) and j["file"] == os.path.basename(img)
+assert type(j["base"]) is int and j["base"] == int(base)
 h = hashlib.sha256()
 with open(img, "rb") as f:
     while chunk := f.read(8 << 20):
@@ -98,7 +100,7 @@ with open(img, "rb") as f:
         got += f.read(n)
     assert got == (unpack.EMPTY * (len(got) // len(unpack.EMPTY) + 1))[:len(got)] and len(got) == 268435456
 PY
-    result "base .json: size, sha256 and the empty pack in its ranges" $?
+    result "base .json: size, sha256, base number and the empty pack in its ranges" $?
 else
     test "$(stat_of /root/.ssh)" = "0700 0:0"; result "/root/.ssh 0700 root" $?
     test "$(stat_of /root/.ssh/authorized_keys)" = "0600 0:0"; result "authorized_keys 0600 root" $?
