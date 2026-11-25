@@ -2,7 +2,8 @@
 scene the test moves, mowbite_obstacles tracks them, the logic holds the mower, has the planner cut the plan by a circle
 around a ball that stands and drives around it within the lawn with the blade on. The simulated Tron reports the camera
 stereo and obstacle_mode_max 3, obstacle_mode is avoid. Checked on the true pose of fake_tron: the body keeps the
-clearance to the ball all along, the blade runs on the way around, the list entry has the circle and OBSTACLE_AVOIDED
+clearance to the ball on the way around (the pass clearance while it turns away from closer), the blade runs on the way
+around, the list entry has the circle and OBSTACLE_AVOIDED
 tells of it; around a ball amid the lanes the blade leaves little unmowed outside the circle; a person in the way is
 waited for and never driven around.
 
@@ -94,11 +95,13 @@ def unmowed(track, x, y, keep_out, picture=None):
 
 
 def around(track, x, y, yaw):
-    """The poses of track until base_link got 1 m past x, y along yaw: the way around a ball ahead."""
+    """The poses of track until base_link got 1 m past x, y along yaw: the way around a ball ahead, without the turn
+    away of a mower that stopped closer to it than CLEARANCE (that keeps PASS_CLEARANCE, G46)."""
     c, s = math.cos(yaw), math.sin(yaw)
     out = []
     for t in track:
-        out.append(t)
+        if out or clearance(t, x, y, BALL_RADIUS) >= CLEARANCE - STRAY:
+            out.append(t)
         if (t["x"] - x) * c + (t["y"] - y) * s > 1.0:
             break
     return out

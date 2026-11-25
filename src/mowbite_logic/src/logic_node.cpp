@@ -1063,6 +1063,8 @@ Reason LogicNode::PlanWay(Purpose purpose, double x, double y, double heading, c
   for (const auto& ring : drivable) plan->drivable_areas.push_back(ToPolygon(ring));
   for (const auto& ring : obstacles) plan->obstacles.push_back(ToPolygon(ring));
   plan->temporary_obstacles = CirclePolygons();
+  // G46: stopped right ahead of an object the way may turn away keeping the body out of the inner circles.
+  plan->temporary_passing = CirclePolygons(true);
   plan->max_outside = transit_max_outside_;
   drive_ = Drive();
   drive_.purpose = purpose;

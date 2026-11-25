@@ -842,10 +842,13 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
 - With avoid an object alone (no person, animal or thing of no kind) that held the mower for `obstacle_avoid_wait`
   (3 s) without moving more than `obstacle_avoid_still` becomes a circle: its radius, `obstacle_avoid_sigma` times its
   spread and `obstacle_avoid_clearance` (0.30 m, at least 0.1) between it and the body on the way around, with
-  `obstacle_avoid_pass_clearance` (0.10 m, the spread within) for lanes that pass it straight. The planner's `~/cut_plan` (interface 3)
-  cuts the rest of the area's plan where the body would touch an inner circle; the mower drives to the next piece
-  within the area around the outer one with the blade on at `obstacle_avoid_speed` (0.3 m/s). The outer circles are
-  temporary obstacles of every transit while mowing, the inner ones obstacles of the follower's geofence; they go
+  `obstacle_avoid_pass_clearance` (0.10 m, the spread within) for lanes that pass it straight. The planner's
+  `~/cut_plan` (interface 4) cuts the rest of the area's plan where the body would touch an inner circle; the mower
+  drives to the next piece within the area around the outer one with the blade on at `obstacle_avoid_speed`
+  (0.3 m/s). The outer circles are temporary obstacles of every transit while mowing, the inner ones its
+  `temporary_passing` (stopped so close that the body cannot turn round, the way turns away with the body out of the
+  inner circle, the blade on) and obstacles of the follower's geofence. A cut that leaves nothing of the area skips
+  the rest of it with AREA_SKIPPED `OBSTACLES_COVER_REST`. The circles go
   once their place is seen free, after `obstacle_avoid_keep` (30 min) or when mowing ends. Without a cut or a way
   around the mower waits as with stop. The list entry gets the circle, the event OBSTACLE_AVOIDED tells of it.
 - The Tron as an example: `tron_stereo` (`obstacles: true`) runs its stereo camera on after the self-test, the model
