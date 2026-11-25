@@ -412,6 +412,21 @@ TEST(RearLoop, LockedAfterAKernelCrash) {
   EXPECT_TRUE(std::filesystem::exists(rig.config.marker_dir + "/locked-rear"));
 }
 
+TEST(RearLoop, UnlockFreesTheCamera) {
+  Rig rig;
+  rig.dir.Write("markers/stream-rear", "an-earlier-boot\n");
+  rig.dir.Write("crash", "panic in uvcvideo\n");
+  rig.Make();
+  ASSERT_TRUE(rig.RunUntil(100.5));
+  ASSERT_EQ(rig.reports.back().reason, DockReason::kLockedAfterCrash);
+  std::string text;
+  ASSERT_TRUE(rig.loop->Unlock(text)) << text;
+  rig.asking = true;
+  ASSERT_TRUE(rig.RunUntil(102.5));
+  EXPECT_NE(rig.reports.back().reason, DockReason::kLockedAfterCrash);
+  EXPECT_NE(rig.camera.calls, "");
+}
+
 TEST(RearLoop, MissingCameraIsNoSignal) {
   Rig rig;
   rig.camera.present = false;

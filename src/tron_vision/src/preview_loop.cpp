@@ -48,6 +48,15 @@ PreviewLoop::~PreviewLoop() {
   Shutdown();
 }
 
+bool PreviewLoop::Unlock(std::string& text) {
+  if (!guard_.Unlock(config_.camera_id, text)) return false;
+  if (status_.state == PreviewState::kLocked) {
+    Set(PreviewState::kOff, "");
+    lock_checked_ = false;
+  }
+  return true;
+}
+
 void PreviewLoop::Set(PreviewState state, const std::string& detail) {
   status_.state = state;
   status_.detail = detail;

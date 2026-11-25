@@ -85,6 +85,8 @@ class PreviewLoop {
     wanted_ = wanted;
   }
   bool Step();
+  // Deletes the crash lock of the camera (CrashGuard::Unlock); a locked loop then checks the camera again.
+  bool Unlock(std::string& text);
   // Closes the camera if it streams; the state stays.
   void Shutdown();
 

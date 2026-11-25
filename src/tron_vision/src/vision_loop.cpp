@@ -67,6 +67,12 @@ VisionLoop::~VisionLoop() {
   Shutdown();
 }
 
+bool VisionLoop::Unlock(std::string& text) {
+  if (!guard_.Unlock(config_.camera_id, text)) return false;
+  if (status_.state == VisionState::kLocked) Set(VisionState::kOff, "");
+  return true;
+}
+
 void VisionLoop::Set(VisionState state, const std::string& detail) {
   status_.state = state;
   status_.detail = detail;

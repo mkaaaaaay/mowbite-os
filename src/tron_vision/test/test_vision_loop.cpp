@@ -349,6 +349,20 @@ TEST(VisionLoop, LockedCameraNeverStarts) {
   EXPECT_EQ(rig.Loop().Status().state, VisionState::kLocked);
 }
 
+TEST(VisionLoop, UnlockLetsTheCameraStartAgain) {
+  Rig rig(kPersonModel);
+  std::filesystem::create_directories(rig.tmp.Path() + "/vision");
+  rig.tmp.Write("vision/locked-oa_left", "1700000000 Oops\n");
+  ASSERT_TRUE(rig.Loop().Load());
+  rig.Run(5.0);
+  ASSERT_EQ(rig.Loop().Status().state, VisionState::kLocked);
+  std::string text;
+  ASSERT_TRUE(rig.Loop().Unlock(text)) << text;
+  rig.Run(10.0);
+  EXPECT_GT(rig.camera.starts, 0);
+  EXPECT_NE(rig.Loop().Status().state, VisionState::kLocked);
+}
+
 TEST(VisionLoop, ExposureFollowsTheScene) {
   Rig rig(kPersonModel);
   rig.camera.scene = 0.5;  // needs gain 4096

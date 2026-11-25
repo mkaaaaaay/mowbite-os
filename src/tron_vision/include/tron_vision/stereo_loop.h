@@ -172,6 +172,8 @@ class StereoLoop {
   // The mower as last seen on hw/status, with the time the message came.
   void SetMowerStatus(const MowerView& mower);
   bool Step();
+  // Deletes the crash lock of the camera (CrashGuard::Unlock); a locked loop then checks the camera again.
+  bool Unlock(std::string& text);
   void Shutdown();
 
   const StereoStatus& Status() const {

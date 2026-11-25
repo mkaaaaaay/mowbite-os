@@ -257,6 +257,8 @@ StereoNode::StereoNode(const rclcpp::NodeOptions& options, const StereoNodeSeams
   waiting_config_ = std::move(config);
   rtsp_port_ = rtsp.port;
   TryListen();
+  // Answered by the loop thread once the loop runs.
+  unlock_srv_ = OfferUnlock(*this, camera_entry_.id, unlock_requests_, nullptr);
 
   // No feedback to the driver: a stalled process cannot slow tron_mcu down, and 10 Hz against 1 s bear losses.
   status_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
@@ -312,6 +314,7 @@ void StereoNode::Run() {
         mower = mower_;
       }
       loop_->SetMowerStatus(mower);
+      unlock_requests_.Serve([this](std::string& text) { return loop_->Unlock(text); });
       go_on = loop_->Step();
     } else {
       std::this_thread::sleep_for(kFailedWait);

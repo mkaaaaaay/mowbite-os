@@ -81,6 +81,16 @@ StereoLoop::~StereoLoop() {
   Shutdown();
 }
 
+bool StereoLoop::Unlock(std::string& text) {
+  if (!guard_.Unlock(config_.camera_id, text)) return false;
+  // A lock ends the loop; it starts again from the first check of the camera.
+  if (status_.state == StereoState::kLocked) {
+    Set(StereoState::kOff, "");
+    phase_ = Phase::kInit;
+  }
+  return true;
+}
+
 void StereoLoop::Set(StereoState state, const std::string& detail) {
   status_.state = state;
   status_.detail = detail;

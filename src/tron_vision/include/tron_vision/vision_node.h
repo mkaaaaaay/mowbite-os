@@ -60,6 +60,8 @@ class VisionNode : public rclcpp::Node {
   std::unique_ptr<VideoOut> video_;
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<VisionLoop> loop_;
+  UnlockRequests unlock_requests_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr unlock_srv_;
   std::unique_ptr<mowbite_watch::Attached> watch_;
   std::string camera_id_;
   std::string state_sensor_;

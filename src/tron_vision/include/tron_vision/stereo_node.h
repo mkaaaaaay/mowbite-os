@@ -75,6 +75,8 @@ class StereoNode : public rclcpp::Node {
   std::unique_ptr<CrashGuard> guard_;
   std::unique_ptr<ObstacleCore> obstacles_;
   std::unique_ptr<StereoLoop> loop_;
+  UnlockRequests unlock_requests_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr unlock_srv_;
   std::string camera_id_;
   // Set instead of the loop while the RTSP port cannot be had; the loop gets the config once it is.
   StereoStatus failed_;

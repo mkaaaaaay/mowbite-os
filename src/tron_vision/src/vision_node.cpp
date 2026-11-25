@@ -131,6 +131,7 @@ VisionNode::VisionNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camer
   if (!video_->Open(camera_id_, error, true)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
   loop_ = std::make_unique<VisionLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream(),
                                        video_->PlainStream());
+  unlock_srv_ = OfferUnlock(*this, camera_entry_.id, unlock_requests_, [this] { wake_.notify_all(); });
 
   // The only publishers of this process; test_vision_node checks the list. Absolute names, so that an instance in a
   // namespace of its own publishes on the same topics.
@@ -180,6 +181,7 @@ void VisionNode::Run() {
     }
     loop_->SetPreviewWanted(picture_pub_->get_subscription_count() > 0);
     loop_->SetPlainWanted(plain_pub_->get_subscription_count() > 0);
+    unlock_requests_.Serve([this](std::string& text) { return loop_->Unlock(text); });
     const bool go_on = loop_->Step();
     watch.Sign();
     const VisionStatus& status = loop_->Status();

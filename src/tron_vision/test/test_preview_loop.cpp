@@ -273,6 +273,23 @@ TEST(PreviewLoop, LockedIsKnownBeforeAViewerAndNeverStarts) {
   EXPECT_EQ(rig.State(), PreviewState::kLocked);
 }
 
+TEST(PreviewLoop, UnlockLetsTheCameraStartAgain) {
+  Rig rig;
+  std::filesystem::create_directories(rig.tmp.Path() + "/vision");
+  rig.tmp.Write("vision/locked-oa_right", "1700000000 Oops\n");
+  ASSERT_TRUE(rig.Loop().Step());
+  ASSERT_EQ(rig.State(), PreviewState::kLocked);
+  std::string text;
+  ASSERT_TRUE(rig.Loop().Unlock(text)) << text;
+  EXPECT_EQ(text, "1700000000 Oops");
+  EXPECT_FALSE(std::filesystem::exists(rig.tmp.Path() + "/vision/locked-oa_right"));
+  rig.Loop().SetWanted(true);
+  rig.Run(12.0);
+  EXPECT_EQ(rig.State(), PreviewState::kRunning);
+  EXPECT_FALSE(rig.Loop().Unlock(text));
+  EXPECT_EQ(text, "not locked");
+}
+
 TEST(PreviewLoop, PausesWhenHotAndResumesForTheViewer) {
   Rig rig;
   rig.Loop().SetWanted(true);

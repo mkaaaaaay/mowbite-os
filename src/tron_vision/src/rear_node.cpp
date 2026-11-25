@@ -181,6 +181,7 @@ RearNode::RearNode(const rclcpp::NodeOptions& options, const RearNodeSeams& seam
       std::move(config), *camera_, *guard_, MonotonicSeconds, [this] { return LastRequest(); },
       [this](double seconds) { WaitForRequest(seconds); }, [this](const DockReport& r) { Publish(r); },
       video_->Stream(), frames_.get());
+  unlock_srv_ = OfferUnlock(*this, camera_entry_.id, unlock_requests_, [this] { OnWake(); });
   thread_ = std::thread([this] { Run(); });
   watch_ = mowbite_watch::Attach(*this, kWatchLimit);
 }
@@ -206,6 +207,15 @@ void RearNode::OnRequest() {
   request_cv_.notify_all();
 }
 
+// Ends the wait of the loop without counting as a request of the picture.
+void RearNode::OnWake() {
+  {
+    std::lock_guard<std::mutex> lock(request_mutex_);
+    requests_++;
+  }
+  request_cv_.notify_all();
+}
+
 double RearNode::LastRequest() {
   std::lock_guard<std::mutex> lock(request_mutex_);
   return last_request_;
@@ -224,6 +234,7 @@ void RearNode::Run() {
   while (running_) {
     // The OS subscribes to the pictures only while a viewer watches.
     loop_->SetViewWanted(picture_pub_->get_subscription_count() > 0);
+    unlock_requests_.Serve([this](std::string& text) { return loop_->Unlock(text); });
     const bool go_on = loop_->Step();
     if (loop_->Picture().Count() != published_pictures_) PublishPicture();
     PublishCamera();

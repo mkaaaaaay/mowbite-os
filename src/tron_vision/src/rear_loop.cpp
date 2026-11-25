@@ -129,6 +129,13 @@ ViewAvailability RearLoop::Viewable() const {
   return {true, DockReason::kNone, ""};
 }
 
+bool RearLoop::Unlock(std::string& text) {
+  if (!guard_.Unlock(config_.camera_id, text)) return false;
+  locked_ = false;
+  locked_detail_.clear();
+  return true;
+}
+
 bool RearLoop::Step() {
   if (exit_code_ != kExitNone) return false;
   const double now = now_();

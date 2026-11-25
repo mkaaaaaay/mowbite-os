@@ -160,6 +160,8 @@ class RearLoop {
   RearLoop& operator=(const RearLoop&) = delete;
 
   bool Step();
+  // Deletes the crash lock of the camera (CrashGuard::Unlock); a locked loop then checks the camera again.
+  bool Unlock(std::string& text);
   void Shutdown();
 
   // Whether a viewer wants pictures; the demand holds view_hold_s after the last call with true.

@@ -59,6 +59,7 @@ class RearNode : public rclcpp::Node {
 
  private:
   void OnRequest();
+  void OnWake();
   // Up to `seconds`, less when a request comes.
   void WaitForRequest(double seconds);
   double LastRequest();
@@ -77,6 +78,8 @@ class RearNode : public rclcpp::Node {
   std::unique_ptr<DmaFrames> frames_;
   std::unique_ptr<VideoOut> video_;
   std::unique_ptr<RearLoop> loop_;
+  UnlockRequests unlock_requests_;
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr unlock_srv_;
   rclcpp::Publisher<mowbite_msgs::msg::DockMarker>::SharedPtr marker_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr pixels_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::Camera>::SharedPtr cameras_pub_;

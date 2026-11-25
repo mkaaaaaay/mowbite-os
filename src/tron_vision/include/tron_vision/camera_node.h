@@ -4,12 +4,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <mowbite_msgs/msg/sensor_spec.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <std_srvs/srv/trigger.hpp>
 #include <string>
 
+#include "tron_vision/crash_guard.h"
 #include "tron_vision/frame_recorder.h"
 
 // Parts the camera processes share.
@@ -57,6 +60,22 @@ inline mowbite_msgs::msg::SensorSpec PlainSensor(const std::string& id, const st
   spec.critical_low = none;
   spec.critical_high = none;
   return spec;
+}
+
+// Offers /camera/<id>/unlock (std_srvs/Trigger, see CrashGuard::Unlock), absolute like /camera/<id>/jpeg. The
+// loop thread answers through `requests`; the executor waits at most kUnlockWait, about one idle wait of the loop
+// (200 ms) in practice.
+constexpr auto kUnlockWait = std::chrono::seconds(2);
+inline rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr OfferUnlock(rclcpp::Node& node, const std::string& id,
+                                                                     UnlockRequests& requests,
+                                                                     std::function<void()> wake) {
+  return node.create_service<std_srvs::srv::Trigger>(
+      "/camera/" + id + "/unlock",
+      [&requests, wake](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
+                        std::shared_ptr<std_srvs::srv::Trigger::Response> response) {
+        if (wake) wake();
+        response->success = requests.Ask(kUnlockWait, response->message);
+      });
 }
 
 // Most a camera may record. /run is RAM; the Tron has 4 GB and /run 781 MB, for all recordings together.

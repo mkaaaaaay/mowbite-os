@@ -12,6 +12,7 @@
   <depend>mowbite_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>diagnostic_msgs</depend>
   <depend>libturbojpeg</depend>
   <depend>mowbite_serial</depend>

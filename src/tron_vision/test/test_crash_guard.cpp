@@ -1,6 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
+#include <thread>
 
 #include "test_util.h"
 #include "tron_vision/crash_guard.h"
@@ -78,6 +81,86 @@ TEST(CrashGuard, MarkerOfAnEarlierBootWithCrashLocksUntilDeleted) {
 
   fs::remove(s.dir + "/locked-oa_left");
   EXPECT_TRUE(s.guard.MayStream("oa_left", detail));
+}
+
+TEST(CrashGuard, CrashAtAKnownSiteOutsideTheCamerasDoesNotLock) {
+  Guarded s;
+  std::string error;
+  ASSERT_TRUE(s.guard.Arm("stereo", error));
+  s.tmp.Write("boot_id", "boot-2\n");
+  s.tmp.Write("crash", "1795582798 Kernel panic - not syncing: Oops: Fatal exception at bluesleep_read_proc_btwrite\n");
+  std::string detail;
+  EXPECT_TRUE(s.guard.MayStream("stereo", detail)) << detail;
+  EXPECT_FALSE(fs::exists(s.dir + "/locked-stereo"));
+  EXPECT_FALSE(fs::exists(s.dir + "/stream-stereo"));
+}
+
+TEST(CrashGuard, CrashAtAnyOtherSiteOrWithoutOneLocks) {
+  for (const char* reason : {"1 Kernel panic - not syncing: Oops: Fatal exception at rkcif_stream_stop",
+                             "1 Kernel panic - not syncing: Oops: Fatal exception at bluesleep_read_proc_btwrite2",
+                             "1 Kernel panic - not syncing: Oops: Fatal exception",
+                             "1 Kernel panic - not syncing: RCU Stall"}) {
+    Guarded s;
+    std::string error;
+    ASSERT_TRUE(s.guard.Arm("stereo", error));
+    s.tmp.Write("boot_id", "boot-2\n");
+    s.tmp.Write("crash", std::string(reason) + "\n");
+    std::string detail;
+    EXPECT_FALSE(s.guard.MayStream("stereo", detail)) << reason;
+    EXPECT_TRUE(fs::exists(s.dir + "/locked-stereo")) << reason;
+  }
+}
+
+TEST(CrashGuard, UnlockDeletesOnlyTheLockAndTellsItsReason) {
+  Guarded s;
+  std::string error;
+  ASSERT_TRUE(s.guard.Arm("oa_left", error));
+  s.tmp.Write("boot_id", "boot-2\n");
+  s.tmp.Write("crash", "1700000000 Oops\n");
+  std::string detail;
+  ASSERT_FALSE(s.guard.MayStream("oa_left", detail));
+  s.tmp.Write("vision/verified-stereo", "x\n");
+  std::string text;
+  ASSERT_TRUE(s.guard.Unlock("oa_left", text));
+  EXPECT_EQ(text, "1700000000 Oops");
+  EXPECT_FALSE(fs::exists(s.dir + "/locked-oa_left"));
+  EXPECT_TRUE(fs::exists(s.dir + "/verified-stereo"));
+  EXPECT_TRUE(s.guard.MayStream("oa_left", detail));
+  EXPECT_FALSE(s.guard.Unlock("oa_left", text));
+  EXPECT_EQ(text, "not locked");
+}
+
+TEST(UnlockRequests, TheLoopThreadAnswersTheService) {
+  UnlockRequests requests;
+  std::atomic<bool> stop{false};
+  int served = 0;
+  std::thread loop([&] {
+    while (!stop) {
+      requests.Serve([&](std::string& text) {
+        served++;
+        text = "unlocked";
+        return true;
+      });
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+  });
+  std::string text;
+  EXPECT_TRUE(requests.Ask(std::chrono::seconds(2), text));
+  EXPECT_EQ(text, "unlocked");
+  EXPECT_TRUE(requests.Ask(std::chrono::seconds(2), text));
+  stop = true;
+  loop.join();
+  EXPECT_EQ(served, 2);
+}
+
+TEST(UnlockRequests, NoAnswerWithoutTheLoopAndNoLateUnlock) {
+  UnlockRequests requests;
+  std::string text;
+  EXPECT_FALSE(requests.Ask(std::chrono::milliseconds(20), text));
+  EXPECT_EQ(text, "no answer");
+  bool ran = false;
+  requests.Serve([&](std::string&) { return ran = true; });
+  EXPECT_FALSE(ran);
 }
 
 TEST(CrashGuard, ArmFailsWithoutBootIdOrDirectory) {

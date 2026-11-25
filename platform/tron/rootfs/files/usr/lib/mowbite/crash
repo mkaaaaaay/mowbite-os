@@ -5,13 +5,16 @@
 # /run/mowbite/crash ("<unix time> <reason>") keeps MowBite OS from resuming on its own and the crash goes into
 # /var/lib/mowbite/crashes. After three crashes within an hour the next panic halts instead of rebooting
 # (/run/mowbite/crash-latch), except during the trial period, whose fallback needs the reboots.
+# The reason ends in " at <function>" when the record shows where the last oops happened (tron_vision reads it).
 set -eu
-PSTORE=/var/lib/systemd/pstore
-SEEN=/var/lib/mowbite/pstore-seen
-CRASHES=/var/lib/mowbite/crashes
-FLAG=/run/mowbite/crash
-LATCH=/run/mowbite/crash-latch
-TRIAL=/etc/mowbite/probezeit
+# CRASH_ROOT only for the test.
+R=${CRASH_ROOT:-}
+PSTORE=$R/var/lib/systemd/pstore
+SEEN=$R/var/lib/mowbite/pstore-seen
+CRASHES=$R/var/lib/mowbite/crashes
+FLAG=$R/run/mowbite/crash
+LATCH=$R/run/mowbite/crash-latch
+TRIAL=$R/etc/mowbite/probezeit
 KEEP=10
 LOOP=3
 WINDOW=3600
@@ -49,6 +52,12 @@ if [ -n "$crashed" ]; then
     reason=$(echo "$files" | xargs grep -h -m1 -o 'Kernel panic - not syncing: .*' | head -n1)
     # Without a panic line the record header ("Oops#1 Part1") names the kind.
     [ -n "$reason" ] || reason=$(echo "$files" | xargs head -q -n1 | head -n1)
+    # The pc line of the oops that led to the panic, not of a warning earlier in the boot.
+    site=$(echo "$files" | xargs awk '
+        / pc : [A-Za-z0-9_.]+\+0x/ { s = $0; sub(/.* pc : /, "", s); sub(/\+0x.*/, "", s); last = s }
+        /Kernel panic - not syncing: / { if (!done) { site = last; done = 1 } }
+        END { print (done ? site : last) }')
+    [ -z "$site" ] || reason="$reason at $site"
     reason=$(printf '%s' "${reason:-unknown}" | tr -c '[:print:]' ' ' | cut -c1-160)
     { tail -n $((KEEP - 1)) "$CRASHES" 2>/dev/null || true; echo "$t $reason"; } | replace "$CRASHES"
     echo "$t $reason" > "$FLAG"

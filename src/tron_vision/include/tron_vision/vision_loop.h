@@ -112,6 +112,8 @@ class VisionLoop {
   // Loads class list and model and checks them; on failure the state says why and nothing streams.
   bool Load();
   bool Step();
+  // Deletes the crash lock of the camera (CrashGuard::Unlock); a locked loop then checks the camera again.
+  bool Unlock(std::string& text);
   void Shutdown();
 
   const VisionStatus& Status() const {

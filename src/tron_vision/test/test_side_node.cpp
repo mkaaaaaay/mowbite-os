@@ -2,12 +2,14 @@
 
 #include <atomic>
 #include <chrono>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mowbite_msgs/msg/camera.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/compressed_image.hpp>
 #include <set>
+#include <std_srvs/srv/trigger.hpp>
 #include <string>
 #include <thread>
 #include <vector>
@@ -100,6 +102,9 @@ class SideNodeTest : public ::testing::Test {
   }
 
   bool video = false;
+  std::string Dir() const {
+    return dir_.Path();
+  }
 
  private:
   test::TempDir dir_;
@@ -149,6 +154,35 @@ TEST_F(SideNodeTest, ReportsTheCameraLatched) {
   EXPECT_TRUE(c.available);
   EXPECT_EQ(c.reason, "");
   EXPECT_EQ(node->ExitCode(), 0);
+}
+
+// A camera locked after a crash comes back over camera/<id>/unlock, without a restart of the process.
+TEST_F(SideNodeTest, UnlockOverTheServiceFreesTheCamera) {
+  std::ofstream(Dir() + "/locked-oa_right") << "1700000000 Oops\n";
+  auto node = std::make_shared<SideNode>(Options());
+  Spin spin(node);
+  auto locked = Entries([](const Camera& c) { return c.reason == Camera::REASON_LOCKED_AFTER_CRASH; });
+  ASSERT_FALSE(locked.empty());
+  ASSERT_EQ(locked.back().reason, Camera::REASON_LOCKED_AFTER_CRASH);
+
+  auto caller = std::make_shared<rclcpp::Node>("caller");
+  auto client = caller->create_client<std_srvs::srv::Trigger>("/camera/oa_right/unlock");
+  ASSERT_TRUE(client->wait_for_service(std::chrono::seconds(5)));
+  auto call = [&] {
+    auto future = client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>());
+    EXPECT_EQ(rclcpp::spin_until_future_complete(caller, future, std::chrono::seconds(5)),
+              rclcpp::FutureReturnCode::SUCCESS);
+    return future.get();
+  };
+  const auto first = call();
+  EXPECT_TRUE(first->success);
+  EXPECT_EQ(first->message, "1700000000 Oops");
+  const auto freed = Entries([](const Camera& c) { return c.available; });
+  ASSERT_FALSE(freed.empty());
+  EXPECT_TRUE(freed.back().available);
+  const auto second = call();
+  EXPECT_FALSE(second->success);
+  EXPECT_EQ(second->message, "not locked");
 }
 
 // With video the encoder is tried once at the start; then WebRTC comes first, from the RTSP server of the process.

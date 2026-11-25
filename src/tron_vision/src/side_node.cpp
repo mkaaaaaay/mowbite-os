@@ -82,6 +82,7 @@ SideNode::SideNode(const rclcpp::NodeOptions& options, std::unique_ptr<Camera> c
   std::string error;
   if (!video_->Open(camera_id_, error)) RCLCPP_WARN(get_logger(), "No H.264, only JPEG: %s", error.c_str());
   loop_ = std::make_unique<PreviewLoop>(std::move(config), *camera_, *guard_, MonotonicSeconds, video_->Stream());
+  unlock_srv_ = OfferUnlock(*this, camera_entry_.id, unlock_requests_, [this] { wake_.notify_all(); });
 
   // The only publishers of this process; test_side_node checks the list.
   cameras_pub_ = create_publisher<mowbite_msgs::msg::Camera>(
@@ -115,6 +116,7 @@ void SideNode::Run() {
     }
     // The OS subscribes to the pictures only while a viewer watches.
     loop_->SetWanted(picture_pub_->get_subscription_count() > 0);
+    unlock_requests_.Serve([this](std::string& text) { return loop_->Unlock(text); });
     const bool go_on = loop_->Step();
     watch.Sign();
     const PreviewStatus& status = loop_->Status();

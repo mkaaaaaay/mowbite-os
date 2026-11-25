@@ -274,6 +274,22 @@ TEST(StereoLoop, LockedAfterAKernelCrashDuringTheStream) {
   EXPECT_FALSE(rig.Describes());
 }
 
+TEST(StereoLoop, UnlockStartsAgainFromTheFirstCheck) {
+  Rig rig;
+  rig.Configured();
+  rig.dir.Write("markers/stream-stereo", "another-boot\n");
+  rig.dir.Write("crash", "oops in rkcif\n");
+  rig.Make();
+  rig.Steps(50);
+  ASSERT_EQ(rig.State(), StereoState::kLocked);
+  std::string text;
+  ASSERT_TRUE(rig.loop->Unlock(text)) << text;
+  EXPECT_EQ(text, "oops in rkcif");
+  rig.Steps(50);
+  EXPECT_NE(rig.State(), StereoState::kLocked);
+  EXPECT_NE(rig.camera.calls, "");
+}
+
 TEST(StereoLoop, WithoutTheEncoderNothingStreams) {
   Rig rig;
   rig.Configured();
