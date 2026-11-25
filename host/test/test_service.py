@@ -785,7 +785,8 @@ class GestureTest(CallsBase):
         self.commands.on(["nmcli", "-t", "-f", "TYPE,STATE", "device"], (0, "wifi:connected\n", ""))
         self.write(self.paths.setup_ap_until, f"{until - 600}\n")
         self.gesture()
-        self.assertEqual(int(files.read_text(self.paths.setup_ap_until)), until)
+        # The second may have turned since the first gesture.
+        self.assertLessEqual(abs(int(files.read_text(self.paths.setup_ap_until)) - until), 1)
         self.assertEqual(len(self.commands.ran("systemctl")), 1)
         self.assertEqual(self.commands.ran("aplay")[-1][-1], self.paths.tone_opened)
 
