@@ -40,6 +40,10 @@ class TestSetupAp(unittest.TestCase):
         with open(os.path.join(self.dir.name, "state"), "w") as f:
             f.write(value + "\n")
 
+    def deadline(self, offset):
+        with open(self.until, "w") as f:
+            f.write(f"{int(time.time()) + offset}\n")
+
     def calls(self):
         try:
             with open(os.path.join(self.dir.name, "calls")) as f:
@@ -81,16 +85,14 @@ class TestSetupAp(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.calls(), [])
         # A deadline that passed counts as none.
-        with open(self.until, "w") as f:
-            f.write(f"{int(time.time()) - 1}\n")
+        self.deadline(-1)
         r = subprocess.run([TOOL], env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(self.calls(), [])
 
     def test_the_gesture_opens_at_once_until_its_deadline(self):
         os.remove(self.trial)
         self.state("30 (disconnected)")
-        with open(self.until, "w") as f:
-            f.write(f"{int(time.time()) + 3}\n")
+        self.deadline(+3)
         started = time.monotonic()
         p = subprocess.Popen([TOOL], env=dict(self.env, SETUP_AP_WAIT_S="60"), stdout=subprocess.PIPE, text=True)
         deadline = time.time() + 10
@@ -107,12 +109,28 @@ class TestSetupAp(unittest.TestCase):
     def test_the_gesture_next_to_a_connected_wlan0_opens_nothing(self):
         os.remove(self.trial)
         self.state("100 (connected)")
-        with open(self.until, "w") as f:
-            f.write(f"{int(time.time()) + 60}\n")
+        self.deadline(+60)
         r = subprocess.run([TOOL], env=self.env, capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(self.calls(), [])
         self.assertFalse(os.path.exists(self.until))
+
+    def test_a_later_deadline_keeps_it_open_and_the_trial_leaves_the_file(self):
+        os.remove(self.trial)
+        self.state("30 (disconnected)")
+        self.deadline(2)
+        p = subprocess.Popen([TOOL], env=self.env, stdout=subprocess.PIPE, text=True)
+        self.deadline(5)
+        time.sleep(3.5)
+        self.assertIsNone(p.poll())
+        out, _ = p.communicate(timeout=15)
+        self.assertIn("time is up", out)
+        # In the trial period the unit leaves a deadline the host writes alone.
+        open(self.trial, "w").close()
+        self.deadline(-1)
+        self.state("100 (connected)")
+        subprocess.run([TOOL], env=self.env, capture_output=True, timeout=20)
+        self.assertTrue(os.path.exists(self.until))
 
 
 if __name__ == "__main__":

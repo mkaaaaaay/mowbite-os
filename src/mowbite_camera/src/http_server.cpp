@@ -51,17 +51,17 @@ std::string Lower(std::string text) {
   return text;
 }
 
-std::string Trim(const std::string& text) {
-  const size_t begin = text.find_first_not_of(" \t");
-  if (begin == std::string::npos) return "";
-  return text.substr(begin, text.find_last_not_of(" \t") - begin + 1);
-}
-
 bool IsRetry(int error) {
   return error == EAGAIN || error == EWOULDBLOCK || error == EINTR;
 }
 
 }  // namespace
+
+std::string Trim(const std::string& text) {
+  const size_t begin = text.find_first_not_of(" \t");
+  if (begin == std::string::npos) return "";
+  return text.substr(begin, text.find_last_not_of(" \t") - begin + 1);
+}
 
 bool ParseHead(const std::string& head, HttpRequest* request, size_t* content_length) {
   *content_length = 0;

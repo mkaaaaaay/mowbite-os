@@ -1,26 +1,30 @@
 """The setup WLAN on a gesture of the mower's buttons, once the trial period is over: PRESSES short presses of the key
-of the platform within WINDOW_S open the access point of the first start (mowbite-setup-ap) for OPEN_S, only at rest
-(an OS that runs idles; without a running OS always). A tone tells whether it opened. The access point closes earlier
-once the mower's WLAN is connected again, by host.wifi_set or because a known network is back.
+of the platform within WINDOW_S open the access point of the first start for OPEN_S, only at rest (an OS that runs
+idles; without a running OS always) and while the mower has no WLAN connection; the gesture again while it is open
+gives it OPEN_S from then. A tone tells whether it opened. The access point closes earlier once the mower's WLAN is
+connected again, by host.wifi_set or because a known network is back.
 
-The platform names its key in /usr/lib/mowbite/wifi-gesture (KEY=value): device, the name of the input device in
+The platform names all of it in /usr/lib/mowbite/wifi-gesture (KEY=value): device, the name of the input device in
 /proc/bus/input/devices; code, the key code of a short press (counted only when it goes down); tone_device, the ALSA
-device for aplay. Without the file there is no gesture.
+device for aplay; unit, the systemd unit of the access point, which reads the deadline (unix s) the host writes to
+/run/mowbite/setup-ap.until and removes it when it closes; profile, its NetworkManager profile. Without the file there
+is no gesture.
 """
+import array
 import io
 import math
 import os
 import struct
+import sys
 import threading
 import time
 import wave
 
-from mowbite_host import files, gate, trial
+from mowbite_host import files, gate, wifi
 
 PRESSES = 5
 WINDOW_S = 5.0
 OPEN_S = 30 * 60
-SETUP_AP_UNIT = "mowbite-setup-ap.service"
 # struct input_event of a 64-bit kernel: time (two longs), type, code, value.
 EVENT = struct.Struct("llHHi")
 EV_KEY = 1
@@ -31,38 +35,30 @@ TONE_RATE = 16000
 # (Hz, s) of the tones: rising when the access point opens, low when the gesture is refused.
 OPENED = ((660, 0.15), (880, 0.15), (1320, 0.3))
 REFUSED = ((440, 0.25), (330, 0.4))
+KEYS = ("device", "code", "tone_device", "unit", "profile")
 
 
+# The file of the platform, None without it or with a key missing.
 def read_config(path):
-    text = files.read_text(path)
-    if text is None:
+    config = files.read_env(path)
+    if config is None or not all(config.get(key) for key in KEYS):
         return None
-    config = {}
-    for line in text.splitlines():
-        key, sep, value = line.partition("=")
-        if sep and not line.lstrip().startswith("#"):
-            config[key.strip()] = value.strip()
     try:
-        code = int(config.get("code", ""))
+        config["code"] = int(config["code"])
     except ValueError:
         return None
-    if not config.get("device"):
-        return None
-    return {"device": config["device"], "code": code, "tone_device": config.get("tone_device", "default")}
+    return config
 
 
 # /dev/input/eventN of the input device with this name, None when there is none.
 def find_device(paths, name):
-    text = files.read_text(paths.input_devices) or ""
-    for block in text.split("\n\n"):
+    for block in (files.read_text(paths.input_devices) or "").split("\n\n"):
         lines = block.splitlines()
-        if not any(line == f'N: Name="{name}"' for line in lines):
+        if f'N: Name="{name}"' not in lines:
             continue
-        for line in lines:
-            if line.startswith("H: Handlers="):
-                for handler in line.split("=", 1)[1].split():
-                    if handler.startswith("event"):
-                        return os.path.join(paths.dev_input, handler)
+        handlers = next((line.split("=", 1)[1].split() for line in lines if line.startswith("H: Handlers=")), [])
+        event = next((handler for handler in handlers if handler.startswith("event")), None)
+        return os.path.join(paths.dev_input, event) if event else None
     return None
 
 
@@ -81,20 +77,21 @@ class Counter:
 
 
 def tone_wav(notes):
-    data = bytearray()
+    samples = array.array("h")
     for frequency, seconds in notes:
         count = int(TONE_RATE * seconds)
-        for i in range(count):
-            # A short fade at both ends keeps the speaker from clicking.
-            fade = min(1.0, i / 200, (count - i) / 200)
-            data += struct.pack("<h", int(12000 * fade * math.sin(2 * math.pi * frequency * i / TONE_RATE)))
-        data += bytes(int(TONE_RATE * 0.05) * 2)
+        # A short fade at both ends keeps the speaker from clicking.
+        samples.extend(int(12000 * min(1.0, i / 200, (count - i) / 200) *
+                           math.sin(2 * math.pi * frequency * i / TONE_RATE)) for i in range(count))
+        samples.extend([0] * int(TONE_RATE * 0.05))
+    if sys.byteorder == "big":
+        samples.byteswap()
     out = io.BytesIO()
     with wave.open(out, "wb") as w:
         w.setnchannels(1)
         w.setsampwidth(2)
         w.setframerate(TONE_RATE)
-        w.writeframes(bytes(data))
+        w.writeframes(samples.tobytes())
     return out.getvalue()
 
 
@@ -144,67 +141,50 @@ class Gesture:
         self._asked.clear()
         return True
 
-    # Why the access point does not open now, None when it may: the WLAN of the mower is not connected, and an OS that
-    # runs idles.
+    # Why the access point does not open now, None when it may: the WLAN of the mower is not connected (next to it the
+    # access point would take the channel of that network), and an OS that runs idles.
     def refusal(self, os_now):
-        if not os.path.lexists(self.paths.setup_profile):
+        if not os.path.lexists(self.config["profile"]):
             return "no setup profile"
-        # Next to a connected WLAN the access point would take the channel of that network.
-        if not trial.wifi_problems(self.run):
+        # Once open, the access point itself is a connected WLAN device.
+        if self.until() is None and not wifi.problems(self.run):
             return "the mower has a WLAN connection"
         if (os_now or {}).get("state") != "running":
             return None
         session = gate.session_of_this_boot(self.paths) or {}
         return None if session.get("state") == "IDLE" else f"the OS is busy ({session.get('state') or 'unknown'})"
 
-    # Opens the access point for OPEN_S: the deadline for mowbite-setup-ap, which it reads at its start.
-    def open(self, now=None):
-        until = int((time.time() if now is None else now) + OPEN_S)
+    # Opens the access point for OPEN_S, or gives an open one OPEN_S from now; why not, None when it did.
+    def open(self):
+        was_open = self.until() is not None
         os.makedirs(os.path.dirname(self.paths.setup_ap_until), exist_ok=True)
-        files.write_new(self.paths.setup_ap_until, f"{until}\n")
+        files.write_new(self.paths.setup_ap_until, f"{int(time.time() + OPEN_S)}\n")
+        if was_open:
+            return None
         try:
-            code, _, err = self.run(["systemctl", "restart", SETUP_AP_UNIT])
+            code, _, err = self.run(["systemctl", "--no-block", "restart", self.config["unit"]])
         except FileNotFoundError:
             code, err = 1, "no systemctl"
-        if code != 0:
-            self.close()
-            return f"systemctl: {err or code}"
+        if code == 0:
+            return None
+        files.remove(self.paths.setup_ap_until)
+        return f"systemctl: {err or code}"
+
+    # The deadline while the access point is open on the gesture, else None; the unit removes the file when it closes.
+    def until(self):
+        text = files.read_text(self.paths.setup_ap_until) or ""
+        until = int(text.strip()) if text.strip().isdigit() else 0
+        if until > time.time():
+            return until
+        files.remove(self.paths.setup_ap_until)
         return None
 
-    def close(self):
-        files.remove(self.paths.setup_ap_until)
-
-    # The deadline while the access point is open on the gesture, else None; a deadline that passed or a unit that
-    # ended (wlan0 connected) closes it.
-    def until(self, now=None):
-        text = files.read_text(self.paths.setup_ap_until)
-        if text is None:
-            return None
-        try:
-            until = int(text.strip())
-        except ValueError:
-            until = 0
-        if until <= (time.time() if now is None else now) or not self._unit_active():
-            self.close()
-            return None
-        return until
-
-    def _unit_active(self):
-        try:
-            return self.run(["systemctl", "is-active", "--quiet", SETUP_AP_UNIT])[0] == 0
-        except FileNotFoundError:
-            return False
-
     def tone(self, opened):
-        if not self.config:
-            return
         path = self.paths.tone_opened if opened else self.paths.tone_refused
         try:
             if not files.regular(path):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path + ".tmp", "wb") as f:
-                    f.write(tone_wav(OPENED if opened else REFUSED))
-                os.replace(path + ".tmp", path)
+                files.write_new(path, tone_wav(OPENED if opened else REFUSED))
         except OSError:
             return
         argv = ["aplay", "-q", "-D", self.config["tone_device"], path]

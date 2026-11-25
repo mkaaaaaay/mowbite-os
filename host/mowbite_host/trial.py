@@ -7,8 +7,7 @@ import hashlib
 import hmac
 import os
 
-from mowbite_host import Refused
-from mowbite_host.command import nmcli_fields
+from mowbite_host import Refused, wifi
 
 
 def active(paths):
@@ -44,17 +43,6 @@ def proof(paths, challenge):
     return hmac.new(key, challenge.encode(), hashlib.sha256).hexdigest() if key else None
 
 
-# [] while a WLAN device is connected, else why not.
-def wifi_problems(run):
-    try:
-        code, out, _ = run(["nmcli", "-t", "-f", "TYPE,STATE", "device"])
-    except FileNotFoundError:
-        return ["no NetworkManager"]
-    if code == 0 and any(nmcli_fields(line)[:2] == ["wifi", "connected"] for line in out.splitlines()):
-        return []
-    return ["no WLAN connection"]
-
-
 def _reached(paths, run):
     try:
         code, _, err = run([paths.trial_tool, "ssh"])
@@ -78,7 +66,7 @@ def confirm(paths, run, os_now, first_runs, challenge=None):
         _reached(paths, run)
         raise Refused("BUSY", "the first installation runs")
     problems, notes = _failed_units(run)
-    problems += wifi_problems(run)
+    problems += wifi.problems(run)
     if os_now["state"] != "running":
         problems.append(f"MowBite OS is {os_now['state']}")
     if problems:

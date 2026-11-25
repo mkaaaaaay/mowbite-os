@@ -40,6 +40,26 @@ def read_text(path, limit=MAX_TEXT):
     return data.decode(errors="replace") if len(data) <= limit else None
 
 
+# KEY=value of a file read as systemd reads EnvironmentFile: comments with # or ;, blanks around key and value, one
+# pair of matching quotes around the value removed; None without the file.
+def read_env(path):
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except FileNotFoundError:
+        return None
+    env = {}
+    for line in lines:
+        line = line.strip()
+        if line and line[0] not in "#;" and "=" in line:
+            key, value = (part.strip() for part in line.split("=", 1))
+            quote = value[:1]
+            if quote in ("'", '"') and len(value) > 1 and value.endswith(quote):
+                value = value[1:-1]
+            env[key] = value
+    return env
+
+
 # The JSON object at path; None when it is missing, unreadable or no object.
 def read_json(path):
     text = read_text(path)
@@ -50,13 +70,13 @@ def read_json(path):
     return value if isinstance(value, dict) else None
 
 
-# text as the file at path in a folder of another user: whole or not at all, and nothing is written through a link
-# that waits there.
+# text (str or bytes) as the file at path in a folder of another user: whole or not at all, and nothing is written
+# through a link that waits there.
 def write_new(path, text, mode=0o644):
     tmp = path + ".tmp"
     remove(tmp)
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-    with os.fdopen(fd, "w") as f:
+    with os.fdopen(fd, "wb" if isinstance(text, bytes) else "w") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())

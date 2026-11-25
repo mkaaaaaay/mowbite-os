@@ -268,9 +268,9 @@ class TestCamera(unittest.TestCase):
         self.assertIn("result", answer, answer)
         return answer["result"]["url"]
 
-    def refusal(self, **params):
-        """The data of a refused camera.stream."""
-        answer = self.rpc("camera.stream", {"id": "front", **params})
+    def refusal(self, method="camera.stream", timeout=10.0, **params):
+        """The data of a refused call of the camera of this test."""
+        answer = self.rpc(method, {"id": "front", **params}, timeout)
         self.assertEqual(answer.get("error", {}).get("code"), -32600, answer)
         return answer["error"]["data"]
 
@@ -418,18 +418,15 @@ class TestCamera(unittest.TestCase):
         viewers[1].close()
         type(self).viewer = viewers[0]
 
-    def unlock_refused(self, reason, camera="front"):
-        answer = self.rpc("camera.unlock", {"id": camera}, timeout=15.0)
-        self.assertEqual(answer.get("error", {}).get("code"), -32600, answer)
-        data = answer["error"]["data"]
+    def unlock_refused(self, reason):
+        data = self.refusal("camera.unlock", timeout=15.0)
         self.assertEqual((data["event"], data["reason"], data["resume"]), ("CAMERA_UNLOCK_REFUSED", reason, "user"))
         return data
 
     def unlock(self, request, response):
         type(self).unlock_calls += 1
         response.success = True
-        response.message = "kernel crash at 05:59 while front streamed
-more"
+        response.message = "kernel crash at 05:59 while front streamed\nmore"
         self.report()
         return response
 

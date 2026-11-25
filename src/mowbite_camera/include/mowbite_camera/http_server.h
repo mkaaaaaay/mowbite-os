@@ -50,6 +50,8 @@ bool ParseHead(const std::string& head, HttpRequest* request, size_t* content_le
 
 // The value of a key in a query like "a=1&b=2", empty without the key. Nothing is decoded.
 std::string QueryValue(const std::string& query, const std::string& key);
+// text without the blanks and tabs around it.
+std::string Trim(const std::string& text);
 
 // A small HTTP/1.1 server on IPv4 for a few clients: one request per connection, answered with a short text or
 // with the pictures of a camera as multipart/x-mixed-replace until either side ends it. One thread drives it

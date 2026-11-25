@@ -3,6 +3,8 @@ import os
 
 import mowbite_boot
 
+from mowbite_host import files
+
 # The OS reads these files from the environment of its service, the last one winning.
 ENV_FILES = ("/usr/lib/mowbite/os.defaults", "/etc/mowbite/os.conf")
 
@@ -62,7 +64,6 @@ class Paths:
         # Profiles of NetworkManager; the host writes its WLAN profiles there as mowbite-wifi-*.nmconnection.
         self.nm_connections = p + "/etc/NetworkManager/system-connections"
         # The setup WLAN of the first start, opened on a gesture of the buttons after the trial period (gesture.py).
-        self.setup_profile = self.nm_connections + "/mowbite-setup.nmconnection"
         self.wifi_gesture = p + "/usr/lib/mowbite/wifi-gesture"
         self.input_devices = p + "/proc/bus/input/devices"
         self.dev_input = p + "/dev/input"
@@ -81,21 +82,9 @@ class Paths:
         self.platform_note = data + "/platform.json"
         self.halt = p + (self.env().get("MOWBITE_HALT_FILE") or "/run/mowbite-os/halt")
 
-    # KEY=value of the environment files of the OS service, read as systemd reads EnvironmentFile: comments with # or
-    # ;, blanks around key and value, one pair of matching quotes around the value removed.
+    # KEY=value of the environment files of the OS service, the last one winning.
     def env(self):
         env = {}
         for path in self.env_files:
-            try:
-                with open(path) as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and line[0] not in "#;" and "=" in line:
-                            key, value = (part.strip() for part in line.split("=", 1))
-                            quote = value[:1]
-                            if quote in ("'", '"') and len(value) > 1 and value.endswith(quote):
-                                value = value[1:-1]
-                            env[key] = value
-            except FileNotFoundError:
-                pass
+            env.update(files.read_env(path) or {})
         return env

@@ -61,6 +61,17 @@ def profile(ssid, key, connection_id, hidden=False):
     return "\n".join(lines)
 
 
+# [] while a WLAN device is connected, else why not. run: command.run.
+def problems(run):
+    try:
+        code, out, _ = run(["nmcli", "-t", "-f", "TYPE,STATE", "device"])
+    except FileNotFoundError:
+        return ["no NetworkManager"]
+    if code == 0 and any(nmcli_fields(line)[:2] == ["wifi", "connected"] for line in out.splitlines()):
+        return []
+    return ["no WLAN connection"]
+
+
 class Wifi:
     """run: command.run; status() is None until the first host.wifi_set of this start of the host."""
 

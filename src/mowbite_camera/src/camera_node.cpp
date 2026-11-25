@@ -157,7 +157,7 @@ class CameraNode : public rclcpp::Node {
           service_->OnRobotState(msg->current_state, msg->current_sub_state);
         });
     hardware_sub_ = create_subscription<mowbite_msgs::msg::HardwareStatus>(
-        "hw/status", 10, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
+        "hw/status", 1, [this](const mowbite_msgs::msg::HardwareStatus::ConstSharedPtr& msg) {
           service_->OnBlade(msg->blade_on || (msg->blade_motor.ok && msg->blade_motor.rpm != 0));
         });
     fast_timer_ = create_wall_timer(kFastPeriod, [this] { OnFast(); });
@@ -262,11 +262,11 @@ class CameraNode : public rclcpp::Node {
   void SendUnlocks() {
     const double now = SteadySeconds();
     for (auto it = unlocks_.begin(); it != unlocks_.end();) {
+      const uint64_t key = it->first;
       Unlock& unlock = it->second;
       const auto& client = unlock_clients_[unlock.camera];
       if (!unlock.sent && client->service_is_ready()) {
         unlock.sent = true;
-        const uint64_t key = it->first;
         client->async_send_request(std::make_shared<std_srvs::srv::Trigger::Request>(),
                                    [this, key](rclcpp::Client<std_srvs::srv::Trigger>::SharedFuture future) {
                                      const auto response = future.get();
@@ -279,7 +279,6 @@ class CameraNode : public rclcpp::Node {
         continue;
       }
       const UnlockReply::Kind kind = unlock.sent ? UnlockReply::Kind::kTimeout : UnlockReply::Kind::kNoService;
-      const uint64_t key = it->first;
       ++it;
       EndUnlock(key, {kind, false, ""});
     }
@@ -322,7 +321,7 @@ class CameraNode : public rclcpp::Node {
   }
 
   void OnFast() {
-    if (!unlocks_.empty()) SendUnlocks();
+    SendUnlocks();
     Apply();
     if (!pending_events_.empty() && publish_pub_->get_subscription_count() > 0) {
       for (const Json& details : pending_events_) {

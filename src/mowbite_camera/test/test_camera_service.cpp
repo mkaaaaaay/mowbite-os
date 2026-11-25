@@ -532,9 +532,13 @@ class UnlockTest : public CameraServiceTest {
     return service_.BeginUnlock(params, &camera_);
   }
 
+  void ExpectUnlockRefused(const RpcOutcome& outcome, const std::string& reason) {
+    ExpectRefused(outcome, reason, "CAMERA_UNLOCK_REFUSED");
+  }
+
   void ExpectUnlockRefused(const std::optional<RpcOutcome>& outcome, const std::string& reason) {
     ASSERT_TRUE(outcome.has_value()) << reason;
-    ExpectRefused(*outcome, reason, "CAMERA_UNLOCK_REFUSED");
+    ExpectUnlockRefused(*outcome, reason);
   }
 
   std::string camera_;
@@ -586,16 +590,14 @@ TEST_F(UnlockTest, AnswersWithWhatTheServiceDid) {
   ASSERT_TRUE(unlocked.ok) << unlocked.message;
   EXPECT_EQ(unlocked.result, Json::parse(R"({"unlocked":true,"reason":"kernel crash 05:59"})"));
 
-  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, false, "not locked"}), "NOT_LOCKED",
-                "CAMERA_UNLOCK_REFUSED");
+  ExpectUnlockRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, false, "not locked"}),
+                      "NOT_LOCKED");
   const RpcOutcome failed =
       service_.EndUnlock("oa_left", {UnlockReply::Kind::kAnswered, false, "read-only file system"});
-  ExpectRefused(failed, "FAILED", "CAMERA_UNLOCK_REFUSED");
+  ExpectUnlockRefused(failed, "FAILED");
   EXPECT_EQ(failed.data.value("detail", ""), "read-only file system");
-  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kNoService, false, ""}), "UNSUPPORTED",
-                "CAMERA_UNLOCK_REFUSED");
-  ExpectRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kTimeout, false, ""}), "TIMEOUT",
-                "CAMERA_UNLOCK_REFUSED");
+  ExpectUnlockRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kNoService, false, ""}), "UNSUPPORTED");
+  ExpectUnlockRefused(service_.EndUnlock("oa_left", {UnlockReply::Kind::kTimeout, false, ""}), "TIMEOUT");
 }
 
 TEST_F(UnlockTest, TheReasonIsOneShortLineOfWholeCharacters) {

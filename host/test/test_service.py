@@ -716,19 +716,20 @@ H: Handlers=kbd event5
 class GestureTest(CallsBase):
     def setUp(self):
         super().setUp()
-        self.write(self.paths.wifi_gesture, "# key\ndevice=key input\ncode=25\ntone_device=plughw:CARD=x\n")
+        self.profile = os.path.join(self.paths.nm_connections, "mowbite-setup.nmconnection")
+        self.write(self.paths.wifi_gesture, f"# key\ndevice=key input\ncode=25\ntone_device=plughw:CARD=x\n"
+                                            f"unit=ap.service\nprofile={self.profile}\n")
         self.write(self.paths.input_devices, DEVICES)
-        self.write(self.paths.setup_profile, "[connection]\n")
+        self.write(self.profile, "[connection]\n")
         self.commands.on(["nmcli", "-t", "-f", "TYPE,STATE", "device"],
                          (0, "wifi:disconnected\nwifi:unavailable\n", ""))
-        self.commands.on(["systemctl", "restart", gesture.SETUP_AP_UNIT], (0, "", ""))
-        self.commands.on(["systemctl", "is-active"], (0, "", ""))
+        self.commands.on(["systemctl", "--no-block", "restart", "ap.service"], (0, "", ""))
         self.commands.on(["aplay"], (0, "", ""))
         self.host = service.Host(self.paths, self.updater, self.watch, self.fake, self.published, self.commands)
         self.out = StringIO()
 
     def press(self, events, clock=lambda: 0.0):
-        self.write(os.path.join(self.paths.dev_input, "event5"), "")
+        os.makedirs(self.paths.dev_input, exist_ok=True)
         with open(os.path.join(self.paths.dev_input, "event5"), "wb") as f:
             f.write(events)
         self.host.gesture.read(self.counter, clock)
@@ -759,7 +760,7 @@ class GestureTest(CallsBase):
         self.gesture()
         until = int(files.read_text(self.paths.setup_ap_until))
         self.assertTrue(before + gesture.OPEN_S - 1 <= until <= time.time() + gesture.OPEN_S)
-        self.assertEqual(self.commands.ran("systemctl", "restart"), [["systemctl", "restart", gesture.SETUP_AP_UNIT]])
+        self.assertEqual(self.commands.ran("systemctl"), [["systemctl", "--no-block", "restart", "ap.service"]])
         self.assertEqual(self.host.host_status()["setup_wifi"], {"until": until})
         self.assertEqual(self.published.last(service.HOST_STATUS)[1]["setup_wifi"], {"until": until})
         self.assertEqual(self.commands.ran("aplay"), [["aplay", "-q", "-D", "plughw:CARD=x", self.paths.tone_opened]])
@@ -767,8 +768,16 @@ class GestureTest(CallsBase):
             self.assertEqual(f.read(4), b"RIFF")
         self.assertIn("setup WLAN opened by the buttons", self.out.getvalue())
 
-        # The unit ended (wlan0 connected): closed.
-        self.commands.on(["systemctl", "is-active"], (3, "", ""))
+        # Again while open, where the access point counts as a connected WLAN: the deadline moves, no restart.
+        self.commands.on(["nmcli", "-t", "-f", "TYPE,STATE", "device"], (0, "wifi:connected\n", ""))
+        self.write(self.paths.setup_ap_until, f"{until - 600}\n")
+        self.gesture()
+        self.assertEqual(int(files.read_text(self.paths.setup_ap_until)), until)
+        self.assertEqual(len(self.commands.ran("systemctl")), 1)
+        self.assertEqual(self.commands.ran("aplay")[-1][-1], self.paths.tone_opened)
+
+        # The unit removed the file when it ended (wlan0 connected): closed.
+        os.remove(self.paths.setup_ap_until)
         self.host.look()
         self.assertIsNone(self.host.host_status()["setup_wifi"])
         self.assertFalse(os.path.exists(self.paths.setup_ap_until))
@@ -781,7 +790,7 @@ class GestureTest(CallsBase):
 
     def refused(self, why, restarts=0):
         self.gesture()
-        self.assertEqual(len(self.commands.ran("systemctl", "restart")), restarts)
+        self.assertEqual(len(self.commands.ran("systemctl")), restarts)
         self.assertFalse(os.path.exists(self.paths.setup_ap_until))
         self.assertIsNone(self.host.host_status()["setup_wifi"])
         self.assertEqual(self.commands.ran("aplay"), [["aplay", "-q", "-D", "plughw:CARD=x", self.paths.tone_refused]])
@@ -795,18 +804,18 @@ class GestureTest(CallsBase):
     def test_an_idle_os_lets_it_open(self):
         self.install()
         self.gesture()
-        self.assertEqual(len(self.commands.ran("systemctl", "restart")), 1)
+        self.assertEqual(len(self.commands.ran("systemctl")), 1)
 
     def test_not_next_to_a_connected_wlan(self):
         self.commands.on(["nmcli", "-t", "-f", "TYPE,STATE", "device"], (0, "wifi:connected\n", ""))
         self.refused("the mower has a WLAN connection")
 
     def test_not_without_the_setup_profile(self):
-        os.remove(self.paths.setup_profile)
+        os.remove(self.profile)
         self.refused("no setup profile")
 
     def test_a_failed_restart_leaves_it_closed(self):
-        self.commands.on(["systemctl", "restart", gesture.SETUP_AP_UNIT], (1, "", "Unit not found"))
+        self.commands.on(["systemctl", "--no-block", "restart", "ap.service"], (1, "", "Unit not found"))
         self.refused("systemctl: Unit not found", restarts=1)
 
     def test_without_the_file_of_the_platform_no_gesture(self):
@@ -820,9 +829,11 @@ class GestureTest(CallsBase):
         self.assertEqual(gesture.find_device(self.paths, "key input"), os.path.join(self.paths.dev_input, "event5"))
         self.assertIsNone(gesture.find_device(self.paths, "key"))
         self.assertEqual(gesture.read_config(self.paths.wifi_gesture),
-                         {"device": "key input", "code": 25, "tone_device": "plughw:CARD=x"})
-        self.write(self.paths.wifi_gesture, "device=key input\ncode=x\n")
-        self.assertIsNone(gesture.read_config(self.paths.wifi_gesture))
+                         {"device": "key input", "code": 25, "tone_device": "plughw:CARD=x", "unit": "ap.service",
+                          "profile": self.profile})
+        for broken in ("code=x", "unit="):
+            self.write(self.paths.wifi_gesture, files.read_text(self.paths.wifi_gesture) + broken + "\n")
+            self.assertIsNone(gesture.read_config(self.paths.wifi_gesture))
 
 
 class ProbeTest(unittest.TestCase):

@@ -33,25 +33,25 @@ RpcOutcome Invalid(std::string message) {
   return {false, Json(), mowbite_bridge::kInvalidParams, std::move(message), Json()};
 }
 
-RpcOutcome Refuse(const char* group, const std::string& reason, const std::string& message) {
+// details: fields of the reason beside the ones every refusal has.
+RpcOutcome Refuse(const std::string& reason, const std::string& message, const char* group = kRefused,
+                  Json details = Json::object()) {
   const mowbite_api::Rating rating = mowbite_api::RateReason(group, reason);
-  const Json details = {{"event", group},
-                        {"reason", reason},
-                        {"message", message},
-                        {"severity", rating.severity},
-                        {"resume", rating.resume}};
+  details["event"] = group;
+  details["reason"] = reason;
+  details["message"] = message;
+  details["severity"] = rating.severity;
+  details["resume"] = rating.resume;
   return {false, Json(), mowbite_bridge::kInvalidRequest, message, details};
 }
 
-RpcOutcome Refuse(const std::string& reason, const std::string& message) {
-  return Refuse(kRefused, reason, message);
+RpcOutcome RefuseUnlock(const std::string& reason, const std::string& message, Json details = Json::object()) {
+  return Refuse(reason, message, kUnlockRefused, std::move(details));
 }
 
 // The first line of text without the blanks around it, cut to max bytes at a whole UTF-8 character.
 std::string FirstLine(const std::string& text, size_t max) {
-  std::string line = text.substr(0, text.find_first_of("\r\n"));
-  const size_t begin = line.find_first_not_of(" \t");
-  line = begin == std::string::npos ? "" : line.substr(begin, line.find_last_not_of(" \t") - begin + 1);
+  const std::string line = Trim(text.substr(0, text.find_first_of("\r\n")));
   if (line.size() <= max) return line;
   size_t end = max;
   while (end > 0 && (static_cast<unsigned char>(line[end]) & 0xC0) == 0x80) --end;
@@ -191,11 +191,11 @@ std::optional<RpcOutcome> CameraService::BeginUnlock(const Json& params, std::st
   if (!list_.Find(*id)) return Invalid("No camera with this id");
   const CameraState state = list_.State(*id);
   if (state.reason != kLocked) {
-    return Refuse(kUnlockRefused, "NOT_LOCKED", "Camera " + *id + " is not locked after a crash");
+    return RefuseUnlock("NOT_LOCKED", "Camera " + *id + " is not locked after a crash");
   }
   const std::string unrest = Unrest();
   if (!unrest.empty()) {
-    return Refuse(kUnlockRefused, "NOT_AT_REST", "Camera " + *id + " is unlocked only at rest: " + unrest);
+    return RefuseUnlock("NOT_AT_REST", "Camera " + *id + " is unlocked only at rest: " + unrest);
   }
   return std::nullopt;
 }
@@ -203,20 +203,18 @@ std::optional<RpcOutcome> CameraService::BeginUnlock(const Json& params, std::st
 RpcOutcome CameraService::EndUnlock(const std::string& id, const UnlockReply& reply) const {
   switch (reply.kind) {
     case UnlockReply::Kind::kNoService:
-      return Refuse(kUnlockRefused, "UNSUPPORTED", "Camera " + id + " offers no unlock service");
+      return RefuseUnlock("UNSUPPORTED", "Camera " + id + " offers no unlock service");
     case UnlockReply::Kind::kTimeout:
-      return Refuse(kUnlockRefused, "TIMEOUT",
-                    "The unlock service of camera " + id + " gave no answer; camera.list tells whether it worked");
+      return RefuseUnlock("TIMEOUT",
+                          "The unlock service of camera " + id + " gave no answer; camera.list tells whether it worked");
     case UnlockReply::Kind::kAnswered: break;
   }
   const std::string message = FirstLine(reply.message, kMaxReasonBytes);
   if (reply.success) return Ok({{"unlocked", true}, {"reason", message}});
   if (message == kNotLockedAnswer) {
-    return Refuse(kUnlockRefused, "NOT_LOCKED", "Camera " + id + " has no lock on the mower");
+    return RefuseUnlock("NOT_LOCKED", "Camera " + id + " has no lock on the mower");
   }
-  RpcOutcome refused = Refuse(kUnlockRefused, "FAILED", "Camera " + id + " could not be unlocked: " + message);
-  refused.data["detail"] = message;
-  return refused;
+  return RefuseUnlock("FAILED", "Camera " + id + " could not be unlocked: " + message, {{"detail", message}});
 }
 
 void CameraService::OnRobotState(const std::string& state, const std::string& sub_state) {
