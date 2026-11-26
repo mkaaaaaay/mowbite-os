@@ -10,13 +10,25 @@ steps:
     stage: device
     check: platform
     symbol: board
-  # The mower with this board: a file of profiles/ or another one. The start fills in values, texts and the values
-  # each writes (mowbite_bringup layers.expanded).
+  # The mower with this board: a file of profiles/, put in front of own by the start with its texts and the values it
+  # writes (mowbite_bringup layers.expanded), or another one.
   - id: model
     stage: device
     check: choice
     from: profiles
-    params: {name: model}
+    params: {name: model, values: [own]}
+    value_texts:
+      own:
+        de:
+          name: Anderer Mäher
+          help: >-
+            Die Maße im Schritt Maße eintragen. Alle anderen Werte sind die des NX60i, auch der Akku, den die Platine
+            vorgibt, und gelten als Annahme, bis die Sicherheitsmessung sie prüft.
+        en:
+          name: Another mower
+          help: >-
+            Enter the dimensions in the step dimensions. Every other value is the one of the NX60i, the battery too,
+            which the board sets, and counts as an assumption until the safety measurement checks it.
     texts:
       de:
         name: Mäher

@@ -1051,9 +1051,8 @@ json Program::ChoiceParams() const {
     const Record& record = records_.at(step.id);
     if (step.value_params.empty() || record.state != "ok") continue;
     const json& answer = record.answers.value(step.Word("name"), json());
-    if (!answer.is_string() || !step.value_params.contains(answer.get<std::string>())) continue;
-    for (const auto& node : step.value_params[answer.get<std::string>()].items()) {
-      for (const auto& param : node.value().items()) params[node.key()][param.key()] = param.value();
+    if (answer.is_string() && step.value_params.contains(answer.get<std::string>())) {
+      params.merge_patch(step.value_params[answer.get<std::string>()]);
     }
   }
   return params;
@@ -1062,22 +1061,30 @@ json Program::ChoiceParams() const {
 void Program::TickChoiceParams(double now) {
   if (!layer_set_ || !writable_ || layer_dirty_ || layer_pending_) return;
   if (layer_failed_ >= 0 && now - layer_failed_ < kLayerRetry) return;
+  // The keys of value_params: those of the list, and those in the file an update took out of it (only value_params
+  // writes what MayWrite allows).
+  json keys = json::object();
+  for (const Step& step : list_.steps) {
+    for (const auto& value : step.value_params) keys.merge_patch(value);
+  }
+  const json written = layer_.Values();
+  for (const auto& node : written.items()) {
+    for (const auto& param : node.value().items()) {
+      if (MayWrite(node.key(), param.key(), param.value())) keys[node.key()][param.key()] = true;
+    }
+  }
   const json wanted = ChoiceParams();
   bool changed = false;
-  for (const Step& step : list_.steps) {
-    for (const auto& value : step.value_params) {
-      for (const auto& node : value.items()) {
-        for (const auto& param : node.value().items()) {
-          const json want = wanted.contains(node.key()) ? wanted[node.key()].value(param.key(), json()) : json();
-          if (layer_.Get(node.key(), param.key()) == want) continue;
-          if (want.is_null()) {
-            layer_.Erase(node.key(), param.key());
-          } else {
-            layer_.Set(node.key(), param.key(), want);
-          }
-          changed = true;
-        }
+  for (const auto& node : keys.items()) {
+    for (const auto& param : node.value().items()) {
+      const json want = wanted.value(node.key(), json::object()).value(param.key(), json());
+      if (layer_.Get(node.key(), param.key()) == want) continue;
+      if (want.is_null()) {
+        layer_.Erase(node.key(), param.key());
+      } else {
+        layer_.Set(node.key(), param.key(), want);
       }
+      changed = true;
     }
   }
   if (changed) WantRestart();

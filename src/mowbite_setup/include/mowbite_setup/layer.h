@@ -24,6 +24,8 @@ class Layer {
   void Erase(const std::string& node, const std::string& key);
   // null without it.
   json Get(const std::string& node, const std::string& key) const;
+  // Every value, {node: {key: value}}.
+  json Values() const;
   // Whether the file can hold values for a node of this name.
   static bool IsNode(const std::string& name);
 

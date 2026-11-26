@@ -204,16 +204,18 @@ def test_a_step_from_profiles_offers_every_profile_and_another_mower(tmp_path):
     (tmp_path / "profiles").mkdir()
     write(tmp_path / "profiles" / "big.yaml", PROFILE)
     write(tmp_path / "profiles" / "plain.yaml", "texts: {de: {name: P}, en: {name: P}}\nmeasured: []\nparameters: {}\n")
-    steps = {"steps": [{"id": "model", "check": "choice", "from": "profiles", "params": {"name": "model"}},
+    own = {"de": {"name": "Anderer"}, "en": {"name": "Other"}}
+    steps = {"steps": [{"id": "model", "check": "choice", "from": "profiles",
+                        "params": {"name": "model", "values": ["own"]}, "value_texts": {"own": own}},
                        {"id": "board", "check": "board"}]}
     step = layers.expanded(steps, str(tmp_path))["steps"][0]
     assert "from" not in step
     assert step["params"] == {"name": "model", "values": ["big", "plain", "own"]}
-    assert step["value_texts"]["big"]["en"]["name"] == "Big" and step["value_texts"]["own"] == layers.OWN[1]
+    assert step["value_texts"]["big"]["en"]["name"] == "Big" and step["value_texts"]["own"] == own
     # Only a profile with values writes some.
     assert step["value_params"] == {"big": {"mowbite_logic": {"geometry.robot_width": 0.6, "geometry.track": 0.4}}}
-    assert layers.expanded({"steps": [{"id": "x", "from": "profiles"}]}, str(tmp_path / "none"))["steps"][0][
-        "params"]["values"] == ["own"]
+    assert layers.expanded({"steps": [{"id": "x", "from": "profiles", "params": {"values": ["own"]}}]},
+                           str(tmp_path / "none"))["steps"][0]["params"]["values"] == ["own"]
 
 
 @pytest.mark.parametrize("content, problem", [

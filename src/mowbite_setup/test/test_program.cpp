@@ -2341,10 +2341,15 @@ TEST(Choice, TheParameterFileFollowsTheValuesOfTheList) {
   EXPECT_NE(bench.layer_text.find("geometry.robot_width: 0.65\n"), std::string::npos) << bench.layer_text;
   bench.Restart(list);
   EXPECT_EQ(bench.restarts, 2);
+  // An update took a value out of a: it goes out of the file as well.
+  list["steps"][0]["value_params"]["a"]["mowbite_logic"].erase("battery_empty_voltage");
+  bench.Restart(list);
+  EXPECT_EQ(bench.restarts, 3);
+  EXPECT_EQ(bench.layer_text.find("battery_empty_voltage"), std::string::npos) << bench.layer_text;
   // setup.reset takes the answer and with it the values.
   ASSERT_FALSE(bench.program.Reset({{"version", bench.program.version()}}));
   bench.Run(0.3);
-  EXPECT_EQ(bench.restarts, 3);
+  EXPECT_EQ(bench.restarts, 4);
   EXPECT_EQ(bench.layer_text, "");
 }
 

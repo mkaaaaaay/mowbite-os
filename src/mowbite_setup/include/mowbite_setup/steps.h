@@ -92,7 +92,8 @@ std::string CheckImage(const std::string& svg);
 std::string LoadImage(const std::string& folder, const std::string& name, std::string* bytes);
 
 // Whether value_params may write this value: a dimension of geometry within the bounds of the interface, a value of
-// the battery or the charge, or the height of the antenna. Never a bound of motion, of the blade or of the safety.
+// the battery or the charge, or the height of the antenna. Never a bound of motion, of the blade or of the safety, and
+// nothing else of the program writes these keys: the program takes them out of the file when no answer gives them.
 bool MayWrite(const std::string& node, const std::string& key, const json& value);
 
 // The emergency bit of hw/status a name of SetupEmergencies() stands for, 0 for NONE.

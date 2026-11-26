@@ -28,8 +28,11 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_serial_test test/test_serial_port.cpp)
   target_link_libraries(mowbite_serial_test mowbite_serial util)
+  find_package(mowbite_gnss REQUIRED)
+  find_package(mowbite_ntrip REQUIRED)
   ament_add_gtest(mowbite_serial_ports_test test/test_ports.cpp test/test_recognize.cpp)
-  target_link_libraries(mowbite_serial_ports_test mowbite_serial util)
+  target_link_libraries(mowbite_serial_ports_test mowbite_serial util mowbite_gnss::mowbite_gnss_core
+    mowbite_ntrip::mowbite_ntrip_core)
 endif()
 
 ament_export_targets(export_mowbite_serial HAS_LIBRARY_TARGET)

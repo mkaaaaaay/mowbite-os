@@ -343,7 +343,7 @@ of a step or an image, `restart` (`self` or `host`) is needed with a step `input
 | `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels`, `ground` and `blade` (fixed) |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
 | `value_params` | of `choice`: `{value: {node: {key: value}}}`, what the answer writes into the parameter file |
-| `from` | `profiles`: the start fills `values`, `value_texts` and `value_params` from `profiles/` (below) |
+| `from` | `profiles`: the start puts the profiles of `profiles/` in front of `values` (below) |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
 | `skippable` | false for a step the user must not skip |
@@ -381,8 +381,9 @@ as the role has one left, and at the end every line of the roles of the step has
 Another mower with the same board needs no driver of its own, only its values: a file `profiles/<name>.yaml` in the
 package (installed with the share folder) with `texts` (`de`, `en`: `name`, `help`), `parameters` (a parameter file
 with the values of that mower) and `measured` (`<node>.<key>` of the values measured on such a mower; every other one
-is an assumption). A step `choice` with `from: profiles` offers every profile and `own`, another mower that keeps the
-values of the platform and gets its dimensions from the step `geometry`; the NX60i has it as step `model`. The answer
+is an assumption). A step `choice` with `from: profiles` offers every profile in front of its own values, such as
+`own` on the NX60i (step `model`): another mower that keeps the values of the platform and gets its dimensions from
+the step `geometry`. The answer
 writes the values of its profile into `<data_dir>/<name>.setup.yaml` and restarts the OS; another answer, `setup.reset`
 or an update that changed a profile writes the file anew, the file kept by hand still has the last word. Only values a
 mower can differ in are taken, anything else refuses the list (`PLATFORM_CONFIG`): `geometry.*` of `mowbite_logic`

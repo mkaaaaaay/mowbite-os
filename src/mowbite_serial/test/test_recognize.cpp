@@ -5,16 +5,17 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_gnss/gga.h"
+#include "mowbite_ntrip/rtcm.h"
 #include "mowbite_serial/recognize.h"
 
 namespace mowbite_serial {
 namespace {
 
+// The checksums come from the libraries of the GNSS and the NTRIP client, which test them on their own.
 std::string Nmea(const std::string& body) {
-  unsigned sum = 0;
-  for (char c : body) sum ^= static_cast<uint8_t>(c);
   char tail[8];
-  std::snprintf(tail, sizeof(tail), "*%02X\r\n", sum);
+  std::snprintf(tail, sizeof(tail), "*%02X\r\n", mowbite_gnss::NmeaChecksum(body));
   return "$" + body + tail;
 }
 
@@ -26,23 +27,11 @@ std::vector<uint8_t> Wit(uint8_t type) {
   return frame;
 }
 
-uint32_t Crc24q(const std::vector<uint8_t>& data) {
-  uint32_t crc = 0;
-  for (uint8_t b : data) {
-    crc ^= static_cast<uint32_t>(b) << 16;
-    for (int i = 0; i < 8; i++) {
-      crc <<= 1;
-      if (crc & 0x1000000) crc ^= 0x1864cfb;
-    }
-  }
-  return crc & 0xffffff;
-}
-
 std::vector<uint8_t> Rtcm(int type, size_t length) {
   std::vector<uint8_t> frame = {0xd3, static_cast<uint8_t>(length >> 8), static_cast<uint8_t>(length & 0xff),
                                 static_cast<uint8_t>(type >> 4), static_cast<uint8_t>((type & 0xf) << 4)};
   frame.resize(3 + length, 0x5a);
-  const uint32_t crc = Crc24q(frame);
+  const uint32_t crc = mowbite_ntrip::Crc24q(frame.data(), frame.size());
   frame.push_back(static_cast<uint8_t>(crc >> 16));
   frame.push_back(static_cast<uint8_t>(crc >> 8));
   frame.push_back(static_cast<uint8_t>(crc));

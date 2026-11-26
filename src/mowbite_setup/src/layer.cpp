@@ -81,6 +81,14 @@ json Layer::Get(const std::string& node, const std::string& key) const {
   return found->second.at(key);
 }
 
+json Layer::Values() const {
+  json out = json::object();
+  for (const auto& [node, values] : values_) {
+    for (const auto& [key, value] : values) out[node][key] = value;
+  }
+  return out;
+}
+
 std::string Layer::Text() const {
   if (values_.empty()) return "";
   std::string text = kHead;

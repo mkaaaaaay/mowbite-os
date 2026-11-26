@@ -13,12 +13,6 @@ using namespace util;
 
 namespace {
 
-std::string Canonical(const std::string& path) {
-  std::error_code error;
-  const auto canonical = std::filesystem::weakly_canonical(path, error);
-  return error ? path : canonical.string();
-}
-
 const mowbite_serial::PortInfo* FindPort(const PortsView& view, const std::string& path) {
   for (const auto& port : view.ports) {
     if (port.path == path) return &port;
@@ -36,11 +30,17 @@ json Usb(const std::optional<mowbite_serial::UsbInfo>& usb) {
 
 }  // namespace
 
+std::string CanonicalPort(const std::string& path) {
+  std::error_code error;
+  const auto canonical = std::filesystem::weakly_canonical(path, error);
+  return error ? path : canonical.string();
+}
+
 std::string NodeOf(const mowbite_serial::PortInfo& port, const std::map<std::string, std::string>& driver_ports) {
   std::vector<std::string> names = port.by_id;
   names.push_back(port.path);
   for (const auto& name : names) {
-    const auto found = driver_ports.find(Canonical(name));
+    const auto found = driver_ports.find(CanonicalPort(name));
     if (found != driver_ports.end()) return found->second;
   }
   return "";

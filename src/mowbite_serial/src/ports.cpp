@@ -112,9 +112,10 @@ Listened Listen(const std::string& path, const std::vector<int>& bauds, double s
     }
   }
   listened.stopped = stop;
-  for (const auto& [baud, heard] : listened.tried) {
-    if (heard.bytes > listened.heard.bytes || listened.heard.seconds == 0) listened.heard = heard;
-  }
+  // Nothing recognised: what the rate with the most bytes heard, the first of them.
+  const auto most = std::max_element(listened.tried.begin(), listened.tried.end(),
+                                     [](const auto& a, const auto& b) { return a.second.bytes < b.second.bytes; });
+  if (most != listened.tried.end()) listened.heard = most->second;
   return listened;
 }
 

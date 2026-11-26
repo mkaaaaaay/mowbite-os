@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <filesystem>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <map>
@@ -143,7 +142,7 @@ class SetupNode : public rclcpp::Node {
     const json drivers = json::parse(declare_parameter("driver_ports", std::string("{}")), nullptr, false);
     if (drivers.is_object()) {
       for (const auto& [path, node] : drivers.items()) {
-        if (node.is_string()) driver_ports_[Canonical(path)] = node.get<std::string>();
+        if (node.is_string()) driver_ports_[CanonicalPort(path)] = node.get<std::string>();
       }
     }
     const json extra = json::parse(declare_parameter("ports_extra", std::string("[]")), nullptr, false);
@@ -749,12 +748,6 @@ class SetupNode : public rclcpp::Node {
                {"type", "image/svg+xml"}});
   }
 
-  static std::string Canonical(const std::string& path) {
-    std::error_code error;
-    const auto canonical = std::filesystem::weakly_canonical(path, error);
-    return error ? path : canonical.string();
-  }
-
   // The mower rests: in the choice of the mower, or in SETUP or IDLE without a running step. Called with the mutex.
   bool Resting() const {
     return choice_ || (!program_->running() && (world_.state == "IDLE" || world_.state == "SETUP"));
@@ -777,15 +770,12 @@ class SetupNode : public rclcpp::Node {
 
   // setup.ports.listen: one listen at a time in a thread of its own, answered when it ends.
   void OnListen(const std::string& id, const json& params) {
-    const PortsView view = Ports();
+    PortsView view = Ports();
     ListenRequest request;
     std::lock_guard<std::mutex> lock(mutex_);
-    std::optional<Refusal> refusal = CheckListen(params, view, &request);
     // Another listen may have begun since Ports() read it.
-    if (!refusal && !listening_.empty()) {
-      refusal = Refusal{"LISTENING", "Already listening", {{"port", listening_}}, ""};
-    }
-    if (refusal) return ReplyRefusal(id, *refusal);
+    view.listening = listening_;
+    if (const auto refusal = CheckListen(params, view, &request)) return ReplyRefusal(id, *refusal);
     if (listen_thread_.joinable()) listen_thread_.join();
     listening_ = request.port;
     listen_stop_ = false;

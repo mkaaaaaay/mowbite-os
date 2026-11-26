@@ -25,6 +25,9 @@ struct PortsView {
   std::string listening;
 };
 
+// The path with its links resolved, the path itself where it cannot be: how driver_ports names a port.
+std::string CanonicalPort(const std::string& path);
+
 // The node of the platform that uses the port, under its path, a link of by-id or its canonical path; empty for none.
 std::string NodeOf(const mowbite_serial::PortInfo& port, const std::map<std::string, std::string>& driver_ports);
 

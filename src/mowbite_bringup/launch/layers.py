@@ -53,18 +53,6 @@ def images(home):
     return os.path.join(home, "setup", "images")
 
 
-# The value of a step from: profiles for a mower of none of the profiles.
-OWN = ("own", {
-    "de": {"name": "Anderer Mäher",
-           "help": "Die Maße im Schritt Maße eintragen. Alle anderen Werte sind die der Plattform, auch der Akku, den "
-                   "die Platine vorgibt, und gelten als Annahme, bis die Sicherheitsmessung sie prüft."},
-    "en": {"name": "Another mower",
-           "help": "Enter the dimensions in the step dimensions. Every other value is the one of the platform, the "
-                   "battery too, which the board sets, and counts as an assumption until the safety measurement "
-                   "checks it."},
-}, {})
-
-
 def profiles(home):
     """[(value, texts, parameters)] of the files profiles/<name>.yaml in the share folder home of a platform: a
     mower of the board of the platform with values of its own. A file has texts (de, en: name, help), parameters (a
@@ -97,17 +85,18 @@ def profiles(home):
 
 
 def expanded(steps, home):
-    """The step list with the values of a step with from: profiles (profiles() and OWN) in params.values,
-    value_texts and value_params."""
+    """The step list with the profiles (profiles()) in front of the values of a step with from: profiles, with their
+    texts in value_texts and their parameters in value_params."""
     for step in steps.get("steps") or []:
         source = step.pop("from", None) if isinstance(step, dict) else None
         if source is None:
             continue
         if source != "profiles":
             raise ValueError(f"{step.get('id')}: from {source!r} is not profiles")
-        choices = profiles(home) + [OWN]
-        step["params"] = {**(step.get("params") or {}), "values": [value for value, _, _ in choices]}
-        step["value_texts"] = {value: texts for value, texts, _ in choices}
+        choices = profiles(home)
+        params = step.get("params") or {}
+        step["params"] = {**params, "values": [value for value, _, _ in choices] + (params.get("values") or [])}
+        step["value_texts"] = {**{value: texts for value, texts, _ in choices}, **(step.get("value_texts") or {})}
         step["value_params"] = {value: parameters for value, _, parameters in choices if parameters}
     return steps
 
