@@ -115,6 +115,8 @@ constexpr double kHoldPollS = 0.5;
 // Wait after a failed write or removal of the STOP clear mark, and how often the mark thread looks.
 constexpr double kMarkRetryS = 1.0;
 constexpr std::chrono::milliseconds kMarkLook{20};
+// How long the end of the node waits for a write or removal of the mark that is under way.
+constexpr double kMarkEndWaitS = 1.0;
 // hw/end: the exit code, and the wait for the answer to go out besides the last flush of the journal.
 constexpr int kEndExitCode = 3;
 constexpr double kEndAnswerS = 0.2;
@@ -336,7 +338,7 @@ class McuNode : public rclcpp::Node {
     running_ = false;
     if (io_thread_.joinable()) io_thread_.join();
     if (guard_thread_.joinable()) guard_thread_.join();
-    if (mark_thread_.joinable()) mark_thread_.join();
+    EndMarkThread();
   }
 
  private:
@@ -598,8 +600,23 @@ class McuNode : public rclcpp::Node {
   void MarkLoop() {
     while (running_) {
       std::this_thread::sleep_for(kMarkLook);
+      mark_busy_ = true;
       UpdateStopClearMark(MonotonicSeconds());
+      mark_busy_ = false;
     }
+  }
+
+  // A write that hangs on the disk must not keep the process from ending: the farewell frames went out already.
+  void EndMarkThread() {
+    if (!mark_thread_.joinable()) return;
+    const double until = MonotonicSeconds() + kMarkEndWaitS;
+    while (mark_busy_ && MonotonicSeconds() < until) std::this_thread::sleep_for(kMarkLook);
+    if (mark_busy_) {
+      RCLCPP_ERROR(get_logger(), "The STOP clear mark hangs on the disk: ending without it");
+      mark_thread_.detach();
+      return;
+    }
+    mark_thread_.join();
   }
 
   // The mark is written and synced by this driver before its first clear frame of STOP in an emergency, and goes
@@ -1369,8 +1386,9 @@ class McuNode : public rclcpp::Node {
   std::thread io_thread_;
   // F1: the guard thread, the last time the I/O thread came round, the frames it writes and whether it did.
   std::thread guard_thread_;
-  // Writes and removes the STOP clear mark.
+  // Writes and removes the STOP clear mark; busy while it does.
   std::thread mark_thread_;
+  std::atomic<bool> mark_busy_{false};
   std::atomic<double> io_alive_s_{0.0};
   std::mutex guard_mutex_;
   std::vector<uint8_t> guard_bytes_;

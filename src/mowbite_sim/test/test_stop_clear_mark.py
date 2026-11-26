@@ -1,7 +1,8 @@
 """STOP cleared during an emergency (G37), here tron_mcu against fake_tron on a pty with STOP kept by the board as on the
 Tron: the mark is on disk before the first clear frame, which comes stop_clear_delay after the latch; a driver killed
 with the mark starts latched (HIGH_LEVEL) and writes the mark again before its own first clear frame, the release
-removes the mark, and a start without it is free. A driver whose I/O thread hangs ends by its watch.
+removes the mark, and a start without it is free. A driver whose I/O thread hangs ends by its watch; a mark that hangs
+on the disk holds back the clear frames only, and the driver still ends when asked to.
 
 Run in a sourced workspace: launch_test /ws/src/mowbite_sim/test/test_stop_clear_mark.py
 """
@@ -28,6 +29,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_stop_mark_")
 LINKS = sim_links(WORK)
 _, FLAGS, LOG, _ = sim_files(WORK)
 MARK = os.path.join(WORK, "stop-clear-mark")
+HOLD = os.path.join(WORK, "hold.json")
 SENSOR = 10
 DELAY = 1.5
 BOARD = {"stop_latches": 1}
@@ -50,11 +52,11 @@ def clears(since):
 class Driver:
     """tron_mcu as a process of its own, so the test can kill it and start it again."""
 
-    def __init__(self):
+    def __init__(self, *extra):
         exe = package_program("tron_mcu", "tron_mcu_node")
         self.proc = subprocess.Popen([exe, "--ros-args", "-p", f"port:={LINKS['mcu']}", "-p", "send_imu:=false",
                                       "-p", "stop_release:=true", "-p", "stop_clear_period:=0.25",
-                                      "-p", f"stop_clear_delay:={DELAY}", "-p", f"stop_clear_mark:={MARK}"],
+                                      "-p", f"stop_clear_delay:={DELAY}", "-p", f"stop_clear_mark:={MARK}", *extra],
                                      start_new_session=True)
 
     def stop(self, sig=signal.SIGINT):
@@ -165,20 +167,43 @@ class TestStopClearMark(unittest.TestCase):
         self.assertFalse(os.path.exists(MARK))
 
     def test_f_a_hanging_io_thread_ends_the_driver(self):
-        # A FIFO as the mark: writing it blocks the I/O thread until a reader comes, which never does.
+        # A FIFO as the hold file once the driver runs: the I/O thread reads it and blocks until a writer comes, which
+        # never does.
         self.driver.stop()
-        os.mkfifo(MARK)
         self.probe.clear()
-        driver = type(self).driver = Driver()
-        self.assertTrue(self.probe.wait(lambda s: s.telemetry_ok and s.emergency, 15), "not latched with the mark")
-        press()
+        driver = type(self).driver = Driver("-p", f"hold_file:={HOLD}")
+        self.assertTrue(self.probe.wait(lambda s: s.telemetry_ok, 15), "no telemetry")
+        os.mkfifo(HOLD)
         try:
-            code = driver.proc.wait(DELAY + 2.0 * WATCH_FACTOR + 4.0)
+            code = driver.proc.wait(2.0 * WATCH_FACTOR + 4.0)
         except subprocess.TimeoutExpired:
             code = None
         else:
             type(self).driver = None
+        os.remove(HOLD)
         self.assertEqual(code, WATCH_EXIT, "the driver did not end by its watch")
+
+    def test_g_a_hanging_mark_holds_back_the_clear_frames_only(self):
+        # A FIFO as the mark: writing it blocks the mark thread until a reader comes, which never does.
+        if self.driver:
+            self.driver.stop()
+        if os.path.exists(MARK):
+            os.remove(MARK)
+        os.mkfifo(MARK)
+        self.probe.clear()
+        driver = type(self).driver = Driver()
+        self.assertTrue(self.probe.wait(lambda s: s.telemetry_ok and s.emergency, 15), "not latched with the mark")
+        since = last_time(LOG)
+        press()
+        time.sleep(DELAY + 2.0 * WATCH_FACTOR + 2.0)
+        self.assertIsNone(driver.proc.poll(), "the driver ended while the mark hung")
+        self.assertFalse(clears(since), "a clear frame went out without the mark on disk")
+        s = self.probe.status
+        self.assertTrue(s and s.telemetry_ok and s.emergency and s.stop, s)
+        code = driver.stop()
+        type(self).driver = None
+        os.remove(MARK)
+        self.assertNotEqual(code, -signal.SIGKILL, "the driver did not end on SIGINT with the mark hanging")
 
 
 if __name__ == "__main__":
