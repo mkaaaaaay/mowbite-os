@@ -428,14 +428,74 @@ class ConfirmStartTest(CallsBase):
             reason = self.answer("host.confirm_start", {"challenge": bad})["error"]["data"]["reason"]
             self.assertEqual(reason, "INVALID", bad)
 
+    # While the first installation runs the period stands still, but the boot counts as not confirmed.
     def test_waits_for_the_first_installation(self):
+        self.commands.on([self.paths.trial_tool, "hold"], (0, "", ""))
         self.updater.state["first"] = True
         self.assertEqual(self.confirm()["error"]["data"]["reason"], "BUSY")
-        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "ssh")), 1)
+        self.assertEqual(len(self.commands.ran(self.paths.trial_tool, "hold")), 1)
+        self.assertEqual(self.commands.ran(self.paths.trial_tool, "ssh"), [])
 
     def test_a_rootfs_without_the_tool(self):
         del self.commands.handlers[(self.paths.trial_tool, "ssh")]
         self.assertEqual(self.confirm()["error"]["data"]["reason"], "INTERNAL")
+
+
+class TrialHoldTest(CallsBase):
+    def setUp(self):
+        super().setUp()
+        self.install()
+        self.write(self.paths.trial, "")
+        for verb in ("hold", "again"):
+            self.commands.on([self.paths.trial_tool, verb], (0, "", ""))
+
+    def ran(self, verb):
+        return len(self.commands.ran(self.paths.trial_tool, verb))
+
+    # Also without an installer at the PC that asks host.confirm_start.
+    def test_held_while_the_first_installation_runs(self):
+        self.updater.state["first"] = True
+        self.host._hold_trial()
+        self.host._hold_trial()
+        self.assertEqual(self.ran("hold"), 1)
+        self.host._trial_held -= service.HOLD_EVERY
+        self.host._hold_trial()
+        self.assertEqual((self.ran("hold"), self.ran("again")), (2, 0))
+
+    def test_runs_again_when_the_first_installation_ends_without_an_os(self):
+        self.updater.state["first"] = True
+        self.host._hold_trial()
+        self.fake.stop()
+        self.updater.state["first"] = False
+        self.host._hold_trial()
+        self.host._hold_trial()
+        self.assertEqual(self.ran("again"), 1)
+
+    # The installer confirms a running OS; until then the tool lets the hold go by itself.
+    def test_stays_held_when_the_os_runs(self):
+        self.updater.state["first"] = True
+        self.host._hold_trial()
+        self.updater.state["first"] = False
+        self.host._hold_trial()
+        self.assertEqual((self.ran("hold"), self.ran("again")), (1, 0))
+
+    def test_nothing_without_a_trial_period_or_a_first_installation(self):
+        self.host._hold_trial()
+        os.remove(self.paths.trial)
+        self.updater.state["first"] = True
+        self.host._hold_trial()
+        self.assertEqual(self.commands.calls, [])
+
+    # A rootfs whose tool knows no hold: one complaint, the next try a minute later.
+    def test_an_old_tool(self):
+        self.commands.on([self.paths.trial_tool, "hold"], (2, "", "usage"))
+        self.updater.state["first"] = True
+        out = StringIO()
+        with redirect_stdout(out):
+            for _ in range(3):
+                self.host._step("trial", self.host._hold_trial)
+        self.assertEqual(self.ran("hold"), 1)
+        self.assertIn("the trial period was not held", out.getvalue())
 
 
 class UsbModeTest(CallsBase):

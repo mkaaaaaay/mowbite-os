@@ -26,6 +26,8 @@ TICK_EVERY = 5 * 60.0
 CHECK_EVERY = 6 * 3600.0
 # How often the state of the OS is read from its files.
 LOOK_EVERY = 2.0
+# How often the trial period is held while the first installation runs; the tool lets it go after 30 min.
+HOLD_EVERY = 60.0
 # host.usb_mode answers first and reboots this much later.
 REBOOT_AFTER = 2.0
 LOADER_REBOOT = ("systemctl", "--no-block", "--reboot-argument=loader", "reboot")
@@ -88,6 +90,8 @@ class Host:
         self._shown = None
         self._update_text = None
         self._complaints = {}
+        # Monotonic time of the last hold of the trial period, None when this host holds none.
+        self._trial_held = None
         # None: the answer is update.status.
         self._methods = {
             "update.status": lambda p: None,
@@ -283,6 +287,21 @@ class Host:
                 self._complaints[name] = text
                 print(f"{name}: {text}", flush=True)
 
+    # The trial period stands still while the first installation runs; ended without a running OS, it runs again.
+    def _hold_trial(self):
+        if not trial.active(self.paths):
+            self._trial_held = None
+            return
+        now = time.monotonic()
+        if self.updater.state.get("first") is True:
+            if self._trial_held is None or now - self._trial_held >= HOLD_EVERY:
+                self._trial_held = now
+                trial.hold(self.paths, self.run_command)
+        elif self._trial_held is not None:
+            self._trial_held = None
+            if self.watch.read()["state"] != "running":
+                trial.again(self.paths, self.run_command)
+
     def run(self, alive=lambda: None, stop=lambda: False):
         self.updater.on_change = self.update_changed
         self.gesture.start()
@@ -306,6 +325,7 @@ class Host:
                 self._step("recover", self.updater.recover_due)
                 self._step("net", self.updater.poll)
                 self._step("first", self.updater.first_install)
+                self._step("trial", self._hold_trial)
                 self._step("wifi", self.wifi.look)
             try:
                 item = self.requests.get(timeout=max(0.05, min(next_look, next_tick) - time.monotonic()))

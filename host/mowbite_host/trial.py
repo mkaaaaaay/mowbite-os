@@ -1,7 +1,7 @@
 """The trial period of a newly written rootfs (Tron, /usr/lib/mowbite/probezeit): without a confirmed start the mower
 reboots into the loader mode of U-Boot after 10 min or at its third boot. host.confirm_start stands in for the SSH
-login of a maintainer, but only while the first installation runs (so the period does not cut it off) or once the
-start is good: a caller asking again and again keeps a bad start from going back on its own.
+login of a maintainer once the start is good; while the first installation runs it holds the period (so the period
+does not cut it off). Else it does nothing: a caller asking again and again cannot keep a bad start from going back.
 """
 import hashlib
 import hmac
@@ -43,13 +43,28 @@ def proof(paths, challenge):
     return hmac.new(key, challenge.encode(), hashlib.sha256).hexdigest() if key else None
 
 
-def _reached(paths, run):
+def _tool(paths, run, verb, failed):
     try:
-        code, _, err = run([paths.trial_tool, "ssh"])
+        code, _, err = run([paths.trial_tool, verb])
     except FileNotFoundError:
         raise Refused("INTERNAL", "the trial period has no tool on this rootfs") from None
     if code != 0:
-        raise Refused("INTERNAL", f"the start was not counted as confirmed: {err or code}")
+        raise Refused("INTERNAL", f"{failed}: {err or code}")
+
+
+def _reached(paths, run):
+    _tool(paths, run, "ssh", "the start was not counted as confirmed")
+
+
+# While the first installation runs, the period stands still; the tool lets it run again by itself when no call
+# comes for a while, so a host that died cannot hold it for good.
+def hold(paths, run):
+    _tool(paths, run, "hold", "the trial period was not held")
+
+
+# The first installation ended without a running OS: the period runs again, the mower falls back on its own.
+def again(paths, run):
+    _tool(paths, run, "again", "the trial period did not run again")
 
 
 # os_now: os of mowbite/host/status; first_runs: whether the first installation is still at work; challenge: text of
@@ -63,7 +78,7 @@ def confirm(paths, run, os_now, first_runs, challenge=None):
     if not active(paths):
         return answer
     if first_runs:
-        _reached(paths, run)
+        hold(paths, run)
         raise Refused("BUSY", "the first installation runs")
     problems, notes = _failed_units(run)
     problems += wifi.problems(run)
