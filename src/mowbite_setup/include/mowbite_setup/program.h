@@ -242,6 +242,10 @@ class Program {
   const std::string& restart_way() const {
     return list_.restart;
   }
+  // Whether the drivers of the platform run (MOWBITE_HARDWARE); the step hardware is ok while they do.
+  void SetDrivers(bool on);
+  // The restart asked for is the one of the step hardware: host.hardware on instead of host.restart_os.
+  bool HardwareRestart() const;
 
  private:
   // What a step holds between restarts.
@@ -536,6 +540,11 @@ class Program {
   json BladeValues(const Run& run, const Step& step, bool final) const;
   // summary.cpp: the step that opens the lock.
   static bool IsSummary(const Step& step);
+  static bool IsHardware(const Step& step);
+  void MarkHardware();
+  std::vector<Refusal> HardwareProblems() const;
+  void BeginHardware(const Step& step, double wall);
+  void TickHardware(double now, double wall);
   // The step platform is ok while the OS runs as a mower (platform_), open in the stage of the choice.
   void MarkPlatform();
   // What keeps the step summary from starting; the first of them refuses setup.start.
@@ -625,6 +634,7 @@ class Program {
   // A restart is to be asked for; when it was (below 0: not yet, or one that did not come).
   bool restart_wanted_ = false;
   double restart_sent_ = -1;
+  bool drivers_on_ = true;
   // setup.reset took settings out that are not on disk yet: tried again until a write goes through.
   bool settings_due_ = false;
   // A step inputs_assign ended without its table: the driver may still learn.

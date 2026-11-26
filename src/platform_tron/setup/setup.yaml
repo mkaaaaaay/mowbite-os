@@ -1,13 +1,35 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 9
-# blade and summary restart the OS: mowbite-host restarts the service (host.restart_os).
+catalog: 10
+# hardware, blade and summary restart the OS: mowbite-host restarts the service (host.restart_os).
 restart: host
 steps:
   - id: platform
     stage: device
     check: platform
+    symbol: board
+  - id: hardware
+    stage: device
+    check: hardware
+    texts:
+      de:
+        name: Hardware einschalten
+        help: >-
+          Nach der Installation spricht MowBite OS die Platine der Tron noch nicht an. Mit einem Tipp schaltet es die
+          Treiber für Platine, GPS und Lagesensor ein und startet dafür kurz neu. Dabei bewegt sich nichts.
+        fix: >-
+          Kommt der Haken nach dem Neustart nicht: die Tron mit der Taste aus- und wieder einschalten und den Schritt
+          wiederholen. Bleibt er weiter aus, passt die Firmware der Platine vielleicht nicht zu MowBite OS.
+      en:
+        name: Turn on the hardware
+        help: >-
+          Right after the installation MowBite OS does not talk to the board of the Tron yet. One tap turns on the
+          drivers for the board, the GPS and the motion sensor; the system restarts briefly for it. Nothing moves
+          meanwhile.
+        fix: >-
+          If the check mark does not come after the restart: switch the Tron off and on with its button and repeat
+          the step. If it still does not come, the firmware of the board may not fit MowBite OS.
     symbol: board
   - id: board
     stage: device

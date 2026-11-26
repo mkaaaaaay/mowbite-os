@@ -60,6 +60,28 @@ def read_env(path):
     return env
 
 
+# The file of KEY=value lines at path with key set to value: its first line of key takes it, further ones of key go,
+# comments and other keys stay; without such a line it is added. Whole or not at all.
+def set_env(path, key, value):
+    try:
+        with open(path) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        lines = []
+    kept, done = [], False
+    for line in lines:
+        text = line.strip()
+        if text and text[0] not in "#;" and "=" in text and text.split("=", 1)[0].strip() == key:
+            if not done:
+                kept.append(f"{key}={value}")
+                done = True
+            continue
+        kept.append(line)
+    if not done:
+        kept.append(f"{key}={value}")
+    write_new(path, "\n".join(kept) + "\n")
+
+
 # The JSON object at path; None when it is missing, unreadable or no object.
 def read_json(path):
     text = read_text(path)

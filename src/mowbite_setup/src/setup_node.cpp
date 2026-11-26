@@ -138,6 +138,8 @@ class SetupNode : public rclcpp::Node {
     LoadPlatformImages(&platforms);
     chosen_ = declare_parameter("chosen", std::string());
     const bool fixed = declare_parameter("fixed", std::string("false")) == "true";
+    // MOWBITE_HARDWARE as the start took it: false, the drivers of the platform did not start.
+    const bool drivers_on = declare_parameter("hardware", std::string("true")) != "false";
     // The ports the nodes of the platform use ({path: node}), whether setup.ports lists those of /sys (off in the
     // simulation) and paths listed besides.
     const json drivers = json::parse(declare_parameter("driver_ports", std::string("{}")), nullptr, false);
@@ -185,6 +187,7 @@ class SetupNode : public rclcpp::Node {
         LoadImages(*list, image_dir);
         program_.emplace(*list, platform);
         program_->SetPlatforms(platforms, chosen_, fixed);
+        program_->SetDrivers(drivers_on);
         LoadRecord();
         LoadLock();
         LoadLayer(shadowed);
@@ -536,13 +539,18 @@ class SetupNode : public rclcpp::Node {
   }
 
   // The restart a step asked for, by the way of the step list: self leaves a note for the launch and ends this
-  // process in order, so that whatever runs the OS starts it again; host asks mowbite-host over the broker.
+  // process in order, so that whatever runs the OS starts it again; host asks mowbite-host over the broker, for the
+  // step hardware with the drivers switched on.
   void Restart() {
     if (!choice_ && program_->restart_way() == "host") {
-      RCLCPP_INFO(get_logger(), "The setup program asks mowbite-host to restart the OS");
+      const bool hardware = program_->HardwareRestart();
+      json request = {{"jsonrpc", "2.0"}, {"method", hardware ? "host.hardware" : "host.restart_os"}};
+      if (hardware) request["params"] = {{"on", true}};
+      RCLCPP_INFO(get_logger(), "The setup program asks mowbite-host for %s",
+                  request["method"].get<std::string>().c_str());
       mowbite_msgs::msg::MqttPublish msg;
       msg.topic = "rpc/request";
-      msg.payload = json{{"jsonrpc", "2.0"}, {"method", "host.restart_os"}}.dump();
+      msg.payload = request.dump();
       publish_pub_->publish(msg);
       return;
     }

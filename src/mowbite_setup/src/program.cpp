@@ -117,6 +117,7 @@ bool Reopens(const Step& step) {
 
 Program::Program(StepList list, std::string platform) : list_(std::move(list)), platform_(std::move(platform)) {
   for (const Step& step : list_.steps) records_[step.id] = Record();
+  MarkHardware();
 }
 
 bool Program::Load(const std::string& text, double wall, std::string* why) {
@@ -158,6 +159,7 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
   }
   records_ = std::move(records);
   MarkPlatform();
+  MarkHardware();
   reset_date_ = file.contains("reset_date") && file["reset_date"].is_string() ? file["reset_date"].get<std::string>()
                                                                               : "";
   if (file.contains("lock_failures") && file["lock_failures"].is_number_unsigned()) {
@@ -169,8 +171,8 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
   }
   for (const Step& step : list_.steps) {
     Record& record = RecordOf(step);
-    // The restart a step summary asked for: it goes on with what the driver shows now.
-    if (record.state == "running" && IsSummary(step) && record.applied.is_object() && !run_) {
+    // The restart a step summary or hardware asked for: it goes on with what the driver shows now.
+    if (record.state == "running" && (IsSummary(step) || IsHardware(step)) && record.applied.is_object() && !run_) {
       run_ = SummaryRun(step, wall);
       continue;
     }
@@ -499,7 +501,11 @@ void Program::EndRun(double now) {
     restart_wanted_ = false;
     ForgetLearning(step);
   }
-  if (!record.applied.is_null()) ForgetSummary(step);
+  if (!record.applied.is_null() && IsSummary(step)) ForgetSummary(step);
+  if (!record.applied.is_null() && IsHardware(step)) {
+    record.applied = nullptr;
+    restart_wanted_ = false;
+  }
   run_.reset();
 }
 
@@ -541,7 +547,7 @@ void Program::LayerWritten(bool written, double now, double wall) {
     End(*step, "open", "NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(),
         wall);
   }
-  if (run_ && (IsAssign(StepOf(*run_)) || IsSummary(StepOf(*run_)))) {
+  if (run_ && (IsAssign(StepOf(*run_)) || IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_)))) {
     Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
   }
 }
@@ -549,6 +555,8 @@ void Program::LayerWritten(bool written, double now, double wall) {
 // Only a mower that stands and that no update holds, and never to get rid of an emergency: none may be on but the
 // one of learning itself.
 bool Program::RestartAllowed(double now) const {
+  // Without drivers there is no hw/status and nothing can move: the restart of the step hardware needs IDLE only.
+  if (HardwareRestart() && !drivers_on_) return world_.state == "IDLE";
   const uint32_t reason = hardware_.emergency_reason;
   const bool learning = (reason & LearningBit()) != 0;
   const uint32_t allowed = learning ? LearningBit() | LatchBit() : 0;
@@ -650,7 +658,7 @@ void Program::Pass(const Step& step, double now, double wall) {
     record.values = Values(step, now, true);
     record.parts = json(std::vector<std::string>(step.parts.size(), "ok"));
     if (IsAssign(step)) record.assign = nullptr;
-    if (IsSummary(step)) record.applied = nullptr;
+    if (IsSummary(step) || IsHardware(step)) record.applied = nullptr;
     EndRun(now);
   }
   End(step, "ok", "", "", {}, wall);
@@ -930,6 +938,10 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     const auto problems = SummaryProblems(now);
     if (!problems.empty()) return problems.front();
   }
+  if (IsHardware(step)) {
+    const auto problems = HardwareProblems();
+    if (!problems.empty()) return problems.front();
+  }
   if (step.kind == "measure" && !world_.state.empty() && world_.state != "IDLE") {
     return Refuse("BUSY", "The mower is in " + world_.state, {{"state", world_.state}});
   }
@@ -984,6 +996,8 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
     BeginDrive(now, wall);
   } else if (IsSummary(step)) {
     BeginSummary(step, wall);
+  } else if (IsHardware(step)) {
+    BeginHardware(step, wall);
   } else if (!step.parts.empty()) {
     BeginPart(now, wall);
   }
@@ -1229,6 +1243,7 @@ std::optional<Refusal> Program::Reset(const json& params, double wall) {
   ResetSettings(wall);
   for (auto& [id, record] : records_) record = Record();
   MarkPlatform();
+  MarkHardware();
   reached_.clear();
   events_.push_back({"SETUP", {{"what", "reset"}}});
   Changed();
@@ -1289,6 +1304,7 @@ void Program::Tick(double now, double wall) {
     if (check == "position") TickPosition(now, wall);
     if (check == "inputs_assign") TickAssign(now, wall);
     if (check == "summary") TickSummary(now, wall);
+    if (check == "hardware") TickHardware(now, wall);
     if (run_ && IsDrive(StepOf(*run_))) TickDrive(now, wall);
   }
   if (restart_sent_ >= 0 && !run_ && now - restart_sent_ > kRestartLost) restart_sent_ = -1;
@@ -1794,6 +1810,7 @@ bool Program::Met(const Step& step) const {
 json Program::Values(const Step& step, double now, bool final) const {
   if (!IsRun(step)) return records_.at(step.id).values;
   if (IsSummary(step)) return SummaryValues(step);
+  if (IsHardware(step)) return json::array();
   const Run& run = *run_;
   if (step.check == "board") {
     return BoardValues(run, step, final ? step.Number("time") : now - run.began, final);
@@ -1856,7 +1873,7 @@ json Program::Blocked(const Step& step, double now) const {
   }
   // A step that asks pressed waits for the answer alone.
   if (IsRun(step) && run_->pressed_at >= 0) return blocked;
-  if (IsRun(step) && (IsAssign(step) || IsSummary(step))) {
+  if (IsRun(step) && (IsAssign(step) || IsSummary(step) || IsHardware(step))) {
     if (restart_wanted_ && !RestartAllowed(now)) {
       if (hardware_.hold) {
         add("BUSY", "An update holds the mower");
@@ -1871,6 +1888,12 @@ json Program::Blocked(const Step& step, double now) const {
   }
   if (IsSummary(step)) {
     for (const Refusal& problem : SummaryProblems(now)) add_problem(problem);
+    return blocked;
+  }
+  if (IsHardware(step)) {
+    if (!drivers_on_) {
+      for (const Refusal& problem : HardwareProblems()) add_problem(problem);
+    }
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
@@ -2084,7 +2107,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       } else if (step.check == "wheels" && run_->drive == Drive::kAnswer) {
         ends_at = std::floor(run_->drive_wall + mowbite_api::kSetupPressedTime);
       }
-    } else if (is_run && !IsSummary(step)) {
+    } else if (is_run && !IsSummary(step) && !IsHardware(step)) {
       if (!step.parts.empty()) {
         progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
         ends_at = std::floor(run_->part_wall + step.Number("time"));
@@ -2124,7 +2147,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"mark", step.mark},
                      {"texts", step.texts},
                      {"result", record.result},
-                     {"restart", IsAssign(step) || IsSummary(step) ||
+                     {"restart", IsAssign(step) || IsSummary(step) || IsHardware(step) ||
                                      (IsBlade(step) && capabilities_known_ && !capabilities_.blade_allowed)}});
     if (stages.empty() || stages.back()["id"] != step.stage) {
       const mowbite_api::SetupName* stage = mowbite_api::FindSetupName(mowbite_api::SetupStages(), step.stage);
@@ -2153,7 +2176,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
           {"safety", SafetyState()},
           {"restart_pending",
            restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart) ||
-               (run_ && IsSummary(StepOf(*run_)) && !run_->restarted)},
+               (run_ && (IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_))) && !run_->restarted)},
           {"stages", std::move(stages)},
           {"steps", std::move(steps)}};
 }

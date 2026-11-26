@@ -278,10 +278,11 @@ def components(files, geometry, data_dir, mqtt_host, mqtt_port, journal, setup=N
     # writes for this mower, shadowed what the file kept by hand overrules of it, driver_restarts how often the start
     # starts an ended driver again.
     # platforms: the mowers of the image for the step platform, chosen the one the OS runs as, fixed whether the
-    # installation set it; driver_ports the ports its nodes use (layers.driver_ports).
+    # installation set it; driver_ports the ports its nodes use (layers.driver_ports); hardware the launch argument of
+    # a platform that has one (false: its drivers did not start).
     setup = {"platform": "", "steps": "", "image_dir": "", "layer": "", "shadowed": "", "driver_restarts": "0",
              "platforms": json.dumps(about_platforms()), "chosen": "", "fixed": "false", "driver_ports": "{}",
-             **(setup or {})}
+             "hardware": "true", **(setup or {})}
     program = ComposableNode(
         package="mowbite_setup", plugin="mowbite_setup::SetupNode", name="mowbite_setup",
         parameters=[*files, {"data_dir": data_dir},
@@ -583,6 +584,7 @@ def launch_setup(context, platform, module, fixed):
     setup["chosen"] = platform
     setup["fixed"] = "true" if fixed else "false"
     setup["driver_ports"] = json.dumps(layers.driver_ports(files))
+    setup["hardware"] = context.launch_configurations.get("hardware", "true")
     nodes = components(files, arg("geometry"), data_dir, arg("mqtt_host"), arg("mqtt_port"), journal, setup)
     halt = check_parameters(files, checked_nodes(nodes, module), logger) or check_setup(setup, logger)
     if halt:

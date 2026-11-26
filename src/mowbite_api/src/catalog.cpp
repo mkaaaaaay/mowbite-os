@@ -1473,6 +1473,12 @@ const std::vector<Method>& Methods() {
        "without an emergency or the restart hold; never during an update. The restart hold judges at the start as "
        "always",
        NoParams(), Object("result", "os of mowbite/host/status after the restart", HostOs()), kHostOffered},
+      {"host.hardware", "mowbite_host",
+       "Switches the drivers of the platform on or off (MOWBITE_HARDWARE in the settings of the OS) and restarts the "
+       "OS with the rule of host.restart_os; hardware in mowbite/host/status shows the setting. The setup program asks "
+       "for it with its step hardware",
+       Object("params", "On or off", {Bool("on", "true: the drivers run, false: they do not start", true)}),
+       Object("result", "os of mowbite/host/status after the restart", HostOs()), kHostOffered},
       {"host.confirm_start", "mowbite_host",
        "Ends the trial period of a newly written system (trial in mowbite/host/status) once its start is good: the "
        "pack of the installer unpacked, a WLAN connection, MowBite OS running, the first installation done; else "

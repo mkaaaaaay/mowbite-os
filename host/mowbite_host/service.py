@@ -12,15 +12,15 @@ import re
 import threading
 import time
 
-from mowbite_host import Refused, command, gate, gesture, ssh, trial, wifi
+from mowbite_host import Refused, command, files, gate, gesture, ssh, trial, wifi
 from mowbite_host.updater import COMPONENTS
 
 SCHEMA = 1
 HOST_STATUS = "mowbite/host/status"
 UPDATE_STATUS = "mowbite/update/status"
-METHODS = ("host.confirm_start", "host.restart_os", "host.ssh", "host.usb_mode", "host.wifi_scan", "host.wifi_set",
-           "update.abort", "update.check", "update.rollback", "update.set_auto", "update.set_channel", "update.start",
-           "update.status")
+METHODS = ("host.confirm_start", "host.hardware", "host.restart_os", "host.ssh", "host.usb_mode", "host.wifi_scan",
+           "host.wifi_set", "update.abort", "update.check", "update.rollback", "update.set_auto", "update.set_channel",
+           "update.start", "update.status")
 OFFLINE = json.dumps({"schema": SCHEMA, "online": False})
 TICK_EVERY = 5 * 60.0
 CHECK_EVERY = 6 * 3600.0
@@ -103,6 +103,7 @@ class Host:
             "update.set_auto": self._set_auto,
             "update.set_channel": lambda p: self.updater.set_channel(_text(p, "channel")),
             "host.restart_os": self._restart_os,
+            "host.hardware": self._hardware,
             "host.confirm_start": self._confirm_start,
             "host.wifi_scan": lambda p: self.wifi.scan(),
             "host.wifi_set": lambda p: self.wifi.set(p.get("ssid"), p.get("password"), p.get("hidden", False)),
@@ -115,17 +116,22 @@ class Host:
                 "trial": trial.active(self.paths), "wifi": self.wifi.status(),
                 "setup_wifi": {"until": self._setup_until} if self._setup_until else None,
                 "setup_wifi_gesture": self.gesture.describe(), "ssh": self.ssh.status(),
+                "hardware": self._drivers_on(),
                 "usb_mode_failed": self.usb_mode_failed}
 
+    # As run-os reads MOWBITE_HARDWARE: only false keeps the drivers off.
+    def _drivers_on(self):
+        return self.paths.env().get("MOWBITE_HARDWARE") != "false"
+
     # Sends mowbite/host/status when the OS, the trial period, the WLAN change, the setup WLAN, a failed restart into
-    # the USB mode or SSH changed.
+    # the USB mode, SSH or the drivers changed.
     def look(self):
         self._os = self.watch.read()
         if self.gesture.take():
             self._on_gesture()
         self._setup_until = self.gesture.until()
         shown = (self._os, trial.active(self.paths), self.wifi.status(), self._setup_until, self.usb_mode_failed,
-                 self.ssh.status())
+                 self.ssh.status(), self._drivers_on())
         if shown != self._shown:
             self._shown = shown
             self.publish(HOST_STATUS, json.dumps(self.host_status()), True)
@@ -214,17 +220,36 @@ class Host:
     # Decision (N): stopped, down or halted always; a running OS only in IDLE without an emergency or restart hold;
     # never during an update.
     def _restart_os(self, params):
+        self._may_restart()
+        return self._restart()
+
+    # The drivers of the platform on or off: MOWBITE_HARDWARE in os.conf, then the restart of host.restart_os. Without
+    # drivers the OS shows the emergency of its missing inputs and nothing can move: switching them on ignores it.
+    def _hardware(self, params):
+        on = params.get("on")
+        if not isinstance(on, bool):
+            raise Invalid("on has to be true or false")
+        self._may_restart(emergency_ok=on and not self._drivers_on())
+        files.set_env(self.paths.env_files[-1], "MOWBITE_HARDWARE", "true" if on else "false")
+        return self._restart()
+
+    def _may_restart(self, emergency_ok=False):
         if self.updater.busy():
             raise Refused("HOLD", "an update runs")
         state = self.watch.read()["state"]
         if state not in ("stopped", "down", "halted"):
             if os.path.lexists(self.paths.restart_hold):
                 raise Refused("EMERGENCY", "the restart hold stands: release it first")
-            why = gate.unrest(gate.session_of_this_boot(self.paths))
+            session = gate.session_of_this_boot(self.paths)
+            why = gate.unrest(session)
+            if why is not None and why.code == "EMERGENCY" and emergency_ok and session.get("state") == "IDLE":
+                why = None
             if why is not None:
                 raise Refused(why.code, why.why)
             if state != "running":
                 raise Refused("BUSY", f"MowBite OS is {state}")
+
+    def _restart(self):
         if not self.carrier.restart():
             raise Refused("INTERNAL", "the OS did not start")
         self.look()

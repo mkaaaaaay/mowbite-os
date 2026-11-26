@@ -334,7 +334,8 @@ arguments may be out of scope.
 Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
 (`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change
 of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign`, `blade` or a `choice` with
-`value_params` and names how the OS restarts for it, `steps` come in the order the app shows them:
+`value_params` (`host` with a step `hardware`) and names how the OS restarts for it, `steps` come in the order the app
+shows them:
 
 | Field | What |
 |---|---|
@@ -394,6 +395,13 @@ motion, of the blade or of the safety, and never what the board charges with: li
 built for one battery, the battery of a board is not chosen in the app. Changes an answer the dimensions, the safety
 steps count again and a lock that is open closes with `RESET` until they and the summary passed. A profile is an
 assumption until the safety measurement of the mower: `NO_SAFETY_MEASUREMENT` holds as on every mower.
+
+`hardware` is for a platform whose launch has the argument `hardware` (`MOWBITE_HARDWARE`): after an installation the
+OS starts with it `false` and no driver opens a port. The step is ok while the drivers run. Its start (only in IDLE,
+only with `restart: host`) asks mowbite-host for `host.hardware` with `on: true`, which writes `MOWBITE_HARDWARE=true`
+into `/etc/mowbite/os.conf` and restarts the OS; the emergency of the missing inputs of an OS without drivers does not
+hold that restart, an update and the restart hold do. After the restart the drivers have to run, else `NOT_APPLIED`.
+Put it right after `platform`, before `board`.
 
 `inputs_assign` is for a driver whose table of inputs is a setting, on a mower that may be wired another way than the
 table of the platform. `params.node` names the node of the driver, each part is one sensor with its `role` (stop,

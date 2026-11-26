@@ -26,7 +26,7 @@ find_package(mowbite_serial REQUIRED)
 
 # The step list of a platform, the program over it and the parameter file it writes, without ROS.
 add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.cpp src/ground.cpp src/blade.cpp
-            src/summary.cpp src/layer.cpp src/platform_choice.cpp src/ports.cpp)
+            src/summary.cpp src/hardware.cpp src/layer.cpp src/platform_choice.cpp src/ports.cpp)
 target_include_directories(mowbite_setup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -60,7 +60,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   # Under ASan the tests of the steps that move take more than a minute.
   ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_motion.cpp
-                  test/test_layer.cpp test/test_summary.cpp test/test_platform_choice.cpp test/test_ports.cpp
+                  test/test_layer.cpp test/test_summary.cpp test/test_hardware.cpp test/test_platform_choice.cpp
+                  test/test_ports.cpp
                   TIMEOUT 300)
   target_link_libraries(mowbite_setup_test mowbite_setup_core)
 endif()

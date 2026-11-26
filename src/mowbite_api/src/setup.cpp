@@ -933,6 +933,23 @@ const std::vector<SetupCheck>& SetupChecks() {
              "once for it.",
              "If a check is missing, finish it first. If the tick does not come after the restart, check the device "
              "file kept by hand."})},
+      {"hardware", "confirm", true, false,
+       "Switches the drivers of the platform on, which an installation leaves off (MOWBITE_HARDWARE=false): ok while "
+       "they run. setup.start asks mowbite-host for host.hardware on, which writes it into the settings of the OS "
+       "and restarts it; after the restart the drivers have to run, else NOT_APPLIED. Only with restart host in the "
+       "step list and in IDLE. Without a safety measurement only the remote control drives and the blade stays "
+       "locked, as with every driver",
+       {Seconds("restart_time", 20, 600, 120, "The OS is back within this time after the restart")},
+       {},
+       {"NOT_APPLIED", "RESTART_FAILED", "STOPPED", "INTERRUPTED"},
+       Both({"Hardware einschalten",
+             "Nach der Installation spricht MowBite OS die Platine noch nicht an. Mit einem Tipp startet es neu und "
+             "schaltet die Treiber ein. Dabei bewegt sich nichts.",
+             "Kommt der Haken nach dem Neustart nicht: den Mäher neu starten und den Schritt wiederholen."},
+            {"Switch the hardware on",
+             "After the installation MowBite OS does not talk to the board yet. One tap restarts it with the drivers "
+             "on. Nothing moves.",
+             "If the tick does not come after the restart: restart the mower and repeat the step."})},
       {"platform", "platform", false, true,
        "Which mower this is: ok while the OS runs as one, the only step while none is chosen (robot_state SETUP with "
        "sub_state PLATFORM, no driver, no port open). setup.platforms lists the mowers of the image, "

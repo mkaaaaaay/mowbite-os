@@ -7032,6 +7032,107 @@
       ],
       "type": "object"
     },
+    "host.hardware.params": {
+      "additionalProperties": false,
+      "description": "The params of host.hardware: On or off",
+      "properties": {
+        "on": {
+          "description": "true: the drivers run, false: they do not start",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "on"
+      ],
+      "type": "object"
+    },
+    "host.hardware.result": {
+      "additionalProperties": false,
+      "description": "The result of host.hardware: os of mowbite/host/status after the restart",
+      "properties": {
+        "last_crash": {
+          "description": "The last end of its container",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "x-unit": "unix s"
+        },
+        "reason": {
+          "description": "Why: CRASH_LOOP when down, the reason of the halt when halted (HOST_OS in x-reasons); else null",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restarts": {
+          "description": "Crashes since its last stable run of 10 min",
+          "type": "integer"
+        },
+        "revision": {
+          "description": "The revision that runs",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "since": {
+          "description": "Since when, unix s",
+          "type": "integer"
+        },
+        "stalled": {
+          "additionalProperties": false,
+          "description": "The node the watch ended it for at its last end, null without one",
+          "properties": {
+            "limit": {
+              "description": "Its limit",
+              "type": "number",
+              "x-unit": "s"
+            },
+            "node": {
+              "description": "The node",
+              "type": "string"
+            },
+            "seconds": {
+              "description": "How long it gave no sign",
+              "type": "number",
+              "x-unit": "s"
+            }
+          },
+          "required": [
+            "node",
+            "seconds",
+            "limit"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "How it is",
+          "enum": [
+            "starting",
+            "running",
+            "stopped",
+            "down",
+            "halted",
+            "updating"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "state",
+        "reason",
+        "since",
+        "restarts",
+        "last_crash",
+        "revision",
+        "stalled"
+      ],
+      "type": "object"
+    },
     "host.restart_os.params": {
       "description": "The params of host.restart_os: None",
       "type": "object"
@@ -17863,11 +17964,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:71",
+  "$id": "urn:mowbite-os:api:72",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same (id: the own id, in actions/json and on action without openmower_names; action: the id with openmower_names; action takes both in either mode), x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS (in params/json and the answer of params.set under /mower_logic with openmower_names, else under /logic), x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 71,
+  "x-api": 72,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -18675,6 +18776,13 @@
       "offered": "while mowbite/host/status says online",
       "params": "#/$defs/host.confirm_start.params",
       "result": "#/$defs/host.confirm_start.result"
+    },
+    "host.hardware": {
+      "description": "Switches the drivers of the platform on or off (MOWBITE_HARDWARE in the settings of the OS) and restarts the OS with the rule of host.restart_os; hardware in mowbite/host/status shows the setting. The setup program asks for it with its step hardware",
+      "node": "mowbite_host",
+      "offered": "while mowbite/host/status says online",
+      "params": "#/$defs/host.hardware.params",
+      "result": "#/$defs/host.hardware.result"
     },
     "host.restart_os": {
       "description": "Starts MowBite OS again, its restarts from 0: always when it is stopped, down or halted, else only in IDLE without an emergency or the restart hold; never during an update. The restart hold judges at the start as always",
@@ -26564,6 +26672,43 @@
             "unit": "m"
           }
         }
+      },
+      "hardware": {
+        "auto": false,
+        "description": "Switches the drivers of the platform on, which an installation leaves off (MOWBITE_HARDWARE=false): ok while they run. setup.start asks mowbite-host for host.hardware on, which writes it into the settings of the OS and restarts it; after the restart the drivers have to run, else NOT_APPLIED. Only with restart host in the step list and in IDLE. Without a safety measurement only the remote control drives and the blade stays locked, as with every driver",
+        "kind": "confirm",
+        "params": {
+          "restart_time": {
+            "default": 120.0,
+            "description": "The OS is back within this time after the restart",
+            "max": 600.0,
+            "min": 20.0,
+            "required": false,
+            "type": "number",
+            "unit": "s"
+          }
+        },
+        "reasons": [
+          "NOT_APPLIED",
+          "RESTART_FAILED",
+          "STOPPED",
+          "INTERRUPTED"
+        ],
+        "safety": false,
+        "start": true,
+        "texts": {
+          "de": {
+            "fix": "Kommt der Haken nach dem Neustart nicht: den Mäher neu starten und den Schritt wiederholen.",
+            "help": "Nach der Installation spricht MowBite OS die Platine noch nicht an. Mit einem Tipp startet es neu und schaltet die Treiber ein. Dabei bewegt sich nichts.",
+            "name": "Hardware einschalten"
+          },
+          "en": {
+            "fix": "If the tick does not come after the restart: restart the mower and repeat the step.",
+            "help": "After the installation MowBite OS does not talk to the board yet. One tap restarts it with the drivers on. Nothing moves.",
+            "name": "Switch the hardware on"
+          }
+        },
+        "values": {}
       },
       "imu": {
         "auto": true,

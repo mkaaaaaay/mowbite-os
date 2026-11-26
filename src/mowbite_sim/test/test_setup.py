@@ -41,10 +41,10 @@ FILE = os.path.join(WORK, "setup.json")
 SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
 DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end", "ground", "blade")
-# inputs_assign and summary restart the OS; summary needs the step silence before it as well. The step platform is ok
-# by itself (test_platform_choice.py).
+# inputs_assign and summary restart the OS; summary needs the step silence before it as well. The steps platform
+# (test_platform_choice.py) and hardware (the drivers run here) are ok by themselves.
 LIST["steps"] = [step for step in LIST["steps"]
-                 if step["check"] not in ("inputs_assign", "summary", "platform") + DRIVE]
+                 if step["check"] not in ("inputs_assign", "summary", "platform", "hardware") + DRIVE]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)

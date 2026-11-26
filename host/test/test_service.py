@@ -238,6 +238,60 @@ class RestartTest(HostBase):
         self.updater.join()
 
 
+class HardwareTest(HostBase):
+    def conf(self):
+        with open(self.paths.env_files[-1]) as f:
+            return f.read()
+
+    def test_on_writes_os_conf_and_restarts(self):
+        self.install()
+        os.makedirs(os.path.dirname(self.paths.env_files[-1]), exist_ok=True)
+        self.write(self.paths.env_files[0], "MOWBITE_HARDWARE=false\n")
+        self.write(self.paths.env_files[-1], "# kept\n#MOWBITE_HARDWARE=true\nMOWBITE_REAR=on\n")
+        self.fake.stop()
+        answer = self.answer("host.hardware", {"on": True})
+        self.assertEqual(answer["result"]["state"], "running", answer)
+        self.assertTrue(self.fake.running)
+        self.assertEqual(self.conf(), "# kept\n#MOWBITE_HARDWARE=true\nMOWBITE_REAR=on\nMOWBITE_HARDWARE=true\n")
+        self.assertTrue(self.published.last(service.HOST_STATUS)[1]["hardware"])
+        # Off again: the line takes the new value, a second one of the key goes.
+        self.write(self.paths.env_files[-1], "MOWBITE_HARDWARE=true\nMOWBITE_HARDWARE=read\n")
+        self.assertIn("result", self.answer("host.hardware", {"on": False}))
+        self.assertEqual(self.conf(), "MOWBITE_HARDWARE=false\n")
+        self.assertFalse(self.published.last(service.HOST_STATUS)[1]["hardware"])
+
+    def test_the_rule_of_the_restart_and_its_params(self):
+        self.install()
+        os.makedirs(os.path.dirname(self.paths.env_files[-1]), exist_ok=True)
+        self.assertEqual(self.answer("host.hardware", {"on": "yes"})["error"]["data"]["reason"], "INVALID")
+        self.assertEqual(self.answer("host.hardware")["error"]["data"]["reason"], "INVALID")
+        self.fake.session(state="MOWING")
+        self.assertEqual(self.answer("host.hardware", {"on": True})["error"]["data"]["reason"], "BUSY")
+        # Refused before anything is written.
+        self.assertFalse(os.path.exists(self.paths.env_files[-1]))
+        # With the drivers on an emergency refuses as for host.restart_os.
+        self.fake.session(emergency=True)
+        self.assertEqual(self.answer("host.hardware", {"on": False})["error"]["data"]["reason"], "EMERGENCY")
+        self.assertEqual(self.answer("host.hardware", {"on": True})["error"]["data"]["reason"], "EMERGENCY")
+
+    def test_without_drivers_their_missing_inputs_do_not_hold_it(self):
+        self.install()
+        self.write(self.paths.env_files[0], "MOWBITE_HARDWARE=false\n")
+        os.makedirs(os.path.dirname(self.paths.env_files[-1]), exist_ok=True)
+        # The OS without drivers: IDLE with the emergency of the inputs that never came.
+        self.fake.session(emergency=True)
+        self.assertEqual(self.answer("host.hardware", {"on": False})["error"]["data"]["reason"], "EMERGENCY")
+        self.assertEqual(self.answer("host.hardware", {"on": True})["result"]["state"], "running")
+        self.assertEqual(self.conf(), "MOWBITE_HARDWARE=true\n")
+        # Not while it does anything else, and not past the restart hold.
+        self.write(self.paths.env_files[-1], "MOWBITE_HARDWARE=false\n")
+        self.fake.session(state="RECORDING", emergency=True)
+        self.assertEqual(self.answer("host.hardware", {"on": True})["error"]["data"]["reason"], "EMERGENCY")
+        self.fake.session(emergency=True)
+        files.write_json(self.paths.restart_hold, {"cause": "OS_CRASH"})
+        self.assertEqual(self.answer("host.hardware", {"on": True})["error"]["data"]["reason"], "EMERGENCY")
+
+
 class OsStateTest(HostBase):
     def read(self):
         return self.watch.read()

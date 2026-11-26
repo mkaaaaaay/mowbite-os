@@ -60,6 +60,7 @@ std::optional<Refusal> Program::ChoosePlatform(const json& params, double wall, 
     reached_.clear();
     CloseWithReset(wall);
     MarkPlatform();
+    MarkHardware();
   }
   events_.push_back({"SETUP", {{"what", "platform"}, {"platform", name}, {"from", chosen_}}});
   choice_ = name;
