@@ -18,6 +18,8 @@ inline std::vector<std::string> FirmwareList(const nlohmann::json& j, const std:
   return one.empty() ? std::vector<std::string>{} : std::vector<std::string>{one};
 }
 
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(FirmwarePair, cutter, chassis)
+
 inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j = nlohmann::json::object();
   j["heartbeat_period_s"] = c.heartbeat_period_s;
@@ -44,11 +46,14 @@ inline void to_json(nlohmann::json& j, const McuControlConfig& c) {
   j["clear_min_interval_s"] = c.clear_min_interval_s;
   j["cutter_firmware"] = c.cutter_firmware;
   j["chassis_firmware"] = c.chassis_firmware;
+  j["measured_firmware"] = c.measured_firmware;
+  j["device_hash"] = c.device_hash;
   j["stop_release"] = c.stop_release;
   j["stop_clear_period_s"] = c.stop_clear_period_s;
   j["stop_clear_delay_s"] = c.stop_clear_delay_s;
   j["start_latched"] = c.start_latched;
   j["silence_max_s"] = c.silence_max_s;
+  j["silence_last_setpoint_max_s"] = c.silence_last_setpoint_max_s;
   j["speed_heartbeat"] = static_cast<int>(c.speed_heartbeat);
   j["heartbeat_after_speed_s"] = c.heartbeat_after_speed_s;
   j["silence_after"] = static_cast<int>(c.silence_after);
@@ -82,11 +87,14 @@ inline void from_json(const nlohmann::json& j, McuControlConfig& c) {
   j.at("clear_min_interval_s").get_to(c.clear_min_interval_s);
   c.cutter_firmware = FirmwareList(j, "cutter");
   c.chassis_firmware = FirmwareList(j, "chassis");
+  c.measured_firmware = j.value("measured_firmware", std::vector<FirmwarePair>{});
+  c.device_hash = j.value("device_hash", std::string());
   j.at("stop_release").get_to(c.stop_release);
   c.stop_clear_period_s = j.value("stop_clear_period_s", McuControlConfig{}.stop_clear_period_s);
   c.stop_clear_delay_s = j.value("stop_clear_delay_s", McuControlConfig{}.stop_clear_delay_s);
   c.start_latched = j.value("start_latched", false);
   c.silence_max_s = j.value("silence_max_s", 0.0);
+  c.silence_last_setpoint_max_s = j.value("silence_last_setpoint_max_s", 0.0);
   c.speed_heartbeat = static_cast<McuControlConfig::SpeedHeartbeat>(j.value("speed_heartbeat", 0));
   c.heartbeat_after_speed_s = j.value("heartbeat_after_speed_s", McuControlConfig{}.heartbeat_after_speed_s);
   c.silence_after = static_cast<McuControlConfig::SilenceAfter>(j.value("silence_after", 0));
@@ -103,7 +111,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(WallClock, year, month, day, hour, minute, se
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(BladeRequest, on, speed_percent, height_mm, lease_s)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(SubPacket, type, module, payload)
 
-static_assert(sizeof(McuControlConfig) == 288);
+static_assert(sizeof(McuControlConfig) == 352);
 static_assert(sizeof(SensorInfo) == 10);
 static_assert(sizeof(ImuCounts) == 18);
 static_assert(sizeof(VersionInfo) == 9);
@@ -149,7 +157,8 @@ struct mowbite_journal::CoreTraits<tron::McuControl> {
                           &tron::McuControl::Silence, &tron::McuControl::End,
                           &tron::McuControl::SilenceWithBlade, &tron::McuControl::OnWheelSpeed,
                           &tron::McuControl::OnSetupMotion, &tron::McuControl::OnFrame,
-                          &tron::McuControl::OnBladeMotorStatus);
+                          &tron::McuControl::OnBladeMotorStatus, &tron::McuControl::OnFirmwareMeasure,
+                          &tron::McuControl::SilenceLastSetpoint);
 
   // Every call with the wall clock, for a copy of a journal without its place (mowbite_replay anonymize): the date of
   // a tick and of the heartbeat it sends.

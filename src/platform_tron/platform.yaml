@@ -82,10 +82,15 @@ tron_mcu:
     # MCU stopped the blade within 0.6 s (14.11.), the wheels only in some runs (above), and in 20 s it latched nothing
     # by itself (15.11.).
     silence_max: 3.0
+    # Longest hw/silence after a setpoint as the last frame (FP55, M6): the MCU kept it 3.58 to 3.61 s (T9).
+    silence_last_setpoint_max: 5.0
     # Firmware of the cutter and chassis boards the driver was measured with (since 07.11., vendor stand 1.3.32).
     # Firmware outside a list blocks motion and blade (FIRMWARE_INCOMPATIBLE); add one only after the measurements.
+    # Newer firmware an owner measured on this device drives as well: measured_firmware in tron.setup.yaml, entries
+    # "<cutter>/<chassis>/<sha256 of the content of device_id_file>", read at the start.
     cutter_firmware: ["0.6.36"]
     chassis_firmware: ["0.6.34"]
+    device_id_file: ""
     # Set after the safety measurement in phase 6 (hw/capabilities): the time the MCU keeps the last setpoint without
     # a heartbeat in s (-1 unknown), and the date of the measurement. Without the date only remote control.
     failsafe_without_host: -1.0

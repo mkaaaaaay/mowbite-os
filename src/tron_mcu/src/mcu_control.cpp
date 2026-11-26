@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdlib>
 #include <stdexcept>
+#include <tuple>
 
 namespace tron {
 
@@ -14,7 +15,96 @@ bool VersionListed(const std::vector<std::string>& listed, const Version& versio
   return listed.empty() || std::find(listed.begin(), listed.end(), VersionString(version)) != listed.end();
 }
 
+bool IsMotionSpeed(const SubPacket& packet) {
+  return packet.type == static_cast<uint8_t>(PacketType::kHostToMcu) &&
+         packet.module == static_cast<uint8_t>(Module::kSpeed) && packet.payload != ZeroSpeedPacket().payload;
+}
+
+bool Older(const Version& a, const Version& b) {
+  return std::tie(a.major, a.minor, a.patch) < std::tie(b.major, b.minor, b.patch);
+}
+
+// Older than every stand of a non-empty list; an unreadable entry counts as older than anything.
+bool OlderThanListed(const std::vector<std::string>& listed, const Version& version) {
+  if (listed.empty()) return false;
+  for (const std::string& entry : listed) {
+    const std::optional<Version> stand = ParseVersion(entry);
+    if (stand && !Older(version, *stand)) return false;
+  }
+  return true;
+}
+
+bool LowerHex(const std::string& text, size_t length) {
+  return text.size() == length &&
+         std::all_of(text.begin(), text.end(), [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'); });
+}
+
+// Both wheels scaled alike so that the faster one stays within max_wheel and the curve keeps its radius.
+void CapWheels(float& linear, float& angular, float max_wheel) {
+  const float fastest = std::abs(linear) + std::abs(angular) * kHalfTrack;
+  if (!(fastest > max_wheel)) return;
+  const float scale = max_wheel / fastest;
+  linear *= scale;
+  angular *= scale;
+}
+
 }  // namespace
+
+const char* FirmwareSourceText(FirmwareSource source) {
+  switch (source) {
+    case FirmwareSource::kUnknown: return "";
+    case FirmwareSource::kListed: return "listed";
+    case FirmwareSource::kMeasured: return "measured";
+    case FirmwareSource::kOlder: return "older";
+    case FirmwareSource::kNone: return "none";
+  }
+  return "";
+}
+
+std::optional<Version> ParseVersion(const std::string& text) {
+  int parts[3];
+  size_t at = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (i > 0) {
+      if (at >= text.size() || text[at] != '.') return std::nullopt;
+      ++at;
+    }
+    const size_t begin = at;
+    int value = 0;
+    while (at < text.size() && text[at] >= '0' && text[at] <= '9' && at - begin < 3) {
+      value = value * 10 + (text[at] - '0');
+      ++at;
+    }
+    if (at == begin || value > 255) return std::nullopt;
+    parts[i] = value;
+  }
+  if (at != text.size()) return std::nullopt;
+  return Version{static_cast<uint8_t>(parts[0]), static_cast<uint8_t>(parts[1]), static_cast<uint8_t>(parts[2])};
+}
+
+std::vector<FirmwarePair> MeasuredFirmware(const std::vector<std::string>& entries, const std::string& device_hash,
+                                           std::vector<std::string>* malformed, int* other_devices) {
+  std::vector<FirmwarePair> pairs;
+  if (other_devices) *other_devices = 0;
+  for (const std::string& entry : entries) {
+    const size_t first = entry.find('/');
+    const size_t second = first == std::string::npos ? first : entry.find('/', first + 1);
+    const bool three = second != std::string::npos && entry.find('/', second + 1) == std::string::npos;
+    const std::string cutter = three ? entry.substr(0, first) : "";
+    const std::string chassis = three ? entry.substr(first + 1, second - first - 1) : "";
+    const std::string hash = three ? entry.substr(second + 1) : "";
+    if (!three || !ParseVersion(cutter) || !ParseVersion(chassis) || !LowerHex(hash, 64)) {
+      if (malformed) malformed->push_back(entry);
+      continue;
+    }
+    if (device_hash.empty() || hash != device_hash) {
+      if (other_devices) ++*other_devices;
+      continue;
+    }
+    pairs.push_back({cutter, chassis});
+  }
+  return pairs;
+}
 
 const char* BladeResultText(BladeResult result) {
   switch (result) {
@@ -39,6 +129,7 @@ const char* HostTestRefusalCode(HostTestRefusal refusal) {
     case HostTestRefusal::kBusy: return "BUSY";
     case HostTestRefusal::kBlade: return "BLADE";
     case HostTestRefusal::kNoSetup: return "NO_SETUP";
+    case HostTestRefusal::kLastSetpoint: return "LAST_SETPOINT";
   }
   return "";
 }
@@ -64,6 +155,7 @@ void CheckConfig(const McuControlConfig& config, bool heartbeat_only) {
   CheckRange("speed_repeat_window", config.speed_repeat_window_s, true, 3.0);
   CheckRange("blade_stop_time", config.blade_stop_time_s, true, 30.0);
   CheckRange("wheel_stop_time", config.wheel_stop_time_s, true, 10.0);
+  CheckRange("silence_last_setpoint_max", config.silence_last_setpoint_max_s, true, kMaxSilenceLastSetpointS);
 }
 
 McuControl::McuControl(const McuControlConfig& config) : config_(config) {
@@ -142,12 +234,31 @@ void McuControl::OnSetupMotion(bool active, double now) {
 }
 
 bool McuControl::OnVersions(const VersionInfo& versions) {
-  const bool ok = VersionListed(config_.cutter_firmware, versions.cutter_board) &&
-                  VersionListed(config_.chassis_firmware, versions.chassis_board);
+  versions_ = versions;
+  const FirmwarePair pair{VersionString(versions.cutter_board), VersionString(versions.chassis_board)};
+  const auto& measured = config_.measured_firmware;
+  if (VersionListed(config_.cutter_firmware, versions.cutter_board) &&
+      VersionListed(config_.chassis_firmware, versions.chassis_board)) {
+    firmware_source_ = FirmwareSource::kListed;
+  } else if (OlderThanListed(config_.cutter_firmware, versions.cutter_board) ||
+             OlderThanListed(config_.chassis_firmware, versions.chassis_board)) {
+    // Older firmware is never measured: an entry for it does not count.
+    firmware_source_ = FirmwareSource::kOlder;
+  } else if (!config_.device_hash.empty() && std::find(measured.begin(), measured.end(), pair) != measured.end()) {
+    firmware_source_ = FirmwareSource::kMeasured;
+  } else {
+    firmware_source_ = FirmwareSource::kNone;
+  }
+  const bool ok = firmware_source_ == FirmwareSource::kListed || firmware_source_ == FirmwareSource::kMeasured;
   // A mismatch also latches, so motion after a later matching frame still needs a release.
   if (!ok && firmware_ok_ != false) LatchEmergency(kReasonFirmwareIncompatible);
   firmware_ok_ = ok;
   return ok;
+}
+
+void McuControl::OnFirmwareMeasure(bool active, const std::string& cutter, const std::string& chassis,
+                                   const std::string& device_hash, uint32_t clear_seq, double now) {
+  measure_ = MeasureSignal{active, cutter, chassis, device_hash, clear_seq, now};
 }
 
 void McuControl::LatchEmergency(uint32_t reason) {
@@ -241,6 +352,8 @@ void McuControl::OnConnected(double now) {
   blade_on_.reset();
   // After the port reopens the MCU might run another firmware, e.g. after an update.
   firmware_ok_.reset();
+  firmware_source_ = FirmwareSource::kUnknown;
+  versions_.reset();
   connected_s_ = now;
   heard_ = false;
   moving_ = false;
@@ -275,19 +388,25 @@ HostTestRefusal McuControl::SilenceWithBlade(double seconds, double now) {
   return StartSilence(seconds, now, true);
 }
 
-HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade) {
+HostTestRefusal McuControl::SilenceLastSetpoint(double seconds, double now) {
+  if (config_.silence_last_setpoint_max_s <= 0) return HostTestRefusal::kLastSetpoint;
+  return StartSilence(seconds, now, false, true);
+}
+
+HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade, bool last_setpoint) {
   if (silent_until_s_ || armed_silence_ || ended_) return HostTestRefusal::kBusy;
-  if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > config_.silence_max_s) {
-    return HostTestRefusal::kOutOfRange;
-  }
+  const double max = last_setpoint ? config_.silence_last_setpoint_max_s : config_.silence_max_s;
+  if (!std::isfinite(seconds) || seconds < kMinSilenceS || seconds > max) return HostTestRefusal::kOutOfRange;
   // Only a running setup step may silence the driver: in normal operation the cmd_vel timeout has to stay in force.
   if (!setup_motion_s_ || now - *setup_motion_s_ > kSetupMotionFreshS + kDeadlineSlackS) {
     return HostTestRefusal::kNoSetup;
   }
   const HostTestRefusal refusal = HostTestRefused(blade);
   if (refusal != HostTestRefusal::kNone) return refusal;
-  if (config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
-    armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS};
+  silence_stop_delay_s_ =
+      last_setpoint ? std::max(config_.silence_stop_delay_s, kLastSetpointStopDelayS) : config_.silence_stop_delay_s;
+  if (last_setpoint || config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
+    armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS, last_setpoint};
   } else {
     silent_until_s_ = now + seconds;
   }
@@ -308,7 +427,7 @@ void McuControl::EndSilence(double now) {
   release_until_s_.reset();
   // The MCU might still run the last setpoint; its blade state is unknown.
   moving_ = false;
-  StartStop(now, config_.silence_stop_delay_s);
+  StartStop(now, silence_stop_delay_s_);
   blade_on_.reset();
   StartRepeat(blade_off_repeat_, BladeOff(), now);
   blade_off_since_s_ = now;
@@ -317,8 +436,25 @@ void McuControl::EndSilence(double now) {
   stop_release_.Interrupt();
 }
 
+bool McuControl::SilenceAfterSetpoint(double now, std::vector<SubPacket>& out) {
+  auto last = out.end();
+  for (auto it = out.begin(); it != out.end(); ++it) {
+    if (IsMotionSpeed(*it)) last = it;
+  }
+  if (last == out.end()) return false;
+  std::rotate(last, last + 1, out.end());
+  late_heartbeat_s_.reset();
+  silent_until_s_ = now + armed_silence_->seconds;
+  armed_silence_.reset();
+  return true;
+}
+
 void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<SubPacket>& out) {
   using Mode = McuControlConfig::SpeedHeartbeat;
+  if (armed_silence_ && armed_silence_->last_setpoint) {
+    if (SilenceAfterSetpoint(now, out)) return;
+    if (now > armed_silence_->until_s) armed_silence_.reset();
+  }
   bool motion = false;
   bool blade_on = false;
   bool late = false;
@@ -329,7 +465,7 @@ void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<Su
       blade_on = true;
     }
     if (packet.module != static_cast<uint8_t>(Module::kSpeed)) continue;
-    if (packet.payload != ZeroSpeedPacket().payload) motion = true;
+    if (IsMotionSpeed(packet)) motion = true;
     if (config_.speed_heartbeat == Mode::kLater) late_heartbeat_s_ = now + config_.heartbeat_after_speed_s;
     if (config_.speed_heartbeat == Mode::kAfter) {
       // Last in the loop: the insert moves what packet refers to.
@@ -342,7 +478,7 @@ void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<Su
     late = true;
   }
 
-  if (!armed_silence_) return;
+  if (!armed_silence_ || armed_silence_->last_setpoint) return;
   using After = McuControlConfig::SilenceAfter;
   const bool speed_tick = config_.speed_heartbeat == Mode::kLater ? late : motion;
   if ((config_.silence_after == After::kSpeed && speed_tick) || (config_.silence_after == After::kCutter && blade_on)) {
@@ -356,12 +492,33 @@ void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<Su
 bool McuControl::StopClearReady(double now) const {
   return config_.stop_release && config_.stop_clear_period_s > 0 && latched_ && latched_since_s_ &&
          now - *latched_since_s_ + kDeadlineSlackS >= config_.stop_clear_delay_s && !release_until_s_ &&
-         !blade_on_ && !blade_turning_ && !TelemetryStale(now) && !ImuStale(now) && !NoImuYet();
+         !blade_on_ && !blade_turning_ && !TelemetryStale(now) && !ImuStale(now) && !NoImuYet() &&
+         !MeasureSignalFresh(now);
+}
+
+bool McuControl::MeasureSignalFresh(double now) const {
+  return measure_ && measure_->active && now - measure_->s <= kFirmwareMeasureFreshS + kDeadlineSlackS;
+}
+
+bool McuControl::MeasureOpen(double now) const {
+  return firmware_source_ == FirmwareSource::kNone && versions_ && !config_.device_hash.empty() &&
+         MeasureSignalFresh(now) && measure_->device_hash == config_.device_hash &&
+         measure_->cutter == VersionString(versions_->cutter_board) &&
+         measure_->chassis == VersionString(versions_->chassis_board);
+}
+
+bool McuControl::MeasureClearPending(double now) const {
+  return MeasureSignalFresh(now) && measure_clear_seen_ && measure_->clear_seq != *measure_clear_seen_;
+}
+
+bool McuControl::MeasureClearReady(double now) const {
+  return MeasureClearPending(now) && !moving_ && !wheel_fast_since_s_ && !wheels_turning_ && !blade_request_ &&
+         !blade_on_ && !blade_turning_ && !blade_rpm_high_ && !TelemetryStale(now) && (stop_clear_mark_ || !Stop(now));
 }
 
 bool McuControl::Blocked(double now) const {
   return !heard_ || silent_until_s_ || ended_ || held_ || latched_ || TelemetryStale(now) || NoImuYet() ||
-         FirmwareUnconfirmed();
+         FirmwareUnconfirmed(now);
 }
 
 // As hw/status shows it: a first frame, an IMU or a version frame still due after the start blocks without an
@@ -412,13 +569,13 @@ bool McuControl::BoardNotHeard(double now) const {
   return !heard_ && (!connected_s_ || now - *connected_s_ > config_.telemetry_timeout_s + kDeadlineSlackS);
 }
 
-bool McuControl::FirmwareUnconfirmed() const {
+bool McuControl::FirmwareUnconfirmed(double now) const {
   const bool checked = !config_.cutter_firmware.empty() || !config_.chassis_firmware.empty();
-  return checked && firmware_ok_ != true;
+  return checked && firmware_ok_ != true && !MeasureOpen(now);
 }
 
 bool McuControl::FirmwareIncompatible(double now) const {
-  if (!heard_ || !FirmwareUnconfirmed()) return false;
+  if (!heard_ || !FirmwareUnconfirmed(now)) return false;
   if (firmware_ok_.has_value()) return true;
   const std::optional<double> since = connected_s_ ? connected_s_ : start_s_;
   return since && now - *since > kVersionStartS + kDeadlineSlackS;
@@ -575,6 +732,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     out.push_back(SensorClearPacket());
     last_stop_clear_s_ = now;
   }
+  UpdateMeasure(now, out);
 
   const bool blocked = Blocked(now);
   const bool dock_contact = DockContact();
@@ -601,6 +759,12 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
       }
       pending_cmd_.reset();
     } else if (now + kDeadlineSlackS >= next_speed_s_) {
+      if (MeasureOpen(now)) {
+        float linear = pending_cmd_->linear;
+        float angular = pending_cmd_->angular;
+        CapWheels(linear, angular, kMeasureMaxWheelSpeed);
+        packet = SpeedPacket(linear, angular);
+      }
       stop_repeat_.remaining = 0;
       wheel_stop_s_.reset();
       out.push_back(*packet);
@@ -664,6 +828,33 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   return out;
 }
 
+void McuControl::UpdateMeasure(double now, std::vector<SubPacket>& out) {
+  const bool open = MeasureOpen(now);
+  if (measure_open_ && !open) {
+    // The measurement no longer holds: stop, blade off, and a new reason that a release asked for before does not end.
+    Latch(kReasonFirmwareIncompatible, true);
+    release_until_s_.reset();
+    if (moving_ || !DockContact()) StartStop(now);
+    moving_ = false;
+    pending_cmd_.reset();
+    DropBlade(BladeOffReason::kBlocked);
+  }
+  measure_open_ = open;
+
+  if (!MeasureSignalFresh(now)) {
+    measure_clear_seen_.reset();
+    return;
+  }
+  if (!measure_clear_seen_) measure_clear_seen_ = measure_->clear_seq;
+  if (!MeasureClearReady(now)) return;
+  // As every clear: the MCU might pick up the last setpoint again once its latch is gone.
+  out.push_back(ZeroSpeedPacket());
+  out.push_back(SensorClearPacket());
+  measure_clear_seen_ = measure_->clear_seq;
+  measure_clear_sent_ = measure_->clear_seq;
+  measure_clear_s_ = now;
+}
+
 void McuControl::UpdateStopRelease(bool stop, bool lift, bool latched_before, double now) {
   if (stop_release_.Sample(stop, now) && ++latch_count_ == 0) latch_count_ = 1;
   StopReleaseInput input;
@@ -695,10 +886,15 @@ McuControlStatus McuControl::Status(double now) const {
   status.dock_contact = DockContact();
   status.dock_contact_raw = dock_raw_;
   status.firmware_incompatible = FirmwareIncompatible(now);
+  status.firmware_source = firmware_source_;
+  status.measuring = MeasureOpen(now);
+  status.clear_seq = measure_clear_sent_;
+  status.clear_s = measure_clear_s_;
   status.held = held_;
   status.latch_count = latch_count_;
   status.stop_event = stop_event_;
-  status.stop_clear_mark_wanted = !stop_clear_mark_ && Stop(now) && StopClearReady(now);
+  status.stop_clear_mark_wanted =
+      !stop_clear_mark_ && Stop(now) && (StopClearReady(now) || MeasureClearPending(now));
   status.silent = silent_until_s_.has_value();
   status.ended = ended_;
   return status;

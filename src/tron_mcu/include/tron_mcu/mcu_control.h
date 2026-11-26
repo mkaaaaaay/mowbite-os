@@ -12,6 +12,15 @@
 
 namespace tron {
 
+// A pair of board firmware an owner measured on one device (FP55).
+struct FirmwarePair {
+  std::string cutter;
+  std::string chassis;
+  bool operator==(const FirmwarePair& other) const {
+    return cutter == other.cutter && chassis == other.chassis;
+  }
+};
+
 struct McuControlConfig {
   double heartbeat_period_s = 0.1;
   // Silence on cmd_vel after which the wheels are stopped.
@@ -63,6 +72,10 @@ struct McuControlConfig {
   // check, motion and blade stay blocked until a version frame names a listed firmware; a release does not lift it.
   std::vector<std::string> cutter_firmware;
   std::vector<std::string> chassis_firmware;
+  // Pairs measured on this device, from measured_firmware of the driver (MeasuredFirmware). Not older than the lists.
+  std::vector<FirmwarePair> measured_firmware;
+  // sha256 (hex) of the id of this device; empty: no measurement opens.
+  std::string device_hash;
   // The STOP gesture (G37) is recognised and reported in Status; the release is up to the logic.
   bool stop_release = false;
   // With stop_release: the MCU keeps stop after a press until a clear frame, so while the emergency is latched and the
@@ -74,6 +87,8 @@ struct McuControlConfig {
   double stop_clear_delay_s = 1.5;
   // Longest hw/silence; 0 offers none.
   double silence_max_s = 0;
+  // Longest hw/silence with last_setpoint; 0 offers none.
+  double silence_last_setpoint_max_s = 0;
   // How the MCU ends a setpoint without its host (H3, T9): kLater is the setting of the Tron, kAfter a measurement.
   // speed_heartbeat: kAfter adds a heartbeat right after each SpeedData of a tick, kLater one heartbeat_after_speed_s
   // after the last SpeedData; the heartbeats of their own schedule go on.
@@ -147,6 +162,15 @@ struct McuInput {
 
 // Shortest hw/silence, as in the contract.
 constexpr double kMinSilenceS = 0.2;
+// Upper bound of silence_last_setpoint_max_s: the MCU kept a setpoint 3.6 s without host (T9).
+constexpr double kMaxSilenceLastSetpointS = 5.0;
+// After a silence with last_setpoint the stop frames wait this long while heartbeats go, so that a setpoint the MCU
+// picks up again on a heartbeat shows.
+constexpr double kLastSetpointStopDelayS = 0.5;
+// setup/firmware_measure counts only this long after it came; the setup program sends it at 4 Hz.
+constexpr double kFirmwareMeasureFreshS = 0.5;
+// Each wheel while a measurement drives unlisted firmware (m/s).
+constexpr float kMeasureMaxWheelSpeed = 0.1f;
 // The MCU sends its version frame on its own at about 1.7 Hz. Until the first one after the port opened, motion and
 // blade are blocked; past this time without one the block is reported as FIRMWARE_INCOMPATIBLE.
 constexpr double kVersionStartS = 3.0;
@@ -158,10 +182,24 @@ constexpr double kSetupMotionFreshS = 1.0;
 constexpr double kWheelTurningS = 0.3;
 
 // Why hw/silence or hw/end was refused; kNone when it was taken.
-enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade, kNoSetup };
+enum class HostTestRefusal : uint8_t { kNone, kOutOfRange, kCharging, kBusy, kBlade, kNoSetup, kLastSetpoint };
 
-// The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE, NO_SETUP; empty for kNone.
+// The code of the service answer: OUT_OF_RANGE, CHARGING, BUSY, BLADE, NO_SETUP, LAST_SETPOINT; empty for kNone.
 const char* HostTestRefusalCode(HostTestRefusal refusal);
+
+// Whether the firmware the boards report may drive, as hw/capabilities.firmware_source names it.
+enum class FirmwareSource : uint8_t { kUnknown, kListed, kMeasured, kOlder, kNone };
+
+// "", listed, measured, older, none.
+const char* FirmwareSourceText(FirmwareSource source);
+
+// "major.minor.patch" with each part 0 to 255; nothing otherwise.
+std::optional<Version> ParseVersion(const std::string& text);
+
+// The pairs of measured_firmware ("<cutter>/<chassis>/<device_hash>", hash 64 lowercase hex) for device_hash, none
+// for an empty one. Entries of another form go to malformed, those of other devices are only counted.
+std::vector<FirmwarePair> MeasuredFirmware(const std::vector<std::string>& entries, const std::string& device_hash,
+                                           std::vector<std::string>* malformed = nullptr, int* other_devices = nullptr);
 
 enum class BladeResult { kOk, kNotAllowed, kInvalidLease, kInvalidSpeed, kInvalidHeight, kBlocked, kDocked, kHeld,
                          kMotorFault };
@@ -187,6 +225,12 @@ struct McuControlStatus {
   bool dock_contact_raw = false;
   // A version frame that does not match, or none within kVersionStartS after the port opened.
   bool firmware_incompatible = false;
+  FirmwareSource firmware_source = FirmwareSource::kUnknown;
+  // setup/firmware_measure lets this firmware drive within kMeasureMaxWheelSpeed.
+  bool measuring = false;
+  // The last clear setup/firmware_measure asked for that went out, and when; 0 and empty before the first.
+  uint32_t clear_seq = 0;
+  std::optional<double> clear_s;
   // An update holds the mower: motion and blade blocked without an emergency.
   bool held = false;
   // Counts every new reason: a press of STOP (debounced), lift or bumper rising, a bit new in the latch. Never 0 once
@@ -227,8 +271,15 @@ class McuControl {
   void OnWheelSpeed(float linear, float angular, double now);
   // setup/motion of the setup program: a step that moves the wheels or the blade runs while it is active.
   void OnSetupMotion(bool active, double now);
-  // Version frame of the MCU, about once a second. Returns false if a board runs firmware outside its list.
+  // Version frame of the MCU, about once a second. Returns false unless the firmware is listed or measured here.
   bool OnVersions(const VersionInfo& versions);
+  // setup/firmware_measure: while it is active, at most kFirmwareMeasureFreshS old, names the firmware the boards report
+  // and the device_hash of the config, and that firmware is none, motion and blade are allowed, each wheel up to
+  // kMeasureMaxWheelSpeed. Once it no longer holds: stop, blade off, latched (FIRMWARE_INCOMPATIBLE). While it is
+  // active and fresh, whatever the firmware, STOP is not cleared on its own; a change of clear_seq asks for one clear,
+  // sent once the wheels and the blade stand. The first after a gap only sets where clear_seq stands.
+  void OnFirmwareMeasure(bool active, const std::string& cutter, const std::string& chassis,
+                         const std::string& device_hash, uint32_t clear_seq, double now);
 
   // Lift, stop and bumper latch the emergency as well; all of it stays until released, with its reason bits.
   void LatchEmergency(uint32_t reason);
@@ -261,6 +312,10 @@ class McuControl {
   // As Silence, also with the blade on or turning: the MCU has to stop it without its host. The blade request is gone
   // afterwards.
   HostTestRefusal SilenceWithBlade(double seconds, double now);
+  // As Silence, but up to silence_last_setpoint_max_s, refused with kLastSetpoint without it: starts right after the
+  // next tick that sends a motion setpoint, with that SpeedData as the last frame, so that the MCU keeps it by its own
+  // limit only. Its stop frames wait kLastSetpointStopDelayS while heartbeats go.
+  HostTestRefusal SilenceLastSetpoint(double seconds, double now);
   // hw/end: from now on no frame to the MCU; the node then ends the process like a crash. Also during a silence.
   HostTestRefusal End();
 
@@ -272,6 +327,9 @@ class McuControl {
   // hw/end.
   std::vector<SubPacket> GuardFrames() const;
   McuControlStatus Status(double now) const;
+  const McuControlConfig& Config() const {
+    return config_;
+  }
   // STOP, lift and the two bumpers; none active without fresh telemetry.
   std::array<McuInput, 4> Inputs(double now) const;
 
@@ -301,10 +359,14 @@ class McuControl {
   void Latch(uint32_t reason, bool rising = false);
   void CountReason();
   void UpdateStopRelease(bool stop, bool lift, bool latched_before, double now);
+  // Closing of the measurement window and the clears setup/firmware_measure asks for.
+  void UpdateMeasure(double now, std::vector<SubPacket>& out);
   bool StopClearReady(double now) const;
   bool Blocked(double now) const;
   HostTestRefusal HostTestRefused(bool blade) const;
-  HostTestRefusal StartSilence(double seconds, double now, bool blade);
+  HostTestRefusal StartSilence(double seconds, double now, bool blade, bool last_setpoint = false);
+  // Moves the motion setpoint of this tick to its end and starts an armed silence with last_setpoint; false without one.
+  bool SilenceAfterSetpoint(double now, std::vector<SubPacket>& out);
   void EndSilence(double now);
   // The measurement settings of the config: heartbeats after SpeedData, the start of an armed silence.
   void TieHeartbeats(double now, const WallClock& wall, std::vector<SubPacket>& out);
@@ -317,7 +379,12 @@ class McuControl {
   bool NoImuYet() const;
   bool ImuStarting(double now) const;
   bool BoardNotHeard(double now) const;
-  bool FirmwareUnconfirmed() const;
+  bool FirmwareUnconfirmed(double now) const;
+  bool MeasureSignalFresh(double now) const;
+  bool MeasureOpen(double now) const;
+  // A clear asked for by setup/firmware_measure may go out: wheels and blade stand, and the mark is there for STOP.
+  bool MeasureClearPending(double now) const;
+  bool MeasureClearReady(double now) const;
   bool FirmwareIncompatible(double now) const;
   bool Lift(double now) const;
   bool Stop(double now) const;
@@ -398,6 +465,25 @@ class McuControl {
 
   // Unknown until the first version frame after the port opened.
   std::optional<bool> firmware_ok_;
+  FirmwareSource firmware_source_ = FirmwareSource::kUnknown;
+  std::optional<VersionInfo> versions_;
+
+  // The last setup/firmware_measure and when it came.
+  struct MeasureSignal {
+    bool active;
+    std::string cutter;
+    std::string chassis;
+    std::string device_hash;
+    uint32_t clear_seq;
+    double s;
+  };
+  std::optional<MeasureSignal> measure_;
+  // The window was open at the last tick.
+  bool measure_open_ = false;
+  // clear_seq of the signal already taken; empty while it is not fresh and active.
+  std::optional<uint32_t> measure_clear_seen_;
+  uint32_t measure_clear_sent_ = 0;
+  std::optional<double> measure_clear_s_;
   // When the port opened; before that the first tick counts.
   std::optional<double> connected_s_;
   // A valid frame came since the port opened.
@@ -411,7 +497,10 @@ class McuControl {
   struct ArmedSilence {
     double seconds;
     double until_s;
+    bool last_setpoint;
   };
+  // Wait of the stop frames after the running silence.
+  double silence_stop_delay_s_ = 0;
   std::optional<ArmedSilence> armed_silence_;
   // With kLater: when the heartbeat after the last SpeedData is due.
   std::optional<double> late_heartbeat_s_;

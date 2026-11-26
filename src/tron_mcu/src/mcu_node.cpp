@@ -1,16 +1,21 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
+#include <map>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <diagnostic_msgs/msg/key_value.hpp>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/button_event.hpp>
+#include <mowbite_msgs/msg/firmware_measure.hpp>
+#include <mowbite_msgs/msg/link_stats.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
@@ -26,6 +31,7 @@
 #include <mowbite_watch/attach.h>
 #include <mowbite_watch/watch.h>
 #include <mutex>
+#include <openssl/evp.h>
 #include <optional>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
@@ -150,6 +156,57 @@ tron::WallClock LocalWallClock() {
   return wall;
 }
 
+// Frames of these modules come from the MCU; hw/link_stats counts them by these names.
+const char* McuModuleName(uint8_t module) {
+  switch (static_cast<Module>(module)) {
+    case Module::kSensor: return "sensor_info";
+    case Module::kSpeed: return "speed";
+    case Module::kVersion: return "version";
+    case Module::kBattery: return "battery";
+    case Module::kBmsVersion: return "bms";
+    case Module::kMotors: return "motors";
+    case Module::kUptime: return "uptime";
+    case Module::kCalibration: return "calibration";
+    case Module::kLog: return "log";
+    default: return nullptr;
+  }
+}
+
+// At most this many ids of unknown modules in hw/link_stats.
+constexpr size_t kUnknownIdsMax = 16;
+constexpr double kLinkStatsPeriodS = 1.0;
+
+// sha256 of the content of a file that names this device (an id the vendor wrote, never changed by the OS), trailing
+// NUL bytes and white space left out; empty when the file is unreadable or empty.
+std::string DeviceHash(const std::string& path, std::string& error) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    error = "cannot open " + path;
+    return "";
+  }
+  std::string id(256, '\0');
+  file.read(id.data(), static_cast<std::streamsize>(id.size()));
+  id.resize(static_cast<size_t>(file.gcount()));
+  while (!id.empty() && (id.back() == '\0' || std::isspace(static_cast<unsigned char>(id.back())))) id.pop_back();
+  if (id.empty()) {
+    error = path + " is empty";
+    return "";
+  }
+  unsigned char digest[EVP_MAX_MD_SIZE];
+  unsigned int length = 0;
+  if (EVP_Digest(id.data(), id.size(), digest, &length, EVP_sha256(), nullptr) != 1) {
+    error = "sha256 failed";
+    return "";
+  }
+  static const char* const kHex = "0123456789abcdef";
+  std::string hex;
+  for (unsigned int i = 0; i < length; ++i) {
+    hex += kHex[digest[i] >> 4];
+    hex += kHex[digest[i] & 0xf];
+  }
+  return hex;
+}
+
 // "0.6.34 0.6.36", "any" for an empty list.
 std::string FirmwareText(const std::vector<std::string>& listed) {
   std::string text;
@@ -181,8 +238,10 @@ class McuNode : public rclcpp::Node {
       RCLCPP_WARN(get_logger(), "read_only: %s is only read, no byte goes to the MCU: no motion, blade or charging",
                   port_name_.c_str());
     }
-    measured_firmware_ = "cutter " + FirmwareText(get_parameter("cutter_firmware").as_string_array()) + ", chassis " +
-                         FirmwareText(get_parameter("chassis_firmware").as_string_array());
+    listed_text_ = "cutter " + FirmwareText(get_parameter("cutter_firmware").as_string_array()) + ", chassis " +
+                   FirmwareText(get_parameter("chassis_firmware").as_string_array());
+    device_hash_ = control_.View().Config().device_hash;
+    silence_last_setpoint_max_s_ = control_.View().Config().silence_last_setpoint_max_s;
     blade_lease_max_s_ = get_parameter("blade_lease_max").as_double();
     mow_height_mm_ = static_cast<uint16_t>(std::clamp<int64_t>(get_parameter("mow_height_mm").as_int(),
                                                                tron::kMinCutterHeightMm, tron::kMaxCutterHeightMm));
@@ -215,6 +274,7 @@ class McuNode : public rclcpp::Node {
     twist_pub_ = create_publisher<geometry_msgs::msg::TwistStamped>("hw/wheel_odom", 10);
     status_pub_ = create_publisher<HardwareStatus>("hw/status", 10);
     capabilities_pub_ = create_publisher<mowbite_msgs::msg::HardwareCapabilities>("hw/capabilities", LatchedQos());
+    link_stats_pub_ = create_publisher<mowbite_msgs::msg::LinkStats>("hw/link_stats", 10);
     // Never latched: a late subscriber must not act on an old press.
     button_pub_ = create_publisher<mowbite_msgs::msg::ButtonEvent>("hw/button", rclcpp::QoS(10).reliable());
     inputs_pub_ = create_publisher<mowbite_msgs::msg::HardwareInputs>("hw/inputs", LatchedQos());
@@ -235,6 +295,12 @@ class McuNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           control_.Call<&C::OnSetupMotion>(msg->active, MonotonicSeconds());
         });
+    // A step of the setup program that measures unlisted firmware (FP55).
+    if (!read_only_) {
+      firmware_measure_sub_ = create_subscription<mowbite_msgs::msg::FirmwareMeasure>(
+          "setup/firmware_measure", 10,
+          [this](const mowbite_msgs::msg::FirmwareMeasure::ConstSharedPtr& msg) { OnFirmwareMeasure(*msg); });
+    }
     emergency_srv_ = create_service<mowbite_msgs::srv::SetEmergency>(
         "hw/emergency", [this](const mowbite_msgs::srv::SetEmergency::Request::SharedPtr& req,
                                const mowbite_msgs::srv::SetEmergency::Response::SharedPtr& res) {
@@ -256,6 +322,7 @@ class McuNode : public rclcpp::Node {
                          const mowbite_msgs::srv::EndDriver::Response::SharedPtr& res) { OnEnd(*res); });
     status_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this] { PublishStatus(); });
     journal_timer_ = create_wall_timer(std::chrono::seconds(10), [this] { journal_watch_.Check(get_logger()); });
+    link_stats_timer_ = create_wall_timer(std::chrono::duration<double>(kLinkStatsPeriodS), [this] { PublishLinkStats(); });
     LogTimeZone();
 
     watch_ = mowbite_watch::Attach(*this, kWatchLimitS);
@@ -312,6 +379,10 @@ class McuNode : public rclcpp::Node {
     }
     if (!config.stop_release) config.stop_clear_period_s = 0;
     config.silence_max_s = read_only ? 0.0 : std::max(0.0, declare_parameter("silence_max", 0.0));
+    // Longest hw/silence with last_setpoint (0 offers none), up to 5 s: the MCU keeps that setpoint by its own limit.
+    config.silence_last_setpoint_max_s = declare_parameter("silence_last_setpoint_max", 0.0);
+    if (read_only) config.silence_last_setpoint_max_s = 0;
+    LoadMeasuredFirmware(config, read_only);
     // Heartbeat after each SpeedData ("after" in the same write, "frame" in its frame, "later" after
     // heartbeat_after_speed s: the setting of the Tron, T9). Measurement only: hw/silence after the next "speed" or
     // "cutter" tick, stop frames after a silence delayed by silence_stop_delay s.
@@ -365,6 +436,33 @@ class McuNode : public rclcpp::Node {
     if (heartbeat_only) RCLCPP_WARN(get_logger(), "Measurement: heartbeat_only, cmd_vel_timeout up to 10 s allowed");
     tron::CheckConfig(config, heartbeat_only);
     return config;
+  }
+
+  // FP55: the id of this device and the firmware an owner measured on it, read once at the start.
+  void LoadMeasuredFirmware(tron::McuControlConfig& config, bool read_only) {
+    const std::string id_file = declare_parameter("device_id_file", "");
+    const std::vector<std::string> entries = declare_parameter("measured_firmware", std::vector<std::string>{});
+    if (read_only) return;
+    std::string error;
+    if (!id_file.empty()) config.device_hash = DeviceHash(id_file, error);
+    if (config.device_hash.empty()) {
+      RCLCPP_WARN(get_logger(), "No device id (%s): no firmware measurement on this device",
+                  id_file.empty() ? "device_id_file not set" : error.c_str());
+    }
+    std::vector<std::string> malformed;
+    int other_devices = 0;
+    config.measured_firmware = tron::MeasuredFirmware(entries, config.device_hash, &malformed, &other_devices);
+    for (const std::string& entry : malformed) {
+      RCLCPP_ERROR(get_logger(), "measured_firmware entry '%s' is not <cutter>/<chassis>/<sha256>: ignored",
+                   entry.c_str());
+    }
+    if (other_devices > 0) {
+      RCLCPP_WARN(get_logger(), "%d measured_firmware entries are for another device: ignored", other_devices);
+    }
+    for (const auto& pair : config.measured_firmware) {
+      RCLCPP_INFO(get_logger(), "Measured on this device: cutter %s, chassis %s", pair.cutter.c_str(),
+                  pair.chassis.c_str());
+    }
   }
 
   // The heartbeat carries local time; without TZ that is UTC in a container.
@@ -439,6 +537,8 @@ class McuNode : public rclcpp::Node {
         watch.Mark("stop clear mark");
         UpdateStopClearMark(now);
         PublishButton();
+        // The clear a measurement asked for, at once: its step times the board from it.
+        if (ClearSeqChanged()) PublishLinkStats();
       }
       // So that the logic learns of a block before a blade request it refuses, not only at the next status tick.
       if (BlockChanged()) PublishStatus();
@@ -549,6 +649,7 @@ class McuNode : public rclcpp::Node {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       control_.Call<&C::OnConnected>(MonotonicSeconds());
+      PublishCapabilities();
     }
     RCLCPP_INFO(get_logger(), "Opened %s", port_name_.c_str());
   }
@@ -667,11 +768,14 @@ class McuNode : public rclcpp::Node {
       for (const auto& frame : parser_.Push(data, length)) {
         control_.Call<&C::OnFrame>();
         for (const auto& packet : frame) {
+          CountPacket(packet);
           if (packet.type != static_cast<uint8_t>(tron::PacketType::kMcuToHost)) continue;
           if (packet.module == static_cast<uint8_t>(Module::kSpeed)) {
             if (auto speed = tron::DecodeSpeed(packet.payload)) {
               control_.Call<&C::OnWheelSpeed>(speed->linear, speed->angular, now);
               speeds.push_back(*speed);
+            } else {
+              ++decode_errors_;
             }
           } else {
             HandleTelemetry(packet, now);
@@ -680,6 +784,19 @@ class McuNode : public rclcpp::Node {
       }
     }
     for (const auto& speed : speeds) PublishTwist(speed);
+  }
+
+  // Called with mutex_ held. Frames from the MCU of a module it sends, others by their id (type << 8 | module for
+  // another type than MCU to host).
+  void CountPacket(const tron::SubPacket& packet) {
+    const bool from_mcu = packet.type == static_cast<uint8_t>(tron::PacketType::kMcuToHost);
+    if (const char* name = from_mcu ? McuModuleName(packet.module) : nullptr) {
+      ++module_frames_[name];
+      return;
+    }
+    ++unknown_frames_;
+    const uint16_t id = from_mcu ? packet.module : static_cast<uint16_t>(packet.type << 8 | packet.module);
+    if (unknown_ids_.count(id) || unknown_ids_.size() < kUnknownIdsMax) ++unknown_ids_[id];
   }
 
   // Called with mutex_ held.
@@ -692,6 +809,8 @@ class McuNode : public rclcpp::Node {
             RCLCPP_INFO(get_logger(), "Mowing deck: %u (1 small, 2 large)", info->cutter_size);
           }
           sensor_ = *info;
+        } else {
+          ++decode_errors_;
         }
         break;
       case Module::kBattery:
@@ -699,6 +818,8 @@ class McuNode : public rclcpp::Node {
           control_.Call<&C::OnDockContactSample>(battery->dock_ok == 1);
           battery_ = *battery;
           battery_s_ = now;
+        } else {
+          ++decode_errors_;
         }
         break;
       case Module::kMotors:
@@ -711,10 +832,16 @@ class McuNode : public rclcpp::Node {
           motors_s_ = now;
           control_.Call<&C::OnBladeRpm>(motors->cutter.rpm, now);
           control_.Call<&C::OnBladeMotorStatus>(motors->cutter.status);
+        } else {
+          ++decode_errors_;
         }
         break;
       case Module::kVersion:
-        if (auto versions = tron::DecodeVersionInfo(packet.payload)) CheckVersions(*versions);
+        if (auto versions = tron::DecodeVersionInfo(packet.payload)) {
+          CheckVersions(*versions);
+        } else {
+          ++decode_errors_;
+        }
         break;
       case Module::kBmsVersion:
         if (auto bms = tron::DecodeBmsVersion(packet.payload)) {
@@ -723,6 +850,8 @@ class McuNode : public rclcpp::Node {
             bms_version_ = version;
             PublishCapabilities();
           }
+        } else {
+          ++decode_errors_;
         }
         break;
       case Module::kLog: RCLCPP_INFO(get_logger(), "MCU log: %s", tron::DecodeLog(packet.payload).c_str()); break;
@@ -738,16 +867,21 @@ class McuNode : public rclcpp::Node {
   void CheckVersions(const tron::VersionInfo& versions) {
     std::string cutter = tron::VersionString(versions.cutter_board);
     std::string chassis = tron::VersionString(versions.chassis_board);
-    if (cutter != cutter_version_ || chassis != chassis_version_) {
+    const bool changed = cutter != cutter_version_ || chassis != chassis_version_;
+    if (changed) {
       RCLCPP_INFO(get_logger(), "MCU versions: cutter %s, chassis %s", cutter.c_str(), chassis.c_str());
       cutter_version_ = cutter;
       chassis_version_ = chassis;
-      PublishCapabilities();
     }
-    if (!control_.Call<&C::OnVersions>(versions)) {
+    const bool ok = control_.Call<&C::OnVersions>(versions);
+    const tron::FirmwareSource source = control_.View().Status(MonotonicSeconds()).firmware_source;
+    if (changed || source != published_source_) PublishCapabilities();
+    if (!ok) {
       RCLCPP_ERROR_THROTTLE(get_logger(), *get_clock(), 10000,
-                            "MCU firmware not measured: cutter %s, chassis %s (measured: %s); motion and blade stay "
-                            "blocked", cutter.c_str(), chassis.c_str(), measured_firmware_.c_str());
+                            "MCU firmware %s: cutter %s, chassis %s (listed: %s); motion and blade stay blocked",
+                            source == tron::FirmwareSource::kOlder ? "older than listed, update it first"
+                                                                    : "neither listed nor measured on this device",
+                            cutter.c_str(), chassis.c_str(), listed_text_.c_str());
     }
   }
 
@@ -828,6 +962,10 @@ class McuNode : public rclcpp::Node {
     msg.driver_end = !read_only_;
     msg.failsafe_without_host_s = static_cast<float>(failsafe_without_host_s_);
     msg.safety_measurement_date = safety_measurement_date_;
+    msg.silence_last_setpoint_max_s = static_cast<float>(silence_last_setpoint_max_s_);
+    published_source_ = control_.View().Status(MonotonicSeconds()).firmware_source;
+    msg.firmware_source = tron::FirmwareSourceText(published_source_);
+    msg.device_hash = device_hash_;
     msg.obstacle_sources = obstacle_sources_;
     msg.obstacle_mode_max =
         obstacle_sources_.empty() ? 0 : static_cast<uint8_t>(std::clamp<int64_t>(obstacle_mode_max_, 0, 3));
@@ -896,6 +1034,15 @@ class McuNode : public rclcpp::Node {
         RCLCPP_ERROR(get_logger(), "No valid frame on %s since it opened: nothing sent, motion and blade blocked",
                      port_name_.c_str());
       }
+      if (state.measuring != measuring_logged_) {
+        measuring_logged_ = state.measuring;
+        if (state.measuring) {
+          RCLCPP_WARN(get_logger(), "Firmware measurement: cutter %s, chassis %s may drive, each wheel up to %.2f m/s",
+                      cutter_version_.c_str(), chassis_version_.c_str(), tron::kMeasureMaxWheelSpeed);
+        } else {
+          RCLCPP_WARN(get_logger(), "Firmware measurement ended: stop, blade off, latched");
+        }
+      }
       if (added & tron::kReasonMowerNotStopped) {
         RCLCPP_ERROR(get_logger(), "Blade still at %d rpm after it was switched off: blocked, off sent again",
                      motors_.cutter.rpm);
@@ -945,6 +1092,52 @@ class McuNode : public rclcpp::Node {
       msg.link_errors = stats.checksum_errors + stats.length_errors + stats.escape_errors + stats.overflows;
     }
     status_pub_->publish(msg);
+  }
+
+  void OnFirmwareMeasure(const mowbite_msgs::msg::FirmwareMeasure& msg) {
+    std::string cutter, chassis;
+    for (const auto& entry : msg.firmware) {
+      if (entry.key == "cutter") cutter = entry.value;
+      if (entry.key == "chassis") chassis = entry.value;
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    control_.Call<&C::OnFirmwareMeasure>(msg.active, cutter, chassis, msg.device_hash, msg.clear_seq,
+                                         MonotonicSeconds());
+  }
+
+  bool ClearSeqChanged() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return control_.View().Status(MonotonicSeconds()).clear_seq != published_clear_seq_;
+  }
+
+  // hw/link_stats: by the timer and by the I/O thread after a clear.
+  void PublishLinkStats() {
+    std::lock_guard<std::mutex> publish_lock(link_stats_mutex_);
+    mowbite_msgs::msg::LinkStats msg;
+    const rclcpp::Time stamp = now();
+    msg.stamp = stamp;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto& stats = parser_.Stats();
+      // A frame that failed its check on the wire: checksum, escape or an overlong frame.
+      msg.checksum_errors = stats.checksum_errors + stats.escape_errors + stats.overflows;
+      msg.length_errors = stats.length_errors + decode_errors_;
+      msg.unknown_frames = unknown_frames_;
+      for (const auto& [name, count] : module_frames_) {
+        msg.modules.push_back(name);
+        msg.frames.push_back(count);
+      }
+      for (const auto& [id, count] : unknown_ids_) {
+        msg.unknown_ids.push_back(id);
+        msg.unknown_counts.push_back(count);
+      }
+      const double now_s = MonotonicSeconds();
+      const auto state = control_.View().Status(now_s);
+      msg.clear_seq = state.clear_seq;
+      published_clear_seq_ = state.clear_seq;
+      if (state.clear_s) msg.clear_stamp = stamp - rclcpp::Duration::from_seconds(now_s - *state.clear_s);
+    }
+    link_stats_pub_->publish(msg);
   }
 
   void OnCmdVel(const geometry_msgs::msg::Twist& msg) {
@@ -1058,8 +1251,16 @@ class McuNode : public rclcpp::Node {
     tron::HostTestRefusal refusal;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      refusal = req.blade ? control_.Call<&C::SilenceWithBlade>(static_cast<double>(req.seconds), MonotonicSeconds())
-                          : control_.Call<&C::Silence>(static_cast<double>(req.seconds), MonotonicSeconds());
+      const double seconds = static_cast<double>(req.seconds);
+      if (req.last_setpoint) {
+        // The blade may not be on with it: the silence starts after a setpoint, not after a blade on frame.
+        refusal = req.blade ? tron::HostTestRefusal::kLastSetpoint
+                            : control_.Call<&C::SilenceLastSetpoint>(seconds, MonotonicSeconds());
+      } else if (req.blade) {
+        refusal = control_.Call<&C::SilenceWithBlade>(seconds, MonotonicSeconds());
+      } else {
+        refusal = control_.Call<&C::Silence>(seconds, MonotonicSeconds());
+      }
       StoreGuardFrames();
     }
     if (refusal != tron::HostTestRefusal::kNone) {
@@ -1069,7 +1270,7 @@ class McuNode : public rclcpp::Node {
       return;
     }
     RCLCPP_WARN(get_logger(), "hw/silence%s: no frame to the MCU for %.2f s, then latched with blade off and stop",
-                req.blade ? " with the blade" : "", req.seconds);
+                req.last_setpoint ? " after a setpoint" : req.blade ? " with the blade" : "", req.seconds);
     res.success = true;
     res.message = "silent";
   }
@@ -1130,7 +1331,17 @@ class McuNode : public rclcpp::Node {
   std::string cutter_version_;
   std::string chassis_version_;
   // The firmware lists of the configuration as text, for the log.
-  std::string measured_firmware_;
+  std::string listed_text_;
+  std::string device_hash_;
+  tron::FirmwareSource published_source_ = tron::FirmwareSource::kUnknown;
+  bool measuring_logged_ = false;
+  // hw/link_stats, under mutex_: frames per module, decode failures, unknown modules.
+  std::map<std::string, uint64_t> module_frames_;
+  uint64_t decode_errors_ = 0;
+  uint64_t unknown_frames_ = 0;
+  std::map<uint16_t, uint64_t> unknown_ids_;
+  uint32_t published_clear_seq_ = 0;
+  std::mutex link_stats_mutex_;
   std::string bms_version_;
 
   std::optional<mowbite_hold::HoldWatch> hold_watch_;
@@ -1168,6 +1379,7 @@ class McuNode : public rclcpp::Node {
   uint16_t mow_height_mm_;
   double failsafe_without_host_s_;
   double silence_max_s_;
+  double silence_last_setpoint_max_s_;
   double button_hold_s_;
   bool blade_allowed_;
   // When the process ends after hw/end, under mutex_.
@@ -1192,6 +1404,8 @@ class McuNode : public rclcpp::Node {
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr twist_pub_;
   rclcpp::Publisher<HardwareStatus>::SharedPtr status_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareCapabilities>::SharedPtr capabilities_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::LinkStats>::SharedPtr link_stats_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::FirmwareMeasure>::SharedPtr firmware_measure_sub_;
   rclcpp::Publisher<mowbite_msgs::msg::ButtonEvent>::SharedPtr button_pub_;
   rclcpp::Publisher<mowbite_msgs::msg::HardwareInputs>::SharedPtr inputs_pub_;
   rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
@@ -1204,6 +1418,7 @@ class McuNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
   rclcpp::TimerBase::SharedPtr journal_timer_;
+  rclcpp::TimerBase::SharedPtr link_stats_timer_;
 };
 
 }  // namespace tron_mcu
