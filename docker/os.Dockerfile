@@ -1,6 +1,6 @@
 # MowBite OS for the mower, one image for every platform (launch and configuration choose the platform).
 # Built from a clean tree that has src/ and tools/ at its top, e.g. for arm64 on the PC (qemu):
-#   docker buildx build --platform linux/arm64 --load --build-context planer=/home/mkay/tron-projekt/planer \
+#   docker buildx build --platform linux/arm64 --load --build-context planer=<clone of mowbite-planner> \
 #     --build-arg SOURCE_COMMIT=<commit> --build-arg MIN_APP=$(cat <tree>/docker/min_app) \
 #     -f docker/os.Dockerfile -t local/mowbite-os:arm64-<commit> <tree>
 # The app comes from its release; --build-context app=<folder with MowBite-web.zip> takes that zip instead,

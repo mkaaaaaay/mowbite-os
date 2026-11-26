@@ -8,7 +8,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # The MowBite Planner (own process of the stack) at a fixed commit of its branch os-pin, taken from a local clone:
-#   docker buildx build --load --build-context planer=/home/mkay/tron-projekt/planer -f docker/dev.Dockerfile ...
+#   docker buildx build --load --build-context planer=<clone of mowbite-planner> -f docker/dev.Dockerfile ...
 # Source it after ROS: . /opt/ros/jazzy/setup.bash && . /opt/mowbite_planner/setup.bash
 ARG PLANNER_COMMIT=06183440b4ea81e02c3d058a9a73ebff1ff071dd
 RUN --mount=type=bind,from=planer,target=/src/planer \
