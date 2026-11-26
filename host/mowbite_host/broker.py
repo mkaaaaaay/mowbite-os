@@ -118,5 +118,6 @@ def attach(where, name, subscriptions, other=lambda message: None, on_connect=la
     client = Broker(env.get("MOWBITE_MQTT_HOST") or "127.0.0.1", port, name,
                     [*subscriptions, ("robot_state/json", 0)], on_message=route, on_connect=on_connect, will=will)
     rpc = probe.OsRpc(client)
-    check = probe.Probe(rpc)
+    # As run-os: only false keeps the drivers off; read when judged, os.conf may change meanwhile.
+    check = probe.Probe(rpc, hardware=lambda: where.env().get("MOWBITE_HARDWARE") != "false")
     return client, rpc, check

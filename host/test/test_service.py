@@ -1000,6 +1000,39 @@ class ProbeTest(unittest.TestCase):
         rpc.answers["rpc.methods"] = ["rpc.methods"]
         self.assertFalse(check(since)[0])
 
+    # A first installation with hardware off: no driver, TIMEOUT_INPUTS and FIRMWARE_INCOMPATIBLE stand from the start.
+    def test_without_hardware_only_service_not_ready_fails(self):
+        hardware = [False]
+        check = probe.Probe(FakeRpc(), hardware=lambda: hardware[0])
+        check.begin()
+        check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": (1 << 1) | (1 << 12)}))
+        self.assertEqual(check.settled(), (True, ""))
+        check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": (1 << 1) | (1 << 8)}))
+        self.assertEqual(check.settled(), (False, "emergency since the update: SERVICE_NOT_READY"))
+        hardware[0] = True
+        check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 1}))
+        self.assertEqual(check.settled(), (False, "emergency since the update: TIMEOUT_INPUTS"))
+
+    # The probe of the host reads MOWBITE_HARDWARE as run-os does: the last file wins, only false is off.
+    def test_the_host_probe_follows_the_environment_files(self):
+        from mowbite_host import broker
+        from mowbite_host.paths import Paths
+        prefix = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, prefix)
+        paths = Paths(prefix)
+        for path in paths.env_files:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(paths.env_files[0], "w") as f:
+            f.write("MOWBITE_HARDWARE=false\n")
+        check = broker.attach(paths, "probe-test", [])[2]
+        self.assertFalse(check.hardware())
+        with open(paths.env_files[1], "w") as f:
+            f.write("MOWBITE_HARDWARE=true\n")
+        self.assertTrue(check.hardware())
+        os.remove(paths.env_files[0])
+        os.remove(paths.env_files[1])
+        self.assertTrue(check.hardware())
+
     def test_unreadable_payloads_are_dropped(self):
         check = probe.Probe(FakeRpc())
         check.on_robot_state(json.dumps({"current_state": "IDLE", "emergency_reason": 1 << 1}))

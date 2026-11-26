@@ -10,6 +10,8 @@ import time
 # Bits of emergency_reason that fail an update when they were off before it and still stand STABLE s after the first
 # healthy answer (rule M5): TIMEOUT_INPUTS, SERVICE_NOT_READY, FIRMWARE_INCOMPATIBLE.
 FAIL_BITS = (1 << 1) | (1 << 8) | (1 << 12)
+# Without hardware no driver starts and these stand always: they fail nothing then.
+DRIVER_BITS = (1 << 1) | (1 << 12)
 # robot_state older than this does not count, an answer later than this is none.
 STATE_FRESH = 5.0
 ANSWER_WAIT = 3.0
@@ -70,10 +72,11 @@ class OsRpc:
 
 class Probe:
     """Health over the broker for installer.Health: robot_state comes, rpc.methods answers with system.hold, system.info
-    with the api the bundle names; settled() at the end of the stable time judges the bits, planner() the planner."""
+    with the api the bundle names; settled() at the end of the stable time judges the bits, planner() the planner.
+    hardware() tells whether the OS starts its drivers (MOWBITE_HARDWARE)."""
 
-    def __init__(self, rpc, api_of_running=lambda: None):
-        self.rpc, self.api_of_running = rpc, api_of_running
+    def __init__(self, rpc, api_of_running=lambda: None, hardware=lambda: True):
+        self.rpc, self.api_of_running, self.hardware = rpc, api_of_running, hardware
         self._lock = threading.Lock()
         self._state = None
         self._state_t = None
@@ -124,7 +127,8 @@ class Probe:
         return False, "planner.settings does not answer"
 
     def settled(self):
-        new = self.bits() & FAIL_BITS & ~self._bits_before
+        judged = FAIL_BITS if self.hardware() else FAIL_BITS & ~DRIVER_BITS
+        new = self.bits() & judged & ~self._bits_before
         if new:
             names = [name for bit, name in ((1, "TIMEOUT_INPUTS"), (8, "SERVICE_NOT_READY"),
                                             (12, "FIRMWARE_INCOMPATIBLE")) if new & (1 << bit)]
