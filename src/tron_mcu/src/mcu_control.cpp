@@ -408,6 +408,8 @@ HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade,
   silent_from_s_.reset();
   if (last_setpoint || config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
     armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS, last_setpoint};
+  } else if (late_heartbeat_s_) {
+    armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS, false, true};
   } else {
     silent_until_s_ = now + seconds;
     silent_from_s_ = last_out_s_;
@@ -481,6 +483,14 @@ void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<Su
     late = true;
   }
 
+  if (armed_silence_ && armed_silence_->after_heartbeat) {
+    if (late || !late_heartbeat_s_) {
+      silent_until_s_ = now + armed_silence_->seconds;
+      silent_from_s_ = out.empty() ? last_out_s_ : std::optional<double>(now);
+      armed_silence_.reset();
+    }
+    return;
+  }
   if (!armed_silence_ || armed_silence_->last_setpoint) return;
   using After = McuControlConfig::SilenceAfter;
   const bool speed_tick = config_.speed_heartbeat == Mode::kLater ? late : motion;

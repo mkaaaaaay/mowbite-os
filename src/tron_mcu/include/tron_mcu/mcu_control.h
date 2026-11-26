@@ -505,6 +505,8 @@ class McuControl {
     double seconds;
     double until_s;
     bool last_setpoint;
+    // kLater: the heartbeat after the last SpeedData goes out first, else the MCU keeps that setpoint (H3).
+    bool after_heartbeat = false;
   };
   // Wait of the stop frames after the running silence.
   double silence_stop_delay_s_ = 0;

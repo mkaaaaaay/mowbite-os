@@ -2567,6 +2567,45 @@ class HoldCutterTest : public HoldMeasureTest {
   }
 };
 
+// The Tron: a heartbeat later after each SpeedData, hw/silence without a chosen tick.
+class TronHoldTest : public HoldMeasureTest {
+ protected:
+  TronHoldTest()
+      : HoldMeasureTest(Config(McuControlConfig::SpeedHeartbeat::kLater, McuControlConfig::SilenceAfter::kNone)) {
+  }
+};
+
+TEST_F(TronHoldTest, ASilenceRightAfterASetpointBeginsAfterItsHeartbeat) {
+  Run(0.3);
+  Drive(0.6);
+  control_.OnCmdVel(0.05f, 0.0f, now_);
+  Run(now_ + 0.01);
+  ASSERT_TRUE(IsMovingSpeed(TickAt(now_).back()));
+  const double speed = now_;
+  ASSERT_EQ(control_.Silence(2.0, now_), HostTestRefusal::kNone);
+  EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_TRUE(control_.Status(now_).silence_armed);
+  Run(speed + 0.1);
+  const auto beats = Times(IsHeartbeat, speed + 0.001);
+  ASSERT_EQ(beats.size(), 1u);
+  EXPECT_NEAR(beats[0] - speed, 0.025, 0.006);
+  EXPECT_TRUE(control_.Status(now_).silent);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, beats[0]);
+  EXPECT_TRUE(Times([](const SubPacket&) { return true; }, beats[0] + 0.001, speed + 0.1).empty());
+}
+
+TEST_F(TronHoldTest, WithoutAHeartbeatDueTheSilenceBeginsAtOnce) {
+  Run(0.3);
+  Drive(0.6);
+  Run(2.0);
+  ASSERT_EQ(control_.Silence(2.0, now_), HostTestRefusal::kNone);
+  EXPECT_TRUE(control_.Status(now_).silent);
+  const auto sent = Times([](const SubPacket&) { return true; }, 0.0, now_ + 1e-9);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, sent.back());
+}
+
 TEST_F(HoldDefaultTest, WithoutTheSettingNoExtraHeartbeatAndTheSetpointEndsItsTick) {
   Run(0.3);
   Drive(1.3);
