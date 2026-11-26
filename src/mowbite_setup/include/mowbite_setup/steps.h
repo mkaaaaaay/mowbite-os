@@ -39,6 +39,8 @@ struct Step {
   bool start = false;
   bool automatic = false;
   bool skippable = true;
+  // A step of the owner measurement of firmware (stage firmware).
+  bool firmware = false;
   std::vector<std::string> needs;
   std::vector<Named> confirm;
   std::vector<Named> skip_reasons;

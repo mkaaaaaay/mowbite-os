@@ -57,6 +57,12 @@ if(BUILD_TESTING)
     add_journaled_launch_test(test/test_setup_motion.py TARGET test_setup_motion_${platform} TIMEOUT 420
       ENV MOWBITE_PLATFORM=${platform})
   endforeach()
+  # The measurement of unlisted firmware on the Tron, then each board that has to fail it (VARIANTS there).
+  add_journaled_launch_test(test/test_setup_firmware.py TIMEOUT 900)
+  foreach(variant stop_delay no_stop_latches clear_releases_held setpoint_hold no_real_rates swap_bumpers)
+    add_journaled_launch_test(test/test_setup_firmware.py TARGET test_setup_firmware_${variant} TIMEOUT 600
+      ENV MOWBITE_FW_VARIANT=${variant})
+  endforeach()
   add_journaled_launch_test(test/test_hw_contract.py TIMEOUT 120)
   add_journaled_launch_test(test/test_hw_start.py TIMEOUT 120)
   add_journaled_launch_test(test/test_platform_choice.py TIMEOUT 300)

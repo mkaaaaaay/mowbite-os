@@ -38,6 +38,22 @@ inline uint32_t LatchBit() {
   return bit;
 }
 
+inline uint32_t FirmwareBit() {
+  static const uint32_t bit = EmergencyBit("FIRMWARE_INCOMPATIBLE");
+  return bit;
+}
+
+// The emergencies an input group brings; without a group those of all three.
+inline uint32_t InputBits(const std::string& group = "") {
+  static const uint32_t stop = EmergencyBit("STOP");
+  static const uint32_t lift = EmergencyBit("LIFT") | EmergencyBit("LIFT_MULTIPLE");
+  static const uint32_t bumper = EmergencyBit("COLLISION") | EmergencyBit("COLLISION_MULTIPLE");
+  if (group == "stop") return stop;
+  if (group == "lift") return lift;
+  if (group == "bumper") return bumper;
+  return stop | lift | bumper;
+}
+
 // The group of a role, empty for a text that is no role.
 inline std::string GroupOf(const std::string& role) {
   const auto* known = mowbite_api::FindSetupName(mowbite_api::SetupRoles(), role);

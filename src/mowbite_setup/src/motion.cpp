@@ -35,11 +35,9 @@ constexpr double kWheelGap = 0.2;
 // its board and shows no emergency but those of the step: what a driver reports while it starts (a missing input, a
 // service not ready yet) ends within return_max, else the step fails with NO_RETURN.
 constexpr double kDriverGap = 0.5;
-// The wheels turn once both reach this share of the speed asked for. A part of wheels measures 0.5 to 1.5 times it,
-// and a wheel that is to stand turns at most at kStillShare of it.
+// The wheels turn once both reach this share of the speed asked for (a part of wheels measures speed_min to speed_max
+// times it), and a wheel that is to stand turns at most at kStillShare of it.
 constexpr double kTurnShare = 0.5;
-constexpr double kSpeedLow = 0.5;
-constexpr double kSpeedHigh = 1.5;
 constexpr double kStillShare = 0.25;
 
 // Signs of the wheels in a part of wheels (left, right); one_wheel turns the right one alone.
@@ -100,7 +98,7 @@ json Program::MotionOf(const Step& step) const {
           {"max_speed", speed}, {"max_distance", nullptr}, {"max_time", mowbite_api::kSetupMoveTime}};
 }
 
-void Program::OnWheels(double left, double right, double now) {
+void Program::OnWheels(double left, double right, double now, double stamp) {
   const double dt = wheels_at_ < 0 ? -1 : now - wheels_at_;
   if (run_ && IsGround(StepOf(*run_)) && dt > 0) {
     // The way and the turn by odometry; a gap counts as one sample long at most.
@@ -122,8 +120,10 @@ void Program::OnWheels(double left, double right, double now) {
   wheels_at_ = now;
   if (std::abs(left) >= kStandSpeed || std::abs(right) >= kStandSpeed) {
     still_since_ = -1;
+    still_stamp_ = -1;
   } else if (still_since_ < 0) {
     still_since_ = now;
+    still_stamp_ = stamp;
   }
   if (run_ && StepOf(*run_).check == "wheels" && run_->drive == Drive::kMeasure) {
     run_->sum_left += left;
@@ -137,7 +137,7 @@ void Program::OnWheels(double left, double right, double now) {
 void Program::NoteDriverBack(const Hardware& hardware, double now) {
   if (!run_ || StepOf(*run_).check != "driver_end" || run_->drive != Drive::kReturn || run_->returned >= 0) return;
   if (hardware_at_ >= 0 && now - hardware_at_ > kDriverGap) run_->gap = true;
-  const bool settled = (hardware.emergency_reason & ~(run_->expected | LatchBit())) == 0;
+  const bool settled = (hardware.emergency_reason & ~(run_->expected | LatchBit() | ReturnBits())) == 0;
   if (run_->gap && hardware.telemetry_ok && settled) run_->returned = now;
 }
 
@@ -183,16 +183,20 @@ std::vector<Refusal> Program::DriveProblems(const Step& step, double now) const 
   if (!Fresh(hardware_at_, now, kFresh) || !Fresh(wheels_at_, now, kFresh)) {
     problems.push_back(Refuse("DRIVER_MISSING", "The driver of the platform reports no status or no wheel speeds"));
   } else {
-    if (hardware_.emergency_reason != 0) {
+    // A step with firmware starts with the latch of the firmware and of the inputs the steps before it switched; its
+    // opening releases them once no input shows (TickOpening).
+    const uint32_t opens = step.firmware ? FirmwareBit() | LatchBit() | InputBits() : 0;
+    if ((hardware_.emergency_reason & ~opens) != 0) {
       problems.push_back(Refuse("EMERGENCY", "An emergency stands: " + mowbite_api::EmergencyNames(static_cast<int>(
                                                                          hardware_.emergency_reason))));
     }
     if (hardware_.dock_contact) problems.push_back(Refuse("ON_DOCK", "The mower is on the charging contacts"));
   }
-  // Rule (3) of the program: no wheel turns before stop, lift and bumper passed standing; skipped does not count.
+  // Rule (3) of the program: no wheel turns before stop, lift and bumper passed standing; skipped does not count. The
+  // measurement of firmware has its own.
   json missing = json::array();
   for (const Step& other : list_.steps) {
-    if (other.check != "input" || records_.at(other.id).state == "ok") continue;
+    if (other.check != "input" || other.firmware != step.firmware || records_.at(other.id).state == "ok") continue;
     const std::string group = GroupOf(other.Word("role"));
     if (group == "stop" || group == "lift" || group == "bumper") missing.push_back(other.id);
   }
@@ -210,6 +214,10 @@ std::vector<Refusal> Program::DriveProblems(const Step& step, double now) const 
   }
   if (step.check == "silence" && capabilities_.silence_max_s <= 0) {
     problems.push_back(Refuse("NOT_OFFERED", "The driver offers no hw/silence"));
+  }
+  if (step.check == "silence" && step.Word("last_setpoint") == "yes" &&
+      capabilities_.silence_last_setpoint_max_s <= 0) {
+    problems.push_back(Refuse("NOT_OFFERED", "The driver offers no hw/silence with last_setpoint"));
   }
   if (step.check == "driver_end") {
     if (!capabilities_.driver_end) {
@@ -270,6 +278,8 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
       // straight falls silent at its trigger.
       if (IsGround(step) && step.parts[run.part].id == "straight" && drive != Drive::kMeasure) command.reset();
       break;
+    // kEnter: the zero arms the safety filter, which an emergency released before the start (an opening) disarmed.
+    case Drive::kEnter:
     case Drive::kLatch:
     case Drive::kRelease:
     case Drive::kArm:
@@ -277,8 +287,6 @@ void Program::EnterDrive(Drive drive, double now, double wall) {
     case Drive::kAsk:
     case Drive::kAnswer:
       command = Command{0, 0};
-      break;
-    case Drive::kEnter:
       break;
   }
   const bool moves = command && (command->linear != 0 || command->angular != 0);
@@ -303,6 +311,15 @@ void Program::NextPass(double now, double wall) {
     ++run.round;
     more = run.round < static_cast<int>(std::lround(step.Number("rounds")));
   }
+  // The next round from the first part; driver_end needs its restarts for each.
+  if (!more && step.check != "silence" && NextRound(now, wall)) {
+    more = true;
+    if (step.check == "driver_end" && restarts_left_ < 2) {
+      DriveFail("RESTARTS_LOW", "The start has " + std::to_string(restarts_left_) + " restarts of the driver left",
+                {{"left", restarts_left_}}, now, wall);
+      return;
+    }
+  }
   if (!more) {
     if (step.check == "silence" && run.stands.size() > 1) {
       const auto [low, high] = std::minmax_element(run.stands.begin(), run.stands.end());
@@ -310,7 +327,7 @@ void Program::NextPass(double now, double wall) {
       if (spread > step.Number("spread_max")) {
         DriveFail("LIMIT", "The stand times of the rounds differ by " + std::to_string(spread) + " s",
                   {{"value_id", "spread"}, {"value", Rounded(spread, 100)}, {"limit", step.Number("spread_max")},
-                   {"unit", "s"}},
+                   {"unit", "s"}, {"part", "spread"}},
                   now, wall);
         return;
       }
@@ -359,7 +376,7 @@ uint32_t Program::AllowedNow() const {
     case Drive::kQuiet:
     case Drive::kLatch:
     case Drive::kRelease:
-      return run.expected == 0 ? 0 : run.expected | LatchBit();
+      return run.expected == 0 ? 0 : run.expected | LatchBit() | ReturnBits();
     default:
       return 0;
   }
@@ -448,7 +465,8 @@ void Program::TickDrive(double now, double wall) {
           run.trigger = now;
           EnterDrive(Drive::kStop, now, wall);
         } else if (step.check == "silence") {
-          silence_due_ = capabilities_.silence_max_s;
+          silence_due_ =
+              SilenceLastSetpoint() ? capabilities_.silence_last_setpoint_max_s : capabilities_.silence_max_s;
           run.asked = true;
           run.asked_at = now;
         } else if (step.check == "driver_end") {
@@ -472,20 +490,27 @@ void Program::TickDrive(double now, double wall) {
       if (Standing(now) && StoodBefore(still_since_, run.trigger)) {
         DriveFail("NO_START", "The wheels stood already at the trigger: the stop was not measured", json::object(),
                   now, wall);
-      } else if (Standing(now)) {
-        const double stand = std::max(0.0, still_since_ - run.trigger);
-        run.stood = still_since_;
-        if (stop_moving) run.measured[run.part] = stand;
-        run.stands.push_back(stand);
-        EnterDrive(Drive::kQuiet, now, wall);
-      } else if (now - run.trigger > step.Number("stop_max")) {
-        const std::string id =
-            stop_moving ? step.parts[run.part].id : step.check == "silence" ? "round_" + std::to_string(run.round + 1)
-                                                                            : "stand";
-        DriveFail("LIMIT", "The wheels did not stand within " + std::to_string(step.Number("stop_max")) + " s",
-                  {{"value_id", id}, {"value", Rounded(now - run.trigger, 100)}, {"limit", step.Number("stop_max")},
-                   {"unit", "s"}},
-                  now, wall);
+      } else {
+        // Standing shows kStandHold after the wheels stood: the stop counts from the trigger to that moment.
+        const double stop_max = step.Number("stop_max");
+        const bool standing = Standing(now);
+        // Both on the clock of the driver where it stamps them: the arrival of its messages may come late.
+        const bool stamped = run.trigger_stamp >= 0 && still_stamp_ >= 0;
+        const double stood = stamped ? still_stamp_ - run.trigger_stamp : still_since_ - run.trigger;
+        const double stand = standing ? std::max(0.0, stood) : now - run.trigger;
+        if (standing && stand <= stop_max) {
+          run.stood = still_since_;
+          if (stop_moving) run.measured[run.part] = stand;
+          run.stands.push_back(stand);
+          EnterDrive(Drive::kQuiet, now, wall);
+        } else if (standing || now - run.trigger > stop_max + kStandHold) {
+          const std::string id = stop_moving ? step.parts[run.part].id
+                                 : step.check == "silence" ? "round_" + std::to_string(run.round + 1)
+                                                           : "stand";
+          DriveFail("LIMIT", "The wheels did not stand within " + std::to_string(stop_max) + " s",
+                    {{"value_id", id}, {"value", Rounded(stand, 100)}, {"limit", stop_max}, {"unit", "s"}}, now,
+                    wall);
+        }
       }
       return;
     case Drive::kReturn:
@@ -653,6 +678,8 @@ void Program::TickWheels(double now, double wall) {
       const double right = run.sum_right / run.samples;
       const double target = one || signs.left == signs.right ? Speed(step) : TurnRate(step) * track_ / 2;
       const double still = kStillShare * target;
+      const double low = step.Number("speed_min");
+      const double high = step.Number("speed_max");
       const double along = one ? right : (signs.left * left + signs.right * right) / 2;
       run.measured[run.part] = along;
       const std::string seen = "left " + std::to_string(left) + " m/s, right " + std::to_string(right) + " m/s";
@@ -665,7 +692,7 @@ void Program::TickWheels(double now, double wall) {
           DriveFail("WRONG_WHEEL", "The answer names the wheel " + run.answer, {{"answer", run.answer}}, now, wall);
           return;
         }
-        if (std::abs(left) > still || right < kSpeedLow * target) {
+        if (std::abs(left) > still || right < low * target) {
           DriveFail("WRONG_WHEEL", "Another wheel than the right one turned: " + seen, {{"answer", run.answer}}, now,
                     wall);
           return;
@@ -675,12 +702,12 @@ void Program::TickWheels(double now, double wall) {
         DriveFail("WRONG_DIRECTION", "A wheel turned the other way: " + seen, json::object(), now, wall);
         return;
       }
-      if (along < kSpeedLow * target || along > kSpeedHigh * target) {
+      if (along < low * target || along > high * target) {
         DriveFail("LIMIT", "The wheels turned at " + std::to_string(along) + " m/s, not about " +
                                std::to_string(target),
                   {{"value_id", part.id},
                    {"value", Rounded(along, 1000)},
-                   {"limit", Rounded((along < kSpeedLow * target ? kSpeedLow : kSpeedHigh) * target, 1000)},
+                   {"limit", Rounded((along < low * target ? low : high) * target, 1000)},
                    {"unit", "m/s"}},
                   now, wall);
         return;
@@ -706,7 +733,7 @@ void Program::TickWheels(double now, double wall) {
   }
 }
 
-void Program::OnSilenceAnswer(bool success, const std::string& code, double now, double wall) {
+void Program::OnSilenceAnswer(bool success, const std::string& code, double now, double wall, double silent_from) {
   if (!run_ || run_->drive != Drive::kTrigger || !run_->asked) return;
   const Step& step = StepOf(*run_);
   if (step.check != "silence" && !IsBlade(step)) return;
@@ -717,7 +744,9 @@ void Program::OnSilenceAnswer(bool success, const std::string& code, double now,
     return;
   }
   run.trigger = now;
-  run.silence_end = now + capabilities_.silence_max_s;
+  run.trigger_stamp = silent_from;
+  run.silence_end =
+      now + (SilenceLastSetpoint() ? capabilities_.silence_last_setpoint_max_s : capabilities_.silence_max_s);
   run.expected = BitsOf(step.lists.at("emergency"));
   // The driver drops the off while it is silent: the board alone stops the blade.
   run.blade = 0;
@@ -766,7 +795,8 @@ std::optional<Refusal> Program::Keep(const json& params, double now, json* resul
 }
 
 std::optional<Motion> Program::MotionNow() const {
-  if (!run_ || !IsDrive(StepOf(*run_))) return std::nullopt;
+  // Nothing moves before the driver lets a step with firmware measure.
+  if (!run_ || !IsDrive(StepOf(*run_)) || run_->opening) return std::nullopt;
   const Step& step = StepOf(*run_);
   if (IsBlade(step)) {
     return Motion{step.id,
@@ -825,7 +855,8 @@ json Program::DriveValues(const Run& run, const Step& step, bool final) const {
           signs.left == 0 || signs.left == signs.right ? Speed(step) : TurnRate(step) * track_ / 2;
       const auto& measured = run.measured[i];
       values.push_back(Value(step.parts[i].id, measured ? json(Rounded(*measured, 1000)) : json(), "m/s",
-                             Rounded(kSpeedLow * target, 1000), Rounded(kSpeedHigh * target, 1000),
+                             Rounded(step.Number("speed_min") * target, 1000),
+                             Rounded(step.Number("speed_max") * target, 1000),
                              judged(run.part_states[i]), step.parts[i].texts));
     }
     return values;
@@ -841,7 +872,7 @@ json Program::DriveValues(const Run& run, const Step& step, bool final) const {
                              stop_max, measured ? json(*measured <= stop_max) : json(), step.parts[i].texts));
     }
   } else if (step.check == "no_command") {
-    const std::optional<double> stand = run.stands.empty() ? std::nullopt : std::optional<double>(run.stands[0]);
+    const std::optional<double> stand = run.stands.empty() ? std::nullopt : std::optional<double>(run.stands.back());
     values.push_back(Measured("no_command", "stand", stand ? json(Rounded(*stand, 100)) : json(), nullptr, stop_max,
                               within(stand, stop_max)));
   } else if (step.check == "silence") {

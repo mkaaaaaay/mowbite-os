@@ -9,10 +9,12 @@
 #include <memory>
 #include <mowbite_component/node_options.h>
 #include <mowbite_msgs/msg/clock_status.hpp>
+#include <mowbite_msgs/msg/firmware_measure.hpp>
 #include <mowbite_msgs/msg/gnss_fix.hpp>
 #include <mowbite_msgs/msg/hardware_capabilities.hpp>
 #include <mowbite_msgs/msg/hardware_inputs.hpp>
 #include <mowbite_msgs/msg/hardware_status.hpp>
+#include <mowbite_msgs/msg/link_stats.hpp>
 #include <mowbite_msgs/msg/map_status.hpp>
 #include <mowbite_msgs/msg/mqtt_publish.hpp>
 #include <mowbite_msgs/msg/ntrip_status.hpp>
@@ -87,6 +89,8 @@ constexpr double kRestartsEvery = 1.0;
 constexpr double kStableMargin = 5.0;
 // setup/motion goes out this often while a step moves the wheels (s); setup/cmd_vel with every tick.
 constexpr double kMotionPeriod = 0.25;
+// setup/firmware_measure while a step with firmware runs (s): 4 Hz, the driver holds it 0.5 s.
+constexpr double kMeasurePeriod = 0.25;
 
 double MonotonicSeconds() {
   using namespace std::chrono;
@@ -149,6 +153,8 @@ class SetupNode : public rclcpp::Node {
       }
     }
     ports_scan_ = declare_parameter("ports_scan", true);
+    // The file kept by hand can offer the measurement of firmware for listed firmware too; it writes nothing then.
+    const bool force = declare_parameter(mowbite_api::kFirmwareMeasureForce, false);
     const json extra = json::parse(declare_parameter("ports_extra", std::string("[]")), nullptr, false);
     if (extra.is_array()) {
       for (const auto& path : extra) {
@@ -188,6 +194,7 @@ class SetupNode : public rclcpp::Node {
         program_.emplace(*list, platform);
         program_->SetPlatforms(platforms, chosen_, fixed);
         program_->SetDrivers(drivers_on);
+        program_->SetMeasureForce(force);
         LoadRecord();
         LoadLock();
         LoadLayer(shadowed);
@@ -260,6 +267,9 @@ class SetupNode : public rclcpp::Node {
           capabilities.blade_allowed = msg->blade_allowed;
           capabilities.blade_lease_max_s = msg->blade_lease_max_s;
           capabilities.failsafe_without_host_s = msg->failsafe_without_host_s;
+          capabilities.silence_last_setpoint_max_s = msg->silence_last_setpoint_max_s;
+          capabilities.firmware_source = msg->firmware_source;
+          capabilities.device_hash = msg->device_hash;
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnCapabilities(capabilities);
           state_due_ = true;
@@ -276,8 +286,27 @@ class SetupNode : public rclcpp::Node {
           std::lock_guard<std::mutex> lock(mutex_);
           const double v = msg->twist.linear.x;
           const double turn = msg->twist.angular.z * track_ / 2;
-          program_->OnWheels(v - turn, v + turn, MonotonicSeconds());
+          const double stamp = rclcpp::Time(msg->header.stamp).seconds();
+          program_->OnWheels(v - turn, v + turn, MonotonicSeconds(), stamp > 0 ? stamp : -1);
         });
+    link_sub_ = create_subscription<mowbite_msgs::msg::LinkStats>(
+        "hw/link_stats", 10, [this](mowbite_msgs::msg::LinkStats::ConstSharedPtr msg) {
+          LinkCounts counts;
+          counts.stamp = rclcpp::Time(msg->stamp).seconds();
+          counts.checksum_errors = msg->checksum_errors;
+          counts.length_errors = msg->length_errors;
+          counts.unknown_frames = msg->unknown_frames;
+          for (size_t i = 0; i < msg->modules.size() && i < msg->frames.size(); ++i) {
+            counts.frames[msg->modules[i]] = msg->frames[i];
+          }
+          for (size_t i = 0; i < msg->unknown_ids.size() && i < msg->unknown_counts.size(); ++i) {
+            counts.unknown[msg->unknown_ids[i]] = msg->unknown_counts[i];
+          }
+          counts.clear_seq = msg->clear_seq;
+          std::lock_guard<std::mutex> lock(mutex_);
+          program_->OnLinkStats(counts, MonotonicSeconds());
+        });
+    measure_pub_ = create_publisher<mowbite_msgs::msg::FirmwareMeasure>("setup/firmware_measure", 10);
     motion_pub_ = create_publisher<mowbite_msgs::msg::SetupMotion>("setup/motion", 10);
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("setup/cmd_vel", 10);
     silence_client_ = create_client<SilenceDriver>("hw/silence");
@@ -577,6 +606,7 @@ class SetupNode : public rclcpp::Node {
     }
     program_->Tick(now, WallSeconds());
     if (const auto release = program_->TakeRelease()) SendRelease(*release);
+    SendMeasure(now);
     Drive(now);
     Flush(now);
     // A restart waits until the record is on the disk.
@@ -657,10 +687,13 @@ class SetupNode : public rclcpp::Node {
         auto request = std::make_shared<SilenceDriver::Request>();
         request->seconds = static_cast<float>(*seconds);
         request->blade = program_->SilenceWithBlade();
+        request->last_setpoint = program_->SilenceLastSetpoint();
         silence_client_->async_send_request(request, [this](rclcpp::Client<SilenceDriver>::SharedFuture future) {
           const auto& response = future.get();
           std::lock_guard<std::mutex> lock(mutex_);
-          program_->OnSilenceAnswer(response->success, response->code, MonotonicSeconds(), WallSeconds());
+          const double from = rclcpp::Time(response->silent_from).seconds();
+          program_->OnSilenceAnswer(response->success, response->code, MonotonicSeconds(), WallSeconds(),
+                                    from > 0 ? from : -1);
         });
       }
     }
@@ -676,6 +709,36 @@ class SetupNode : public rclcpp::Node {
             });
       }
     }
+  }
+
+  // setup/firmware_measure: at its rate while a step with firmware runs and at once for a new clear, once with active
+  // false at its end. Called with the mutex held.
+  void SendMeasure(double now) {
+    mowbite_msgs::msg::FirmwareMeasure msg;
+    if (const auto ended = program_->TakeMeasureEnd()) {
+      msg.stamp = get_clock()->now();
+      msg.active = false;
+      msg.step = *ended;
+      measure_pub_->publish(msg);
+      measure_sent_ = -1;
+    }
+    const auto signal = program_->MeasureNow();
+    if (!signal) return;
+    if (measure_sent_ >= 0 && now - measure_sent_ < kMeasurePeriod && signal->clear_seq == measure_clear_) return;
+    measure_sent_ = now;
+    measure_clear_ = signal->clear_seq;
+    msg.stamp = get_clock()->now();
+    msg.active = true;
+    msg.step = signal->step;
+    for (const auto& [board, version] : signal->firmware) {
+      diagnostic_msgs::msg::KeyValue entry;
+      entry.key = board;
+      entry.value = version;
+      msg.firmware.push_back(std::move(entry));
+    }
+    msg.device_hash = signal->device_hash;
+    msg.clear_seq = signal->clear_seq;
+    measure_pub_->publish(msg);
   }
 
   // A step that ended: a zero on setup/cmd_vel, then setup/motion with active false. Called with the mutex held.
@@ -856,6 +919,8 @@ class SetupNode : public rclcpp::Node {
         refusal = program_->Reset(params, WallSeconds());
       } else if (request.method == "setup.platforms") {
         state = program_->Platforms(image_infos_);
+      } else if (request.method == "setup.firmware.export") {
+        state = program_->Export();
       } else if (request.method == "setup.platform.set") {
         refusal = program_->ChoosePlatform(params, wall, &state);
       } else if (request.method != "setup.get") {
@@ -910,6 +975,8 @@ class SetupNode : public rclcpp::Node {
   double restarts_read_ = -1;
   double track_ = 0;
   double motion_sent_ = -1;
+  double measure_sent_ = -1;
+  uint32_t measure_clear_ = 0;
   int motion_blade_ = 0;
   rclcpp::Publisher<mowbite_msgs::msg::RpcResponse>::SharedPtr response_pub_;
   rclcpp::Publisher<RpcError>::SharedPtr error_pub_;
@@ -923,6 +990,8 @@ class SetupNode : public rclcpp::Node {
   rclcpp::Subscription<mowbite_msgs::msg::GnssFix>::SharedPtr gnss_sub_;
   rclcpp::Subscription<geometry_msgs::msg::TwistStamped>::SharedPtr wheels_sub_;
   rclcpp::Publisher<mowbite_msgs::msg::SetupMotion>::SharedPtr motion_pub_;
+  rclcpp::Publisher<mowbite_msgs::msg::FirmwareMeasure>::SharedPtr measure_pub_;
+  rclcpp::Subscription<mowbite_msgs::msg::LinkStats>::SharedPtr link_sub_;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Client<SilenceDriver>::SharedPtr silence_client_;
   rclcpp::Client<EndDriver>::SharedPtr end_client_;

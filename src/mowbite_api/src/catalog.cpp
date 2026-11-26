@@ -1070,8 +1070,25 @@ const std::vector<Method>& Methods() {
        "Takes every result back: all steps are open again, the record starts anew. It takes the date, the stand time "
        "and allow_blade out of the parameter file of the program; a lock the program opened (safety.source program) "
        "closes with a reset until a summary passes again, a date from the file kept by hand stays as it is. The "
-       "causes of failed safety steps stay",
+       "causes of failed safety steps stay. It takes measured_firmware out as well, with every run of the "
+       "measurement",
        Object("params", "The version", {SetupVersion()}), SetupAnswer(), kSetupOffered},
+      {"setup.firmware.export", "mowbite_setup",
+       "The owner measurement of firmware as a file to share: platform, firmware of the boards, device_hash, the "
+       "counts and every run kept with the values of each step and round, the operator errors and the link counts",
+       NoParams(),
+       Open(Object("result", "The measurement",
+                   {Text("platform", "The platform"), Integer("api", "The api of the OS that measured"),
+                    Integer("catalog", "Counter of the step list"),
+                    Nullable(Text("firmware_source", "firmware_source of hw/capabilities now")),
+                    Text("device_hash", "device_hash of hw/capabilities, empty without"),
+                    Integer("passed", "Runs passed in a row"), Integer("needed", "Runs needed in a row"),
+                    Integer("failed", "Runs that failed for real"),
+                    Nullable(Text("written", "The entry of measured_firmware written, null for none")),
+                    {"runs", Type::kAny, "", true, "The runs, oldest first: n, t0, t1, firmware, result (running, "
+                     "passed, failed, aborted), reason, steps by id with state, reason, values and rounds, "
+                     "operator_errors, link", {}, true, {}, ""}})),
+       kSetupOffered},
       {"setup.platforms", "mowbite_setup",
        "The mowers this image runs as, for the step platform: name, texts and image of each, the one chosen and "
        "whether the installation fixed it",

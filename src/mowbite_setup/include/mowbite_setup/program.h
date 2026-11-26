@@ -76,6 +76,30 @@ struct Capabilities {
   double blade_lease_max_s = 0;
   // How long the board stops the wheels without the host (s), below 0 unmeasured.
   double failsafe_without_host_s = -1;
+  // The longest hw/silence with last_setpoint (s), 0 for none.
+  double silence_last_setpoint_max_s = 0;
+  // firmware_source and device_hash of hw/capabilities.
+  std::string firmware_source;
+  std::string device_hash;
+};
+
+// hw/link_stats: counts since the start of the driver, stamp in s of its clock.
+struct LinkCounts {
+  double stamp = 0;
+  uint64_t checksum_errors = 0;
+  uint64_t length_errors = 0;
+  uint64_t unknown_frames = 0;
+  std::map<std::string, uint64_t> frames;
+  std::map<uint16_t, uint64_t> unknown;
+  uint32_t clear_seq = 0;
+};
+
+// setup/firmware_measure while a step with firmware runs.
+struct MeasureSignal {
+  std::string step;
+  std::vector<std::pair<std::string, std::string>> firmware;
+  std::string device_hash;
+  uint32_t clear_seq = 0;
 };
 
 // setup/motion while a step that moves the wheels or the blade runs: the bounds mowbite_safety holds its commands to,
@@ -159,9 +183,21 @@ class Program {
   void OnFix(int solution, double accuracy, double x, double y, double now);
   void OnWorld(const World& world);
   // hw/wheel_odom as the speeds of the wheels (m/s, forwards positive).
-  void OnWheels(double left, double right, double now);
+  // stamp: of hw/wheel_odom (s on the clock of the driver), below 0 for none.
+  void OnWheels(double left, double right, double now, double stamp = -1);
   // track of robot.geometry (m), 0 while unknown.
   void SetTrack(double track);
+  // firmware.cpp. hw/link_stats; now monotonic s.
+  void OnLinkStats(const LinkCounts& counts, double now);
+  // firmware_measure_force of the program: the measurement is offered for listed firmware too and writes nothing.
+  void SetMeasureForce(bool force);
+  // setup/firmware_measure to send now (4 Hz), and once the step whose end to send with active false.
+  std::optional<MeasureSignal> MeasureNow() const;
+  std::optional<std::string> TakeMeasureEnd();
+  // The silence asked for (TakeSilence) keeps the last setpoint.
+  bool SilenceLastSetpoint() const;
+  // setup.firmware.export.
+  json Export() const;
   // How often the start would start an ended driver again from now on.
   void SetDriverRestarts(int left);
   // Whether setup.json could be written the last time; without, nothing changes the state.
@@ -213,7 +249,8 @@ class Program {
   std::optional<double> TakeSilence();
   bool SilenceWithBlade() const;
   bool TakeEnd();
-  void OnSilenceAnswer(bool success, const std::string& code, double now, double wall);
+  // silent_from: the start of the silence on the clock of the stamps of hw/wheel_odom, below 0 for none.
+  void OnSilenceAnswer(bool success, const std::string& code, double now, double wall, double silent_from = -1);
   void OnEndAnswer(bool success, const std::string& code, double now, double wall);
 
   // setup.get and setup/json. images: name to {sha256, bytes} of the images that are there.
@@ -262,9 +299,26 @@ class Program {
     // and the line of every part taken so far. It outlives the restarts of the step.
     json assign;
     // A step summary under way: {date, failsafe} it wrote and {before} what the parameter file had for both (null:
-    // nothing). It outlives the restart of the step.
+    // nothing); a step firmware {entry, before}. It outlives the restart of the step.
     json applied;
+    // A step with rounds: the values of each round of the last attempt.
+    json rounds = json::array();
+    // The step firmware: counts and runs of the measurement (firmware.cpp).
+    json measure;
   };
+  // The link counts summed up since a mark: errors over all of it, frames and seconds only between two hw/link_stats
+  // of one driver, for the rates.
+  struct LinkSum {
+    uint64_t checksum_errors = 0;
+    uint64_t length_errors = 0;
+    uint64_t unknown_frames = 0;
+    std::map<std::string, uint64_t> frames;
+    std::map<uint16_t, uint64_t> unknown;
+    double seconds = 0;
+    int messages = 0;
+  };
+  // Where a part of a step latch is.
+  enum class Latch { kRest, kHeld, kClear, kSettle };
   // Where a step inputs_assign is: waiting to be restarted, for the driver after it, the lines untouched, a part, its
   // question, the lines back at rest.
   enum class Assign { kRestart, kDriver, kQuiet, kPart, kAsk, kRest };
@@ -348,6 +402,8 @@ class Program {
     double drive_began = 0;
     double drive_wall = 0;
     double trigger = -1;
+    // The trigger on the clock of the driver (hw/silence silent_from), below 0 for none.
+    double trigger_stamp = -1;
     double stood = -1;
     double silence_end = -1;
     double returned = -1;
@@ -393,6 +449,18 @@ class Program {
     double peak = 0;
     // summary: the OS restarted since the step wrote; it waits for hw/capabilities then.
     bool restarted = false;
+    // A step with firmware waits for the driver to let it measure, and when it last released an emergency of it.
+    bool opening = false;
+    double open_release = -1;
+    // The values of the rounds before this one.
+    json rounds = json::array();
+    // latch: where the part is, the clear asked for and when it went out, how many clears of press went out.
+    Latch latch = Latch::kRest;
+    uint32_t clear = 0;
+    double cleared_at = -1;
+    int clears = 0;
+    // link: the counts of the step.
+    LinkSum link;
   };
 
   // The emergency a part of mode press brought, which the program releases itself. It exists only while every
@@ -538,6 +606,53 @@ class Program {
   double BladeLimit(const Step& step, const std::string& part) const;
   // final: the part that ran without a stand is not ok.
   json BladeValues(const Run& run, const Step& step, bool final) const;
+  // firmware.cpp: the owner measurement of firmware.
+  // Its steps are shown: firmware_source none or older, or forced; and offered to start (not older).
+  bool MeasureShown() const;
+  bool MeasureOffered() const;
+  bool Shows(const Step& step) const {
+    return !step.firmware || MeasureShown();
+  }
+  const Step* FirmwareStep() const;
+  const Step* LinkStep() const;
+  // What keeps a step with firmware from starting; the first refuses setup.start.
+  std::vector<Refusal> MeasureProblems(const Step& step) const;
+  // setup.start of a step with firmware; true when the start is done (a restart for the blade).
+  bool StartMeasure(const Step& step, double wall);
+  json& Measure();
+  const json& MeasureRecord() const;
+  json* CurrentRun();
+  std::string BoardVersion(const std::string& board) const;
+  bool MeasureClosed() const;
+  // The new driver of a step driver_end with firmware: it starts with the measurement closed (FIRMWARE_INCOMPATIBLE)
+  // until it hears the signal again, which the release of the step clears; the bits it may show meanwhile.
+  uint32_t ReturnBits() const;
+  std::string FirmwareEntry() const;
+  // A step with firmware ended: its result into the run; a real failure or too many operator errors end the run.
+  void NoteMeasured(const Step& step, const std::string& state, const std::string& reason, const std::string& message,
+                    const json& fields, double wall);
+  void EndMeasureRun(const std::string& result, const std::string& reason, double wall);
+  // Takes the entry out of measured_firmware; true when it was there.
+  bool Revoke(const json& entry);
+  void TickOpening(double now, double wall);
+  void BeginMeasured(double now, double wall);
+  void TickClears(double now);
+  void AskClear(double now);
+  void ReleaseMeasured(double now, const std::string& why);
+  void TickLink(double now, double wall);
+  json LinkValues(const LinkSum& sum, const Step& step, bool final) const;
+  // The first value of LinkValues outside of its bounds, as fields of LIMIT; nothing when all hold.
+  std::optional<json> LinkFault(const LinkSum& sum, const Step& step) const;
+  void TickLatch(double now, double wall);
+  void LatchPartDone(double now, double wall);
+  json LatchValues(const Run& run, const Step& step) const;
+  void BeginFirmware(const Step& step, double now, double wall);
+  void TickFirmware(double now, double wall);
+  json FirmwareValues(const Step& step) const;
+  void ForgetFirmware(const Step& step);
+  // A part or round is done: the next round from the first part, or false after the last.
+  bool NextRound(double now, double wall);
+  int Rounds(const Step& step) const;
   // summary.cpp: the step that opens the lock.
   static bool IsSummary(const Step& step);
   static bool IsHardware(const Step& step);
@@ -661,6 +776,8 @@ class Program {
   double right_filtered_ = 0;
   double wheels_at_ = -1;
   double still_since_ = -1;
+  // still_since_ by the stamp of that hw/wheel_odom, below 0 for none.
+  double still_stamp_ = -1;
   // Since when the blade turns below still_rpm of the running step (below 0: it turns or does not report).
   double blade_still_since_ = -1;
   double track_ = 0;
@@ -680,6 +797,20 @@ class Program {
   std::string reset_date_;
   // The step blade whose allow_blade waits for the parameter file to be written.
   std::string allow_step_;
+  // The owner measurement: firmware_measure_force, the last clear asked for and the last one the driver sent with
+  // when it came, when the program last asked one by itself, the link counts of the run, the last hw/link_stats, and
+  // the step to send the end of setup/firmware_measure for.
+  bool force_ = false;
+  uint32_t clear_seq_ = 0;
+  uint32_t clear_sent_ = 0;
+  double clear_sent_at_ = -1;
+  double clear_auto_at_ = -1;
+  LinkSum run_link_;
+  // Ids of unknown modules the step link of the run saw; later ones fail the step firmware.
+  std::set<uint16_t> link_ids_;
+  std::optional<LinkCounts> link_last_;
+  double link_at_ = -1;
+  std::optional<std::string> measure_end_;
 };
 
 }  // namespace mowbite_setup

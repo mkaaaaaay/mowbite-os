@@ -158,7 +158,7 @@ TEST(Steps, WhatBreaksTheRulesIsNamed) {
   EXPECT_EQ(Problem("/steps/1/parts", json::array()),
             "board: parts go with input, inputs_assign, imu, stop_moving, wheels, ground and blade only");
   EXPECT_EQ(Problem("/steps/2/parts/1/id", "top"), "stop: the part top comes twice");
-  EXPECT_EQ(Problem("/steps/2/parts/1/mode", "long"), "stop: long is no mode");
+  EXPECT_EQ(Problem("/steps/2/parts/1/mode", "long"), "stop: long is no mode of input");
   EXPECT_EQ(Problem("/steps/4/parts", json::array({"front_up", "jump"})), "imu: jump is no move");
   EXPECT_EQ(Problem("/steps/1/image", "../board.svg"), "board: ../board.svg is no image name");
   EXPECT_EQ(Problem("/steps/2/accent", "stop-accent.svg"), "stop: accent needs an image and an image name");

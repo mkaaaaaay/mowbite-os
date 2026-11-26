@@ -51,7 +51,7 @@ void Program::OnClock(bool ok, const std::string& reason) {
 std::optional<double> Program::LongestSilence() const {
   std::optional<double> longest;
   for (const Step& step : list_.steps) {
-    if (step.check != "silence" || records_.at(step.id).state != "ok") continue;
+    if (step.check != "silence" || step.firmware || records_.at(step.id).state != "ok") continue;
     for (const auto& value : records_.at(step.id).values) {
       if (!value.is_object() || !value.contains("value") || !value["value"].is_number()) continue;
       if (value.value("id", "").rfind("round_", 0) != 0) continue;
@@ -64,7 +64,7 @@ std::optional<double> Program::LongestSilence() const {
 std::vector<const Step*> Program::SafetyStepsDue() const {
   std::vector<const Step*> due;
   for (const Step& step : list_.steps) {
-    if (!mowbite_api::FindSetupCheck(step.check)->safety) continue;
+    if (!mowbite_api::FindSetupCheck(step.check)->safety || step.firmware) continue;
     const bool cause = std::any_of(lock_.causes.begin(), lock_.causes.end(),
                                    [&step](const auto& c) { return !c.reset && c.step == step.id; });
     if (records_.at(step.id).state != "ok" || cause) due.push_back(&step);
@@ -254,6 +254,7 @@ bool Program::EraseSettings() {
     std::vector<const char*> keys;
     if (IsSummary(step)) keys = {mowbite_api::kSafetyDate, mowbite_api::kFailsafeWithoutHost};
     if (IsBlade(step)) keys = {mowbite_api::kAllowBlade};
+    if (step.check == "firmware") keys = {mowbite_api::kMeasuredFirmware};
     for (const char* key : keys) {
       if (layer_.Get(step.Word("node"), key).is_null()) continue;
       layer_.Erase(step.Word("node"), key);

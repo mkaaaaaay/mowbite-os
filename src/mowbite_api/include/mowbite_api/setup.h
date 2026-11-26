@@ -156,6 +156,10 @@ constexpr char kAllowBlade[] = "allow_blade";
 // the board stops the wheels without the host (s).
 constexpr char kSafetyDate[] = "safety_measurement_date";
 constexpr char kFailsafeWithoutHost[] = "failsafe_without_host";
+// The parameter of the driver a step firmware names: entries "<version>/<version>/<device_hash>" of firmware an owner
+// measured on this device. The parameter of the setup program that offers the measurement for listed firmware too.
+constexpr char kMeasuredFirmware[] = "measured_firmware";
+constexpr char kFirmwareMeasureForce[] = "firmware_measure_force";
 
 // Bounds of a step list and of setup.*.
 constexpr int kSetupMaxSteps = 100;

@@ -64,11 +64,6 @@ const std::vector<std::string>& Groups() {
 }
 
 // Bits of emergency_reason of hw/status the checks ask for, by their names in the catalog.
-uint32_t FirmwareBit() {
-  static const uint32_t bit = EmergencyBit("FIRMWARE_INCOMPATIBLE");
-  return bit;
-}
-
 uint32_t TiltBit() {
   static const uint32_t bit = EmergencyBit("TILT");
   return bit;
@@ -154,6 +149,8 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
       if (saved.contains("answers") && saved["answers"].is_object()) record.answers = saved["answers"];
       if (saved.contains("assign")) record.assign = saved["assign"];
       if (saved.contains("applied")) record.applied = saved["applied"];
+      if (saved.contains("rounds") && saved["rounds"].is_array()) record.rounds = saved["rounds"];
+      if (saved.contains("measure") && saved["measure"].is_object()) record.measure = saved["measure"];
     }
     records[step.id] = std::move(record);
   }
@@ -171,8 +168,9 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
   }
   for (const Step& step : list_.steps) {
     Record& record = RecordOf(step);
-    // The restart a step summary or hardware asked for: it goes on with what the driver shows now.
-    if (record.state == "running" && (IsSummary(step) || IsHardware(step)) && record.applied.is_object() && !run_) {
+    // The restart a step summary, hardware or firmware asked for: it goes on with what the driver shows now.
+    if (record.state == "running" && (IsSummary(step) || IsHardware(step) || step.check == "firmware") &&
+        record.applied.is_object() && !run_) {
       run_ = SummaryRun(step, wall);
       continue;
     }
@@ -197,6 +195,8 @@ bool Program::Load(const std::string& text, double wall, std::string* why) {
     if (learn) record.assign["parts"] = json::object();
     run_ = AssignRun(step, apply, wall);
   }
+  // A run of the measurement does not outlive the OS: its link counts are gone.
+  if (CurrentRun()) EndMeasureRun("aborted", "INTERRUPTED", wall);
   return true;
 }
 
@@ -220,6 +220,8 @@ std::string Program::Text() const {
                       {"values", record.values}, {"parts", record.parts},     {"answers", record.answers}};
     if (!record.assign.is_null()) steps[step.id]["assign"] = record.assign;
     if (!record.applied.is_null()) steps[step.id]["applied"] = record.applied;
+    if (!record.rounds.empty()) steps[step.id]["rounds"] = record.rounds;
+    if (!record.measure.is_null()) steps[step.id]["measure"] = record.measure;
   }
   json file = {{"schema", 1},
                {"platform", platform_},
@@ -274,7 +276,7 @@ void Program::NoteLines() {
 void Program::WatchOwnLatch() {
   if (!own_) return;
   const uint32_t reason = hardware_.emergency_reason;
-  const bool other = (reason & ~(own_->bit | LatchBit())) != 0;
+  const bool other = (reason & ~(own_->bit | LatchBit() | (run_ ? ReturnBits() : 0))) != 0;
   const bool released = own_->confirmed && (reason & (own_->bit | LatchBit())) == 0;
   const bool uncounted = own_->confirmed && hardware_.latch_count == 0;
   if (other || released || uncounted) own_.reset();
@@ -282,7 +284,11 @@ void Program::WatchOwnLatch() {
 
 void Program::OnHardware(const Hardware& hardware, double now) {
   NoteDriverBack(hardware, now);
+  // latch: when the input of the part fell, between two ticks.
+  const bool latch = run_ && !run_->opening && StepOf(*run_).check == "latch";
+  const bool before = latch && Signal(StepOf(*run_).parts[run_->part].role);
   hardware_ = hardware;
+  if (before && !Signal(StepOf(*run_).parts[run_->part].role)) run_->released = now;
   hardware_at_ = now;
   const bool blade = run_ && IsBlade(StepOf(*run_));
   if (!blade || BladeTurns(StepOf(*run_)) || !hardware.blade_ok) {
@@ -445,14 +451,14 @@ std::string Program::Shown(const Step& step) const {
 
 bool Program::StageDone(const std::string& stage) const {
   for (const Step& step : list_.steps) {
-    if (step.stage == stage && !Done(records_.at(step.id).state)) return false;
+    if (step.stage == stage && Shows(step) && !Done(records_.at(step.id).state)) return false;
   }
   return true;
 }
 
 bool Program::Complete() const {
   return std::all_of(list_.steps.begin(), list_.steps.end(),
-                     [this](const Step& step) { return Done(records_.at(step.id).state); });
+                     [this](const Step& step) { return !Shows(step) || Done(records_.at(step.id).state); });
 }
 
 std::string Program::FirmwareText() const {
@@ -494,6 +500,7 @@ void Program::EndRun(double now) {
   // now, TickLearning restarts it.
   const Step& step = StepOf(*run_);
   if (IsDrive(step)) EndMotion(step);
+  if (step.firmware && step.check != "firmware") measure_end_ = step.id;
   Record& record = RecordOf(step);
   if (!record.assign.is_null()) {
     record.assign = nullptr;
@@ -501,11 +508,15 @@ void Program::EndRun(double now) {
     restart_wanted_ = false;
     ForgetLearning(step);
   }
-  if (!record.applied.is_null() && IsSummary(step)) ForgetSummary(step);
-  if (!record.applied.is_null() && IsHardware(step)) {
-    record.applied = nullptr;
-    restart_wanted_ = false;
+  if (!record.applied.is_null()) {
+    if (IsSummary(step)) ForgetSummary(step);
+    if (step.check == "firmware") ForgetFirmware(step);
+    if (IsHardware(step)) {
+      record.applied = nullptr;
+      restart_wanted_ = false;
+    }
   }
+  record.rounds = run_->rounds;
   run_.reset();
 }
 
@@ -547,7 +558,8 @@ void Program::LayerWritten(bool written, double now, double wall) {
     End(*step, "open", "NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(),
         wall);
   }
-  if (run_ && (IsAssign(StepOf(*run_)) || IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_)))) {
+  const Step* running = run_ ? &StepOf(*run_) : nullptr;
+  if (running && (IsAssign(*running) || IsSummary(*running) || IsHardware(*running) || running->check == "firmware")) {
     Fail("NOT_APPLIED", "The parameter file of the setup program cannot be written", json::object(), now, wall);
   }
 }
@@ -559,7 +571,9 @@ bool Program::RestartAllowed(double now) const {
   if (HardwareRestart() && !drivers_on_) return world_.state == "IDLE";
   const uint32_t reason = hardware_.emergency_reason;
   const bool learning = (reason & LearningBit()) != 0;
-  const uint32_t allowed = learning ? LearningBit() | LatchBit() : 0;
+  uint32_t allowed = learning ? LearningBit() | LatchBit() : 0;
+  // Firmware the driver does not let drive stays latched over any restart.
+  if ((reason & FirmwareBit()) != 0) allowed |= FirmwareBit() | LatchBit();
   return Fresh(hardware_at_, now, kFresh) && !hardware_.hold && world_.state == "IDLE" && (reason & ~allowed) == 0;
 }
 
@@ -642,9 +656,14 @@ void Program::End(const Step& step, const std::string& state, const std::string&
     if (!item.value().is_null()) details[item.key()] = item.value();
   }
   events_.push_back({kStepEvent, std::move(details)});
-  if (state == "failed" && mowbite_api::SetupClosesLock(step.check, reason)) CloseLock(step, reason, fields, wall);
-  if (state == "failed" && mowbite_api::FindSetupCheck(step.check)->safety) ReopenSummary();
-  if (state == "ok") ReleaseLock(step);
+  // The measurement of firmware never touches the lock: its runs decide on measured_firmware.
+  const bool safety = !step.firmware && mowbite_api::FindSetupCheck(step.check)->safety;
+  if (safety && state == "failed" && mowbite_api::SetupClosesLock(step.check, reason)) {
+    CloseLock(step, reason, fields, wall);
+  }
+  if (safety && state == "failed") ReopenSummary();
+  if (state == "ok" && !step.firmware) ReleaseLock(step);
+  if (step.firmware && step.check != "firmware") NoteMeasured(step, state, reason, message, fields, wall);
   if (!stage_done && StageDone(step.stage)) {
     events_.push_back({"SETUP", {{"what", "stage_done"}, {"stage", step.stage}}});
   }
@@ -658,7 +677,7 @@ void Program::Pass(const Step& step, double now, double wall) {
     record.values = Values(step, now, true);
     record.parts = json(std::vector<std::string>(step.parts.size(), "ok"));
     if (IsAssign(step)) record.assign = nullptr;
-    if (IsSummary(step) || IsHardware(step)) record.applied = nullptr;
+    if (IsSummary(step) || IsHardware(step) || step.check == "firmware") record.applied = nullptr;
     EndRun(now);
   }
   End(step, "ok", "", "", {}, wall);
@@ -730,7 +749,7 @@ void Program::LoadLock(const std::optional<std::string>& text, double wall) {
 void Program::RestoreCauses() {
   for (const Step& step : list_.steps) {
     const Record& record = records_.at(step.id);
-    if (record.state != "failed" || !record.result.is_object()) continue;
+    if (step.firmware || record.state != "failed" || !record.result.is_object()) continue;
     const json reason = record.result.value("reason", json());
     if (!reason.is_string() || !mowbite_api::SetupClosesLock(step.check, reason.get<std::string>())) continue;
     const bool there = std::any_of(lock_.causes.begin(), lock_.causes.end(),
@@ -847,7 +866,8 @@ json Program::SafetyState() const {
           {"firmware", std::move(firmware)},
           {"why", std::move(why)},
           {"source", source.empty() ? json() : json(source)},
-          {"closed", std::move(closed)}};
+          {"closed", std::move(closed)},
+          {"firmware_source", capabilities_known_ ? json(capabilities_.firmware_source) : json()}};
 }
 
 bool Program::CanAsk(const Step& step) {
@@ -923,6 +943,10 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   }
   if (!step.start) return Refuse("WRONG_METHOD", step.id + " is not begun with setup.start");
   if (run_) return Refuse("BUSY", StepOf(*run_).id + " is running", {{"step", StepOf(*run_).id}});
+  if (step.firmware) {
+    const auto problems = MeasureProblems(step);
+    if (!problems.empty()) return problems.front();
+  }
   if (!NeedsMet(step)) {
     json needs = json::array();
     for (const auto& need : step.needs) {
@@ -967,6 +991,7 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   }
   // A driver that does not allow the blade yet: this start writes allow_blade and restarts the OS, the next one runs.
   if (IsBlade(step) && AllowBlade(step)) return std::nullopt;
+  if (step.firmware && StartMeasure(step, wall)) return std::nullopt;
 
   Record& record = RecordOf(step);
   ++record.attempt;
@@ -986,7 +1011,12 @@ std::optional<Refusal> Program::Start(const json& params, double now, double wal
   run.measured.assign(step.parts.size(), std::nullopt);
   run.stage_began = now;
   run_ = std::move(run);
-  if (IsAssign(step)) {
+  if (step.check == "firmware") {
+    BeginFirmware(step, now, wall);
+  } else if (step.firmware) {
+    // The driver lets it measure first (TickOpening).
+    run_->opening = true;
+  } else if (IsAssign(step)) {
     // The driver starts again learning; the step goes on after that restart.
     record.assign = {{"phase", "learn"}, {"parts", json::object()}};
     layer_.Set(step.Word("node"), mowbite_api::kInputsLearn, true);
@@ -1107,7 +1137,7 @@ void Program::TickChoiceParams(double now) {
 void Program::GeometryChanged(double wall) {
   for (const Step& step : list_.steps) {
     const mowbite_api::SetupCheck* check = mowbite_api::FindSetupCheck(step.check);
-    if (check && check->safety && RecordOf(step).state == "ok") RecordOf(step) = Record();
+    if (check && check->safety && !step.firmware && RecordOf(step).state == "ok") RecordOf(step) = Record();
   }
   ReopenSummary();
   if (!capabilities_.safety_measurement_date.empty()) CloseWithReset(wall);
@@ -1240,8 +1270,14 @@ std::optional<Refusal> Program::Reset(const json& params, double wall) {
   run_.reset();
   own_.reset();
   release_.reset();
+  const Step* firmware = FirmwareStep();
+  const bool measured = firmware && !layer_.Get(firmware->Word("node"), mowbite_api::kMeasuredFirmware).is_null();
   ResetSettings(wall);
   for (auto& [id, record] : records_) record = Record();
+  run_link_ = LinkSum();
+  link_ids_.clear();
+  // measured_firmware went out of the file: the driver drops it with the restart.
+  if (measured) WantRestart();
   MarkPlatform();
   MarkHardware();
   reached_.clear();
@@ -1281,7 +1317,9 @@ void Program::PartDone(double now, double wall) {
         }
       }
     }
-    if (silent.empty()) {
+    if (silent.empty() && NextRound(now, wall)) {
+      BeginPart(now, wall);
+    } else if (silent.empty()) {
       Pass(step, now, wall);
     } else {
       Fail("LINE_SILENT", "Lines of the step did not switch: " + silent.dump(), {{"lines", silent}}, now, wall);
@@ -1294,7 +1332,23 @@ void Program::PartDone(double now, double wall) {
 
 void Program::Tick(double now, double wall) {
   TrackWorld(now);
-  if (run_ && run_->pressed_at >= 0 && !IsDrive(StepOf(*run_))) {
+  // The firmware the run measures changed under it: the run does not count.
+  // Only once the driver knows its firmware again: a new driver reports none for a while.
+  json* measuring = CurrentRun();
+  if (measuring && capabilities_known_ && !capabilities_.firmware_source.empty() &&
+      (*measuring)["entry"] != FirmwareEntry()) {
+    EndMeasureRun("aborted", "FIRMWARE_CHANGED", wall);
+    if (run_ && StepOf(*run_).firmware) {
+      Fail("FIRMWARE_CHANGED", "The firmware or the device id changed during the run", json::object(), now, wall);
+    }
+    Changed();
+  }
+  TickClears(now);
+  if (run_ && run_->opening) {
+    TickOpening(now, wall);
+  } else if (run_ && MeasureClosed()) {
+    Fail("NOT_OPENED", "The driver ended the measurement", json::object(), now, wall);
+  } else if (run_ && run_->pressed_at >= 0 && !IsDrive(StepOf(*run_))) {
     TickPressed(now, wall);
   } else if (run_) {
     const std::string& check = StepOf(*run_).check;
@@ -1305,6 +1359,9 @@ void Program::Tick(double now, double wall) {
     if (check == "inputs_assign") TickAssign(now, wall);
     if (check == "summary") TickSummary(now, wall);
     if (check == "hardware") TickHardware(now, wall);
+    if (check == "link") TickLink(now, wall);
+    if (check == "latch") TickLatch(now, wall);
+    if (check == "firmware") TickFirmware(now, wall);
     if (run_ && IsDrive(StepOf(*run_))) TickDrive(now, wall);
   }
   if (restart_sent_ >= 0 && !run_ && now - restart_sent_ > kRestartLost) restart_sent_ = -1;
@@ -1406,6 +1463,25 @@ void Program::TickInput(double now, double wall) {
     }
     return;
   }
+  if (step.firmware && (run.phase == Phase::kSwitched || run.phase == Phase::kWatch)) {
+    // Measured firmware: a part brings its own input and emergency only; lifting the front may touch the bumper.
+    const std::string group = GroupOf(part.role);
+    const auto allowed = [&group](const std::string& other) {
+      return other == group || (group == "lift" && other == "bumper");
+    };
+    uint32_t own = InputBits(group);
+    if (group == "lift") own |= InputBits("bumper");
+    std::string seen;
+    for (const auto& other : Groups()) {
+      if (!allowed(other) && (Signal(other) || (hardware_.emergency_reason & InputBits(other) & ~own) != 0)) {
+        seen = other;
+      }
+    }
+    if (!seen.empty()) {
+      Fail("WRONG_INPUT", "The input " + seen + " switched with " + part.role, {{"seen", seen}}, now, wall);
+      return;
+    }
+  }
   switch (run.phase) {
     case Phase::kRest:
       if (!signal && !latched) {
@@ -1436,6 +1512,12 @@ void Program::TickInput(double now, double wall) {
       }
       if (part.role == "bumper_left" && hardware_.bumper_right) run.other = "bumper_right";
       if (part.role == "bumper_right" && hardware_.bumper_left) run.other = "bumper_left";
+      // Measured firmware: another input fails at once, its latched emergency would hide the right one.
+      if (step.firmware && !run.other.empty()) {
+        Fail("WRONG_INPUT", "The input " + run.other + " switched, not " + part.role, {{"seen", run.other}}, now,
+             wall);
+        return;
+      }
       // An emergency that is on before the input shows is not of this input: wait for its release first.
       if (!latched) {
         run.latched_since = -1;
@@ -1811,7 +1893,10 @@ json Program::Values(const Step& step, double now, bool final) const {
   if (!IsRun(step)) return records_.at(step.id).values;
   if (IsSummary(step)) return SummaryValues(step);
   if (IsHardware(step)) return json::array();
+  if (step.check == "firmware") return FirmwareValues(step);
   const Run& run = *run_;
+  if (step.check == "link") return LinkValues(run.link, step, final);
+  if (step.check == "latch") return LatchValues(run, step);
   if (step.check == "board") {
     return BoardValues(run, step, final ? step.Number("time") : now - run.began, final);
   }
@@ -1886,6 +1971,9 @@ json Program::Blocked(const Step& step, double now) const {
     if (IsAssign(step) && run_->assign == Assign::kRest && !AtRest()) add("INPUT_ACTIVE", "A line is still switched");
     return blocked;
   }
+  if (step.firmware && !IsRun(step)) {
+    for (const Refusal& problem : MeasureProblems(step)) add_problem(problem);
+  }
   if (IsSummary(step)) {
     for (const Refusal& problem : SummaryProblems(now)) add_problem(problem);
     return blocked;
@@ -1894,6 +1982,11 @@ json Program::Blocked(const Step& step, double now) const {
     if (!drivers_on_) {
       for (const Refusal& problem : HardwareProblems()) add_problem(problem);
     }
+    return blocked;
+  }
+  if (IsRun(step) && run_->opening) {
+    const std::string names = mowbite_api::EmergencyNames(static_cast<int>(hardware_.emergency_reason));
+    add("EMERGENCY", "The driver opens the measurement: " + (names.empty() ? std::string("-") : names));
     return blocked;
   }
   if (IsRun(step) && IsDrive(step)) {
@@ -1909,6 +2002,19 @@ json Program::Blocked(const Step& step, double now) const {
     for (const Refusal& problem : DriveProblems(step, now)) add_problem(problem);
     return blocked;
   }
+  if (IsRun(step) && step.check == "latch") {
+    // A part waits for its input free and the emergency of the part before released (ReleaseMeasured).
+    const Run& run = *run_;
+    if (run.latch != Latch::kRest || step.parts[run.part].mode == "release") return blocked;
+    const std::string& role = step.parts[run.part].role;
+    if (Signal(role)) {
+      add("INPUT_ACTIVE", "The input " + role + " is still switched");
+    } else if (hardware_.emergency_reason != 0) {
+      add("EMERGENCY", "The emergency " + mowbite_api::EmergencyNames(static_cast<int>(hardware_.emergency_reason)) +
+                           " is still latched");
+    }
+    return blocked;
+  }
   if (IsRun(step)) {
     const Run& run = *run_;
     if (step.parts.empty()) return blocked;
@@ -1917,11 +2023,12 @@ json Program::Blocked(const Step& step, double now) const {
     if (step.check == "input") {
       const uint32_t bit = EmergencyBit(step.Word("emergency"));
       const bool pressed = run.phase == Phase::kWatch && part.mode == "press";
-      // The program releases the emergency of a press itself: until then only the input shows, while it is switched.
+      // The program releases the emergency of a press itself: while the input is held only the input shows. At rest
+      // the part waits for that release too, a press before it is not seen.
       const bool own = own_ && own_->confirmed;
       if ((rest || (pressed && own)) && Signal(part.role)) {
         add("INPUT_ACTIVE", "The input " + part.role + " is still switched");
-      } else if ((rest || pressed) && !own && bit != 0 && (hardware_.emergency_reason & bit) != 0) {
+      } else if ((rest || (pressed && !own)) && bit != 0 && (hardware_.emergency_reason & bit) != 0) {
         add("EMERGENCY", "The emergency " + step.Word("emergency") + " is still latched");
       }
       return blocked;
@@ -1978,6 +2085,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
   json first_stage;
   json current = run_ ? json(StepOf(*run_).id) : json();
   for (const Step& step : list_.steps) {
+    if (!Shows(step)) continue;
     const Record& record = records_.at(step.id);
     const bool is_run = IsRun(step);
     const std::string shown = Shown(step);
@@ -2094,7 +2202,11 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       if (run_->assign == Assign::kPart || asks) progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
       if (run_->assign == Assign::kPart) ends_at = std::floor(run_->part_wall + step.Number("time"));
     } else if (is_run && IsDrive(step)) {
-      if (!step.parts.empty()) progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
+      const int rounds = Rounds(step);
+      const size_t parts = std::max<size_t>(step.parts.size(), 1);
+      if (!step.parts.empty() || rounds > 1) {
+        progress = {{"n", run_->round * parts + run_->part + 1}, {"of", rounds * parts}};
+      }
       if (step.check == "silence") {
         progress = {{"n", run_->round + 1}, {"of", std::lround(step.Number("rounds"))}};
       }
@@ -2107,9 +2219,9 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
       } else if (step.check == "wheels" && run_->drive == Drive::kAnswer) {
         ends_at = std::floor(run_->drive_wall + mowbite_api::kSetupPressedTime);
       }
-    } else if (is_run && !IsSummary(step) && !IsHardware(step)) {
+    } else if (is_run && !IsSummary(step) && !IsHardware(step) && step.check != "firmware") {
       if (!step.parts.empty()) {
-        progress = {{"n", run_->part + 1}, {"of", step.parts.size()}};
+        progress = {{"n", run_->round * step.parts.size() + run_->part + 1}, {"of", Rounds(step) * step.parts.size()}};
         ends_at = std::floor(run_->part_wall + step.Number("time"));
       } else {
         ends_at = std::floor(run_->wall_began + step.Number(step.check == "position" ? "timeout" : "time"));
@@ -2124,7 +2236,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"check", step.check},
                      {"kind", step.kind},
                      {"state", shown},
-                     {"safety", mowbite_api::FindSetupCheck(step.check)->safety},
+                     {"safety", mowbite_api::FindSetupCheck(step.check)->safety && !step.firmware},
+                     {"firmware", step.firmware},
                      {"attempt", record.attempt},
                      {"needs", step.needs},
                      {"blocked", Blocked(step, now)},
@@ -2157,7 +2270,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
   for (auto& stage : stages) {
     int all = 0, ok = 0, done = 0, failed = 0, running = 0;
     for (const Step& step : list_.steps) {
-      if (step.stage != stage["id"]) continue;
+      if (step.stage != stage["id"] || !Shows(step)) continue;
       const std::string& state = records_.at(step.id).state;
       ++all;
       ok += state == "ok";
@@ -2174,6 +2287,15 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
           {"current", std::move(current)},
           {"complete", Complete()},
           {"safety", SafetyState()},
+          {"firmware",
+           {{"offered", MeasureShown()},
+            {"force", force_},
+            {"device", !capabilities_.device_hash.empty()},
+            {"passed", MeasureRecord().value("passed", 0)},
+            {"needed", MeasureRecord().value("needed", 1)},
+            {"failed", MeasureRecord().value("failed", 0)},
+            {"runs", MeasureRecord().value("runs", json::array()).size()},
+            {"written", MeasureRecord().value("written", json())}}},
           {"restart_pending",
            restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart) ||
                (run_ && (IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_))) && !run_->restarted)},

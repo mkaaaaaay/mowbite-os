@@ -303,7 +303,7 @@ TEST(Program, AFreshProgramShowsItsSteps) {
   EXPECT_FALSE(state["complete"].get<bool>());
   EXPECT_EQ(state["safety"], (json{{"open", false}, {"date", nullptr}, {"firmware", nullptr},
                                    {"why", "NO_SAFETY_MEASUREMENT"}, {"source", nullptr},
-                                   {"closed", json::array()}}));
+                                   {"closed", json::array()}, {"firmware_source", ""}}));
   ASSERT_EQ(state["stages"].size(), 7u);
   EXPECT_EQ(state["stages"][1]["texts"]["de"]["name"], "Eingänge");
   EXPECT_EQ(state["stages"][0]["state"], "open");
@@ -573,7 +573,8 @@ TEST(Program, TheEmergencyOfACheckedInputIsReleasedOnceItIsFree) {
   EXPECT_GE(bench.releases[0].first - edge, 1.5);
   EXPECT_EQ(bench.releases[0].second.latch_count, 1u);
   EXPECT_EQ(bench.StepState("stop")["parts"][0]["state"], "ok");
-  EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
+  // The next part waits for that release: a press before it would not be seen.
+  EXPECT_EQ(bench.StepState("stop")["blocked"][0]["reason"], "EMERGENCY");
   // The driver did not take it yet: the next try comes 1.5 s later, not before.
   bench.Run(1.3);
   EXPECT_EQ(bench.releases.size(), 1u);
@@ -584,6 +585,7 @@ TEST(Program, TheEmergencyOfACheckedInputIsReleasedOnceItIsFree) {
   bench.hardware.emergency_reason = 0;
   bench.Run(4);
   EXPECT_EQ(bench.releases.size(), 2u);
+  EXPECT_TRUE(bench.StepState("stop")["blocked"].empty());
   bench.Switch(&Hardware::stop, bench.stop);
   bench.hardware.stop = false;
   bench.Run(0.2);
@@ -1941,7 +1943,7 @@ TEST(Lock, AFailedSafetyStepClosesTheLockUntilItPassesAgain) {
                                   {"firmware", nullptr},
                                   {"why", nullptr},
                                   {"source", "hand"},
-                                  {"closed", json::array()}}));
+                                  {"closed", json::array()}, {"firmware_source", ""}}));
   EXPECT_EQ(bench.StepState("left")["safety"], true);
   EXPECT_EQ(bench.StepState("board")["safety"], false);
   EXPECT_FALSE(bench.program.TakeLock());

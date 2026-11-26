@@ -100,11 +100,12 @@ void Program::NextBladePart(double now, double wall) {
   const Step& step = StepOf(run);
   run.part_states[run.part] = "ok";
   run.blade = kBladeOff;
-  if (run.part + 1 >= step.parts.size()) {
+  if (run.part + 1 < step.parts.size()) {
+    ++run.part;
+  } else if (!NextRound(now, wall)) {
     Pass(step, now, wall);
     return;
   }
-  ++run.part;
   BeginBladePart(now, wall);
 }
 

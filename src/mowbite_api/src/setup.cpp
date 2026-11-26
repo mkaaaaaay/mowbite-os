@@ -153,6 +153,29 @@ std::vector<ReasonEntry> DriveBlocks() {
                        "Check allow_blade in the settings file kept by hand, then restart MowBite OS."}))};
 }
 
+// What keeps a step with firmware from starting; the same in SETUP_REFUSED and SETUP_BLOCKED.
+std::vector<ReasonEntry> FirmwareBlocks() {
+  return {Reason("NO_DEVICE_ID", "info", "user",
+                 "hw/capabilities has no device_hash: a measurement could not be tied to this device", {},
+                 Both({"Gerät nicht erkennbar",
+                       "Der Mäher kann sich selbst nicht eindeutig erkennen. Eine Messung gilt aber nur für genau "
+                       "dieses Gerät.",
+                       "Die Messung ist auf diesem Mäher nicht möglich; im Discord melden."},
+                      {"Device not recognisable",
+                       "The mower can't tell itself apart from others, but a measurement holds only for this device.",
+                       "The measurement is not possible on this mower; tell us on Discord."})),
+          Reason("FIRMWARE_OLDER", "info", "user",
+                 "A board reports firmware older than every one the driver lists: update it with the vendor first, it "
+                 "is not measured",
+                 {},
+                 Both({"Erst Hersteller-Update",
+                       "Die Firmware einer Platine ist älter als jede bekannte. Ältere Firmware wird nicht gemessen.",
+                       "Die Firmware über den Hersteller aktualisieren, dann erneut versuchen."},
+                      {"Vendor update first",
+                       "The firmware of a board is older than every known one. Older firmware is not measured.",
+                       "Update the firmware through the vendor, then try again."}))};
+}
+
 // What keeps a step summary from starting; the same in SETUP_REFUSED and SETUP_BLOCKED.
 std::vector<ReasonEntry> SummaryBlocks() {
   return {Reason("SAFETY_STEPS", "info", "user",
@@ -199,8 +222,12 @@ SetupParam StandWay(std::string name, double def, std::string text) {
   return Amount(std::move(name), "m", 0.05, 1, def, std::move(text));
 }
 
-SetupParam StopMax() {
-  return Seconds("stop_max", 0.1, 3, 1, "The wheels stand within this time of the trigger");
+SetupParam StopMax(double max = 3) {
+  return Seconds("stop_max", 0.1, max, 1, "The wheels stand within this time of the trigger");
+}
+
+SetupParam Rounds(double max, double def = 1) {
+  return Amount("rounds", "", 1, max, def, "How often the whole step runs; every round has to pass");
 }
 
 SetupParam Hold() {
@@ -220,7 +247,8 @@ SetupParam Emergencies() {
 // The reasons a check of kind drive can fail with: its own, then those of all of them.
 std::vector<std::string> DriveReasons(std::vector<std::string> own) {
   own.insert(own.begin(), "NO_START");
-  for (const char* reason : {"LOGIC_REFUSED", "RELEASED", "EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED"}) {
+  for (const char* reason :
+       {"LOGIC_REFUSED", "RELEASED", "EMERGENCY", "NO_DATA", "STOPPED", "INTERRUPTED", "NOT_OPENED"}) {
     own.push_back(reason);
   }
   return own;
@@ -231,6 +259,8 @@ std::vector<std::string> DriveReasons(std::vector<std::string> own) {
 const std::vector<SetupName>& SetupStages() {
   static const std::vector<SetupName> stages = {
       {"device", "The board answers and fits", Named("Gerät", "Device")},
+      {"firmware", "The owner measures firmware of the board the driver does not list (steps with firmware)",
+       Named("Firmware messen", "Measure firmware")},
       {"inputs", "Every safety input by hand", Named("Eingänge", "Inputs")},
       {"position", "Correction data and a fix", Named("Position", "Position")},
       {"wheels", "Wheels and stops with the mower jacked up", Named("Räder aufgebockt", "Wheels off the ground")},
@@ -294,6 +324,11 @@ const std::vector<SetupName>& SetupModes() {
        "stop",
        Both({"Kurz auslösen", "Nur kurz auslösen und sofort loslassen: der Mäher darf dabei nicht stoppen.", ""},
             {"Trigger briefly", "Trigger only briefly and let go at once: the mower must not stop.", ""})},
+      {"release",
+       "A part of a step latch: the input held by the part before is let go (the mower put down), then one clear has "
+       "to end its latch",
+       Both({"Loslassen", "Jetzt loslassen bzw. den Mäher absetzen und nichts mehr berühren.", ""},
+            {"Let go", "Let go now, or put the mower down, and touch nothing.", ""})},
       {"assign",
        "A part of a step inputs_assign: one line alone changes, and the step asks whether it is the one of the role of "
        "the part. Help and fix of such a part; its name is the one of its role",
@@ -637,10 +672,10 @@ const std::vector<SetupCheck>& SetupChecks() {
         Word("emergency", "The emergency a press brings; without, the one of the role", SetupEmergencies()),
         Seconds("within", 0.05, 10, 1, "The emergency follows the input within this time"),
         Seconds("time", 5, 300, 60, "Each part is done within this time"),
-        Seconds("short_max", 0.1, 5, 0.5, "A part of mode short switches for less than this")},
+        Seconds("short_max", 0.1, 5, 0.5, "A part of mode short switches for less than this"), Rounds(5)},
        {{"delay", "s", "From the input to the emergency, one value by part of mode press with the id of the part"}},
        {"NOT_SEEN", "WRONG_INPUT", "NO_EMERGENCY", "STOPPED_EARLY", "LINE_SILENT", "NO_DATA", "STOPPED",
-        "INTERRUPTED", "NOT_DONE"}},
+        "INTERRUPTED", "NOT_DONE", "NOT_OPENED"}},
       {"inputs_assign", "input", true, false,
        "Finds the line of every sensor, on a platform whose driver learns its inputs: the OS restarts with the driver "
        "watching its candidate lines (emergency INPUTS_LEARNING, nothing moves), watches them at rest for quiet, then "
@@ -721,9 +756,11 @@ const std::vector<SetupCheck>& SetupChecks() {
        "geometry"},
       {"wheels", "drive", true, false,
        "The mower jacked up turns its wheels part by part, see wheel_parts: each part drives time s after a run-up of "
-       "0.5 s, and the odometry has to show it with its sign and 0.5 to 1.5 times speed. In the part one_wheel only "
-       "the right wheel turns, and inputs[] asks which one turns. " + DriveRules(),
+       "0.5 s, and the odometry has to show it with its sign and speed_min to speed_max times speed. In the part "
+       "one_wheel only the right wheel turns, and inputs[] asks which one turns. " + DriveRules(),
        {Speed(), Seconds("time", 1, 3, 2, "Each part drives this long"),
+        Amount("speed_min", "", 0.5, 1, 0.5, "The wheels turn at least this share of speed"),
+        Amount("speed_max", "", 1, 1.5, 1.5, "The wheels turn at most this share of speed"), Rounds(5),
         Seconds("answer_time", 3, kSetupMoveTime, kSetupMoveTime,
                 "The part one_wheel turns the wheel at most this long while it waits for the answer, then it stands "
                 "and the answer is taken for " + Num(kSetupPressedTime) + " s more")},
@@ -744,7 +781,7 @@ const std::vector<SetupCheck>& SetupChecks() {
        "emergency itself as in a step input, nothing starts for hold s, and a new command turns the wheels again. "
        + DriveRules(),
        {Speed(), Seconds("time", 3, kSetupMoveTime, 8, "The wheels turn at most this long for the action of a part"),
-        StopMax(), Hold()},
+        StopMax(), Hold(), Rounds(5)},
        {{"stand", "s", "From the input to standing wheels, one value by part with the id of the part",
          Named("Standzeit", "Time to stand")}},
        DriveReasons({"NOT_SEEN", "LIMIT", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART", "NOT_DONE"}),
@@ -760,8 +797,9 @@ const std::vector<SetupCheck>& SetupChecks() {
        "While the wheels turn, the program sends no commands any more: the wheels stand within stop_max of the last "
        "one by the watchdogs alone and do not start for hold s; then a new command turns them again. No emergency. "
        + DriveRules(),
-       {Speed(), StopMax(), Hold()},
-       {{"stand", "s", "From the last command to standing wheels", Named("Standzeit", "Time to stand")}},
+       {Speed(), StopMax(), Hold(), Rounds(5)},
+       {{"stand", "s", "From the last command to standing wheels, one value by round",
+         Named("Standzeit", "Time to stand")}},
        DriveReasons({"LIMIT", "STARTED_AGAIN", "NO_RESTART"}),
        Both({"Stopp ohne Fahrbefehl",
              "Die Räder drehen langsam, dann kommen keine Fahrbefehle mehr. Die Räder müssen von selbst stehen "
@@ -775,9 +813,13 @@ const std::vector<SetupCheck>& SetupChecks() {
        "stops the wheels by itself within stop_max of the answer, nothing starts until hold s after the silence; then "
        "the driver shows emergencies of the list and LATCH only, the program releases them itself, nothing starts for "
        "hold s and a new command turns the wheels. The stand times of the rounds differ by spread_max at most. "
-       "Offered where hw/capabilities has silence_max_s. " + DriveRules(),
-       {Speed(), StopMax(), Hold(), Amount("rounds", "", 1, 10, 5, "How many rounds"),
-        Seconds("spread_max", 0.05, 1, 0.3, "Stand times of the rounds differ this much at most"), Emergencies()},
+       "Offered where hw/capabilities has silence_max_s. With last_setpoint yes the last frame before each silence is "
+       "a setpoint and the silence lasts silence_last_setpoint_max_s: the board stops by its own limit within stop_max "
+       "(offered where hw/capabilities has it). " + DriveRules(),
+       {Speed(), StopMax(6), Hold(), Amount("rounds", "", 1, 10, 5, "How many rounds"),
+        Seconds("spread_max", 0.05, 1, 0.3, "Stand times of the rounds differ this much at most"), Emergencies(),
+        Word("last_setpoint", "yes: the board keeps the last setpoint until its own limit", {"yes", "no"}, false,
+             "no")},
        {{"stand", "s", "From the answer of hw/silence to standing wheels, one value by round, round_1 and on",
          Named("Runde", "Round")},
         {"spread", "s", "Longest less shortest stand of the rounds", Named("Streuung", "Spread")}},
@@ -795,7 +837,8 @@ const std::vector<SetupCheck>& SetupChecks() {
        "gap), the wheels stand and do not start for hold s, the driver shows emergencies of the list and LATCH only, "
        "the program releases them itself, nothing starts for hold s and a new command turns the wheels. Offered where "
        "hw/capabilities has driver_end and the launch has at least two restarts of the driver left. " + DriveRules(),
-       {Speed(), Hold(), Seconds("return_max", 5, 60, 20, "The driver is back within this time"), Emergencies()},
+       {Speed(), Hold(), Seconds("return_max", 5, 60, 20, "The driver is back within this time"), Emergencies(),
+        Rounds(2)},
        {{"return", "s", "From the answer of hw/end to the first hw/status of the new driver",
          Named("Treiber zurück nach", "Driver back after")}},
        DriveReasons({"DRIVER_REFUSED", "NO_RETURN", "STARTED_AGAIN", "NO_EMERGENCY", "NOT_RELEASED", "NO_RESTART"}),
@@ -889,7 +932,7 @@ const std::vector<SetupCheck>& SetupChecks() {
         Seconds("time", 3, kSetupMoveTime, 8, "stop, lift and bumper: the blade turns at most this long for the "
                                                "action"),
         Seconds("hold", 0.5, 5, 1, "The blade does not turn for this time, after it stood and after the release"),
-        Emergencies()},
+        Emergencies(), Rounds(5)},
        {{"rpm", "rpm", "on_off: the speed the blade reached", Named("Drehzahl", "Speed")},
         {"stand", "s", "From the off, the request not renewed, the answer of hw/silence or the input to the standing "
                        "blade, by part with the id of the part",
@@ -907,6 +950,93 @@ const std::vector<SetupCheck>& SetupChecks() {
              "without control, then with the STOP button, lifting and the bumper. It has to stand in time each time "
              "and must not start again.",
              "If the motor does not stand in time or starts again, don't let the mower mow; check board and motor."})},
+      {"link", "measure", true, true,
+       "Only with firmware: the link to the board at rest for time, nothing to be touched: frames per second of each "
+       "module of fast within fast_min and fast_max, of medium at least medium_min, of slow at least slow_min (from "
+       "hw/link_stats), frames with a wrong checksum at most checksum_max and of a wrong length at most length_max, no "
+       "input switched and no emergency. Frames of unknown modules are counted, not judged. The step firmware holds "
+       "the whole measurement to the same bounds and to no unknown module this step did not see",
+       {Seconds("time", 10, 300, 60, "How long it watches"),
+        Words("fast", "Modules of hw/link_stats that come often"),
+        Amount("fast_min", "Hz", 1, 1000, 80, "Frames of each of fast per second at least"),
+        Amount("fast_max", "Hz", 1, 1000, 120, "Frames of each of fast per second at most"),
+        Words("medium", "Modules that come a few times a second"),
+        Amount("medium_min", "Hz", 0.1, 100, 2, "Frames of each of medium per second at least"),
+        Words("slow", "Modules that come about once a second"),
+        Amount("slow_min", "Hz", 0.1, 100, 1, "Frames of each of slow per second at least"),
+        Amount("checksum_max", "", 0, 100, 0, "Frames with a wrong checksum at most"),
+        Amount("length_max", "", 0, 100, 0, "Frames of a known module with a wrong length at most")},
+       {{"rate", "Hz", "Frames per second of a module, one value by module with its name",
+         Named("Meldungen je Sekunde", "Frames per second")},
+        {"checksum_errors", "", "Frames with a wrong checksum", Named("Prüfsummenfehler", "Checksum errors")},
+        {"length_errors", "", "Frames of a known module with a wrong length", Named("Längenfehler", "Length errors")},
+        {"unknown_frames", "", "Frames of modules the driver does not know", Named("Unbekannte Meldungen",
+                                                                                    "Unknown frames")},
+        {"inputs", "", "Inputs that switched, none for ok", Named("Eingänge in Ruhe", "Inputs at rest")}},
+       {"LIMIT", "WRONG_INPUT", "EMERGENCY", "NO_DATA", "NOT_OPENED", "STOPPED", "INTERRUPTED"},
+       Both({"Verbindung zur Platine",
+             "Der Mäher zählt eine Minute lang die Meldungen seiner Platine und ihre Fehler. Dabei nichts berühren.",
+             "Kommen Fehler oder zu wenige Meldungen: Kabel und Stecker zur Platine prüfen, dann wiederholen."},
+            {"Link to the board",
+             "For a minute the mower counts the frames of its board and their errors. Touch nothing meanwhile.",
+             "If errors come or too few frames: check cable and plugs to the board, then try again."})},
+      {"latch", "measure", true, true,
+       "Only with firmware: how the board holds its inputs, part by part (role, mode). The program sends a clear of "
+       "the board only through setup/firmware_measure. short of stop: pressed and let go, stop stays at least hold_min "
+       "and one clear ends it within clear_max. short of a bumper side: pressed and let go, it ends without a clear "
+       "within fall_max of switching (later is NOT_DONE, still on after time LIMIT). press: held, clears every "
+       "clear_every, clears times, the input stays each time. release: after the input of "
+       "the part before is let go (the mower put down), settle s later one clear ends it within clear_max. Every "
+       "deviation fails it; an input that stays after the clear of short or release ends it open (NOT_DONE)",
+       {Seconds("time", 5, 120, 30, "Each part is done within this time"),
+        Seconds("hold_min", 1, 10, 3, "short of stop: the input stays at least this long without a clear"),
+        Seconds("clear_max", 0.05, 2, 0.2, "A clear ends the input within this time of the clear going out"),
+        Seconds("clear_every", 0.2, 5, 0.5, "press: one clear this often"),
+        Amount("clears", "", 1, 10, 4, "press: how many clears"),
+        Seconds("settle", 0.5, 10, 2, "release: the clear comes this long after the part began"),
+        Seconds("fall_max", 0.2, 5, 1, "short of a bumper side: the input falls within this time of switching"),
+        Rounds(5, 2)},
+       {{"held", "s", "short: how long the input stood before the clear or before it fell, one value by part"},
+        {"cleared", "s", "From the clear going out to the input ending, one value by part of short or release"}},
+       {"LIMIT", "WRONG_INPUT", "NOT_DONE", "NO_DATA", "NOT_OPENED", "EMERGENCY", "STOPPED", "INTERRUPTED"},
+       Both({"Halten der Eingänge",
+             "Der Mäher prüft, wie seine Platine STOP, Stoßfänger und Anheben festhält und wieder freigibt. Den "
+             "Anweisungen genau folgen.",
+             "Weicht ein Wert ab, verhält sich diese Firmware anders als die bekannte: nicht freigeben."},
+            {"Holding of the inputs",
+             "The mower checks how its board holds STOP, bumper and lifting and lets them go again. Follow the "
+             "instructions closely.",
+             "If a value differs, this firmware behaves otherwise than the known one: don't release it."})},
+      {"firmware", "confirm", true, false,
+       "Only with firmware, last of the stage: once every other step with firmware passed in this run, it holds the "
+       "whole run to the bounds of the step link, then counts the run as passed. After a run that failed for real two "
+       "runs in a row have to pass. Then, for firmware hw/capabilities names with firmware_source none, it writes "
+       "the versions of boards in their order and the device_hash, joined by / (\"<version>/<version>/<device_hash>\"), "
+       "into measured_firmware for node (parameter file of the program) and restarts "
+       "the OS: after it hw/capabilities has to show firmware_source measured. With firmware_measure_force of the "
+       "setup program and firmware listed it writes nothing. A run that fails for real takes the entry out again; "
+       "setup.reset and setup.platform.set take it out with every count",
+       {Word("node", "The node of the driver measured_firmware is written for", {}, true),
+        Words("boards", "The boards of firmware in hw/capabilities the entry names, in its order; others do not count",
+              {}, true),
+        Seconds("restart_time", 20, 600, 120, "The OS is back within this time after the restart")},
+       {{"runs", "", "Runs passed in a row, of needed", Named("Bestandene Läufe", "Runs passed")},
+        {"rate", "Hz", "Frames per second of a module over the whole run, one value by module with its name",
+         Named("Meldungen je Sekunde", "Frames per second")},
+        {"checksum_errors", "", "Frames with a wrong checksum in the whole run", Named("Prüfsummenfehler",
+                                                                                       "Checksum errors")},
+        {"length_errors", "", "Frames of a wrong length in the whole run", Named("Längenfehler", "Length errors")},
+        {"written", "", "The entry of measured_firmware written, empty for none", Named("Freigabe", "Release")}},
+       {"LIMIT", "RUN_AGAIN", "FIRMWARE_CHANGED", "NOT_APPLIED", "RESTART_FAILED", "NO_DATA", "STOPPED",
+        "INTERRUPTED"},
+       Both({"Firmware freigeben",
+             "Sind alle Messungen bestanden, gibt der Mäher genau diese Firmware auf genau diesem Gerät frei. Dafür "
+             "startet MowBite OS neu. Die Messung lässt sich als Datei teilen.",
+             "Fehlt ein Lauf, die Messung von vorn wiederholen."},
+            {"Release the firmware",
+             "Once every measurement passed, the mower releases exactly this firmware on exactly this device. MowBite "
+             "OS restarts for it. The measurement can be shared as a file.",
+             "If a run is missing, repeat the measurement from the start."})},
       {"summary", "confirm", true, false,
        "Opens the lock of autonomous driving and mowing with one tap: blocked while a safety step of the list is not "
        "ok (SAFETY_STEPS, skipped ones named apart) or the clock is not safe (CLOCK_UNSAFE). setup.start confirms "
@@ -1122,6 +1252,8 @@ Field SetupState() {
        Text("state", "locked: a step of needs is not ok; open; running; ok; failed; skipped; stale", true,
             SetupStates()),
        Bool("safety", "A safety step: failing it with a reason that closes closes the lock, passing it opens it again"),
+       Bool("firmware", "A step of the owner measurement of firmware: it never touches the lock, its runs count in "
+                        "firmware of the state"),
        Integer("attempt", "How often it was started or answered"),
        List("needs", "Steps that have to be ok before this one", Type::kString),
        Open(Rows("blocked",
@@ -1214,7 +1346,23 @@ Field SetupState() {
                Nullable(Text("source", "Who gave the date: hand (the file kept by hand or the platform) or program "
                                        "(the summary of the setup program); null without one",
                              true, {"hand", "program"})),
-               Closed()}),
+               Closed(),
+               Nullable(Text("firmware_source",
+                             "Why the driver lets this firmware drive, firmware_source of hw/capabilities: listed, "
+                             "measured (an owner's measurement on this device), older, none, empty until every board "
+                             "reported; null before hw/capabilities",
+                             true, {"", "listed", "measured", "older", "none"}))}),
+       Object("firmware", "The owner measurement of firmware (steps with firmware); setup.firmware.export gives "
+                          "all of it",
+              {Bool("offered", "Its steps are shown: firmware_source none or older, or firmware_measure_force"),
+               Bool("force", "firmware_measure_force of the setup program: it measures listed firmware too and "
+                             "writes nothing"),
+               Bool("device", "hw/capabilities has a device_hash"),
+               Integer("passed", "Runs passed in a row"), Integer("needed", "Runs needed in a row: 1, 2 after a "
+                                                                            "run that failed"),
+               Integer("failed", "Runs that failed for real since the last reset"),
+               Integer("runs", "Runs kept for the export"),
+               Nullable(Text("written", "The entry of measured_firmware the program wrote, null for none"))}),
        Bool("restart_pending", "A step waits for a restart of the OS"),
        Rows("stages", "The stages with steps, in their order",
             {Text("id", "A key of x-setup.stages"), Text("state", "Of all its steps together", true, SetupStates()),
@@ -1452,6 +1600,35 @@ EventEntry SetupStepEvent() {
                         "Freie Sicht zum Himmel schaffen, Korrekturdaten prüfen, dann wiederholen."},
                        {"No exact position", "The mower didn't get an exact position in time.",
                         "Give it a free view of the sky, check the correction data, then repeat."})),
+           failed("NOT_OPENED",
+                  "A step with firmware: the driver did not let the measurement drive (FIRMWARE_INCOMPATIBLE stayed), "
+                  "its latch was not released within its time, or the driver latched the firmware again while the "
+                  "step ran (its guard ended the measurement)",
+                  {Part()},
+                  Both({"Messung nicht frei",
+                        "Der Treiber hat die Messung nicht zugelassen oder beendet. Firmware oder Gerätekennung "
+                        "passen nicht zu dem, was er meldet, oder seine Verbindung zur Platine hing kurz.",
+                        "Den Mäher neu starten und die Messung wiederholen."},
+                       {"Measurement not let through",
+                        "The driver did not let the measurement run or ended it. Firmware or device id don't fit what "
+                        "it reports, or its link to the board hung for a moment.",
+                        "Restart the mower and repeat the measurement."})),
+           Reason("RUN_AGAIN", "info", "user",
+                  "The run passed, but after a run that failed more runs in a row have to pass: the steps with "
+                  "firmware are open again",
+                  {Integer("passed", "Runs passed in a row", false), Integer("needed", "Runs needed in a row", false)},
+                  Both({"Noch ein Lauf",
+                        "Dieser Lauf ist bestanden. Weil ein früherer durchgefallen ist, muss noch einer in Folge "
+                        "bestehen.",
+                        "Die Messung von vorn wiederholen."},
+                       {"One more run",
+                        "This run passed. Because an earlier one failed, another one has to pass in a row.",
+                        "Repeat the measurement from the start."})),
+           failed("FIRMWARE_CHANGED", "The firmware or the device id changed during the run: it does not count", {},
+                  Both({"Firmware gewechselt", "Während der Messung hat sich die gemeldete Firmware geändert.",
+                        "Die Messung von vorn wiederholen."},
+                       {"Firmware changed", "The firmware reported changed during the measurement.",
+                        "Repeat the measurement from the start."})),
            Reason("STOPPED", "info", "user", "Ended with setup.abort", {},
                   Both({"Abgebrochen", "Der Schritt wurde abgebrochen.", "Den Schritt erneut starten."},
                        {"Stopped", "The step was stopped.", "Start the step again."})),
@@ -1487,15 +1664,18 @@ EventEntry SetupProgramEvent() {
                         "of autonomous driving and mowing; safety_opened: the lock is open (again); blade_allowed: the "
                         "first start of a step blade allowed the blade, the OS restarts and the step waits for its "
                         "next start; platform: setup.platform.set chose another mower, every result is taken back, "
-                        "the lock closes with a reset and the OS restarts as that mower",
+                        "the lock closes with a reset and the OS restarts as that mower; firmware_measured: a step "
+                        "firmware wrote measured_firmware and the driver drives with it; firmware_revoked: a run that "
+                        "failed took it out again (the OS restarts)",
                 true, {"stage_done", "complete", "reset", "safety_closed", "safety_opened", "blade_allowed",
-                       "platform"}),
+                       "platform", "firmware_measured", "firmware_revoked"}),
            Text("stage", "With stage_done: the stage", false),
            Text("step", "With safety_closed: the step that failed; with blade_allowed: the step blade", false),
            Text("cause", "With safety_closed: its reason of SETUP_STEP", false),
            Text("date", "With safety_opened by a step summary: the date it wrote", false),
            Text("platform", "With platform: the mower chosen", false),
-           Text("from", "With platform: the mower before, empty in the stage of the choice", false)},
+           Text("from", "With platform: the mower before, empty in the stage of the choice", false),
+           Text("entry", "With firmware_measured and firmware_revoked: the entry of measured_firmware", false)},
           {}};
 }
 
@@ -1589,6 +1769,7 @@ EventEntry SetupRefused() {
           "info", "user"};
   for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
   for (auto& reason : SummaryBlocks()) entry.reasons.push_back(std::move(reason));
+  for (auto& reason : FirmwareBlocks()) entry.reasons.push_back(std::move(reason));
   return entry;
 }
 
@@ -1620,6 +1801,7 @@ EventEntry SetupBlocked() {
           "info", "user"};
   for (auto& reason : DriveBlocks()) entry.reasons.push_back(std::move(reason));
   for (auto& reason : SummaryBlocks()) entry.reasons.push_back(std::move(reason));
+  for (auto& reason : FirmwareBlocks()) entry.reasons.push_back(std::move(reason));
   return entry;
 }
 

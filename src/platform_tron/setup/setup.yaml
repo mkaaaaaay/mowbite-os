@@ -1,7 +1,7 @@
 # The steps of the setup program of the Tron (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image. mark names parts of robot_shape (geometry.yaml).
-catalog: 10
+catalog: 11
 # hardware, blade and summary restart the OS: mowbite-host restarts the service (host.restart_os).
 restart: host
 steps:
@@ -37,6 +37,166 @@ steps:
     params: {time: 5}
     image: mower.svg
     symbol: board
+  # The owner measurement of firmware tron_mcu does not list (firmware_source none, FP55): jacked up, wheels free,
+  # blade disc off, a hand at STOP. Bounds as measured at 0.6.36/0.6.34 with room (tron-geraet, Entwurf FP55); every
+  # round has to pass. Only shown while the driver blocks the firmware, or with firmware_measure_force.
+  - id: fw_link
+    stage: firmware
+    firmware: true
+    check: link
+    params:
+      time: 60
+      fast: [sensor_info, speed]
+      fast_min: 80
+      fast_max: 120
+      medium: [motors]
+      medium_min: 2
+      slow: [version, battery, bms]
+      slow_min: 1
+    confirm: [raised, blade_removed, hand_at_stop]
+    symbol: board
+  - id: fw_stop
+    stage: firmware
+    firmware: true
+    check: input
+    params: {role: stop, time: 90, rounds: 3}
+    parts:
+      - id: top
+    symbol: stop
+  - id: fw_lift
+    stage: firmware
+    firmware: true
+    check: input
+    params: {role: lift, within: 3, time: 90, rounds: 3}
+    parts:
+      - id: front
+        texts:
+          de: {name: Vorn an der Haube leicht anheben und halten}
+          en: {name: Lift the front by the hood a little and hold}
+    symbol: lift
+  - id: fw_bumper
+    stage: firmware
+    firmware: true
+    check: input
+    params: {role: bumper, within: 1.5, rounds: 3}
+    parts:
+      - id: left
+        role: bumper_left
+      - id: right
+        role: bumper_right
+    symbol: bumper
+  - id: fw_latch
+    stage: firmware
+    firmware: true
+    check: latch
+    params: {hold_min: 3, clear_max: 0.2, clear_every: 0.5, clears: 4, settle: 2, fall_max: 1.0, rounds: 2}
+    parts:
+      - id: stop_short
+        role: stop
+        mode: short
+        texts:
+          de: {name: STOP kurz drücken und loslassen, help: Danach nichts mehr berühren.}
+          en: {name: Press STOP briefly and let go, help: Touch nothing after it.}
+      - id: stop_hold
+        role: stop
+        mode: press
+        texts:
+          de: {name: STOP drücken und gedrückt halten, help: "Halten, bis die App zum Loslassen auffordert."}
+          en: {name: Press STOP and keep it pressed, help: Hold it until the app asks to let go.}
+      - id: stop_free
+        role: stop
+        mode: release
+      - id: bumper_left
+        role: bumper_left
+        mode: short
+      - id: bumper_right
+        role: bumper_right
+        mode: short
+      - id: lift_hold
+        role: lift
+        mode: press
+        texts:
+          de: {name: Vorn anheben und halten, help: "Halten, bis die App zum Absetzen auffordert."}
+          en: {name: Lift the front and hold, help: Hold it until the app asks to put it down.}
+      - id: lift_free
+        role: lift
+        mode: release
+    symbol: stop
+  - id: fw_wheels
+    stage: firmware
+    firmware: true
+    check: wheels
+    params: {speed: 0.1, speed_min: 0.8, speed_max: 1.2, rounds: 3}
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+  - id: fw_stop_moving
+    stage: firmware
+    firmware: true
+    check: stop_moving
+    params: {speed: 0.1, stop_max: 0.3, rounds: 3}
+    parts:
+      - id: stop
+        role: stop
+      - id: bumper_left
+        role: bumper_left
+      - id: bumper_right
+        role: bumper_right
+    confirm: [raised, hand_at_stop]
+    symbol: stop
+  - id: fw_no_command
+    stage: firmware
+    firmware: true
+    check: no_command
+    params: {speed: 0.1, stop_max: 1.0, rounds: 3}
+    confirm: [raised, hand_at_stop]
+    symbol: wheels
+  - id: fw_silence
+    stage: firmware
+    firmware: true
+    check: silence
+    params: {speed: 0.1, stop_max: 0.5, rounds: 10, spread_max: 0.15, emergency: [HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
+  # The setpoint kept by the board alone (T9: 3.58 to 3.61 s), and no start again on the heartbeats after it.
+  - id: fw_setpoint
+    stage: firmware
+    firmware: true
+    check: silence
+    params: {speed: 0.1, stop_max: 4.0, rounds: 3, spread_max: 0.3, emergency: [HIGH_LEVEL], last_setpoint: "yes"}
+    confirm: [raised, hand_at_stop]
+    symbol: board
+  # Two rounds: the start gives the driver three restarts in a row.
+  - id: fw_driver_end
+    stage: firmware
+    firmware: true
+    check: driver_end
+    params: {speed: 0.1, rounds: 2, emergency: [HIGH_LEVEL]}
+    confirm: [raised, hand_at_stop]
+    symbol: board
+  - id: fw_blade
+    stage: firmware
+    firmware: true
+    check: blade
+    params:
+      node: tron_mcu
+      percent: 100
+      height: 90
+      rpm: 2500
+      spin_up: 3
+      off_max: 0.6
+      lease: 1.0
+      lease_extra: 1.0
+      silent_max: 0.8
+      stop_max: 0.8
+      emergency: [HIGH_LEVEL]
+      rounds: 3
+    confirm: [blade_removed, hand_at_stop]
+    symbol: blade
+  - id: fw_release
+    stage: firmware
+    firmware: true
+    check: firmware
+    params: {node: tron_mcu, boards: [cutter, chassis]}
   - id: stop
     stage: inputs
     check: input

@@ -175,10 +175,35 @@ void ReadParts(const json& entry, const std::string& where, Step* step) {
       part.id = TextOf(item, "id", where + ".parts", true);
       part.mode = item.contains("mode") ? TextOf(item, "mode", where) : "press";
       part.role = item.contains("role") ? TextOf(item, "role", where) : role;
-      if (!FindSetupName(mowbite_api::SetupModes(), part.mode)) throw Wrong(where + ": " + part.mode + " is no mode");
+      if (part.mode != "press" && part.mode != "short") throw Wrong(where + ": " + part.mode + " is no mode of input");
       const SetupName* part_role = FindSetupName(mowbite_api::SetupRoles(), part.role);
       if (!part_role) throw Wrong(where + ": " + part.role + " is no role");
       json base = part.mode == "short" ? Texts(short_mode->texts) : Texts(part_role->texts);
+      part.texts = Overlaid(std::move(base), TextsOrNull(item), where + ".parts." + part.id);
+      step->parts.push_back(std::move(part));
+    }
+  } else if (step->check == "latch") {
+    // short of stop or a bumper side, press of stop or lift, release right after a press of the same role.
+    if (!given || entry["parts"].empty()) throw Wrong(where + ": latch needs parts");
+    for (const auto& item : entry["parts"]) {
+      if (!item.is_object()) throw Wrong(where + ": a part is no object");
+      OnlyKeys(item, {"id", "mode", "role", "texts"}, where + ".parts");
+      Part part;
+      part.id = TextOf(item, "id", where + ".parts", true);
+      part.mode = TextOf(item, "mode", where + ".parts", true);
+      part.role = TextOf(item, "role", where + ".parts", true);
+      const SetupName* role = FindSetupName(mowbite_api::SetupRoles(), part.role);
+      const bool side = part.role == "bumper_left" || part.role == "bumper_right";
+      const bool held = part.role == "stop" || part.role == "lift";
+      const bool fits = (part.mode == "short" && (side || part.role == "stop")) ||
+                        ((part.mode == "press" || part.mode == "release") && held);
+      if (!role || !fits) throw Wrong(where + ": " + part.mode + " of " + part.role + " is no part of latch");
+      if (part.mode == "release" &&
+          (step->parts.empty() || step->parts.back().mode != "press" || step->parts.back().role != part.role)) {
+        throw Wrong(where + ": release comes right after a press of " + part.role);
+      }
+      json base = part.mode == "release" ? Texts(FindSetupName(mowbite_api::SetupModes(), "release")->texts)
+                                         : Texts(role->texts);
       part.texts = Overlaid(std::move(base), TextsOrNull(item), where + ".parts." + part.id);
       step->parts.push_back(std::move(part));
     }
@@ -311,7 +336,7 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
   const std::string where = step.id;
   OnlyKeys(entry,
            {"id", "stage", "check", "params", "parts", "confirm", "needs", "skippable", "skip_reasons", "image",
-            "accent", "symbol", "mark", "open", "texts", "note", "value_texts", "value_params"},
+            "accent", "symbol", "mark", "open", "texts", "note", "value_texts", "value_params", "firmware"},
            where);
   for (const Step& other : before) {
     if (other.id == step.id) throw Wrong(where + " comes twice");
@@ -330,6 +355,17 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
   step.kind = check->kind;
   step.start = check->start;
   step.automatic = check->automatic;
+  if (entry.contains("firmware")) {
+    if (!entry["firmware"].is_boolean()) throw Wrong(where + ": firmware is no boolean");
+    step.firmware = entry["firmware"].get<bool>();
+  }
+  // The owner measurement of firmware: its own stage, the checks of the stage jacked up and its own three.
+  static const std::set<std::string> measuring = {"input",       "wheels", "stop_moving", "no_command", "silence",
+                                                  "driver_end",  "blade",  "link",        "latch",      "firmware"};
+  const bool own = step.check == "link" || step.check == "latch" || step.check == "firmware";
+  if (step.firmware != (step.stage == "firmware")) throw Wrong(where + ": firmware goes with the stage firmware");
+  if (step.firmware && !measuring.count(step.check)) throw Wrong(where + ": " + step.check + " measures no firmware");
+  if (own && !step.firmware) throw Wrong(where + ": " + step.check + " goes with firmware");
   ReadParams(*check, entry.contains("params") ? entry["params"] : json::object(), where, &step);
 
   if (step.check == "input" && step.Word("emergency").empty()) {
@@ -384,6 +420,11 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
     if (!entry["skippable"].is_boolean()) throw Wrong(where + ": skippable is no boolean");
     step.skippable = entry["skippable"].get<bool>();
   }
+  // A run of the measurement counts only with every step of it.
+  if (step.firmware && step.skippable && entry.contains("skippable")) {
+    throw Wrong(where + ": firmware is not skippable");
+  }
+  if (step.firmware) step.skippable = false;
   if (step.skippable) {
     json reasons = json::array();
     if (entry.contains("skip_reasons")) {
@@ -421,8 +462,8 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
       }
     }
     for (const char* group : {"stop", "lift", "bumper"}) {
-      const auto checks = [group](const Step& other) {
-        return other.check == "input" && GroupOfRole(other.Word("role")) == group;
+      const auto checks = [group, &step](const Step& other) {
+        return other.check == "input" && other.firmware == step.firmware && GroupOfRole(other.Word("role")) == group;
       };
       if (std::none_of(before.begin(), before.end(), checks)) {
         throw Wrong(where + ": a step that moves the wheels or the blade comes after a step input of " + group);
@@ -516,7 +557,8 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     size_t stage_index = 0;
     for (const auto& entry : list["steps"]) out.steps.push_back(ReadStep(entry, out.steps, &stage_index));
     for (const Step& step : out.steps) {
-      const bool node = step.check == "inputs_assign" || step.check == "blade" || step.check == "summary";
+      const bool node = step.check == "inputs_assign" || step.check == "blade" || step.check == "summary" ||
+                        step.check == "firmware";
       if (!node && step.value_params.empty()) continue;
       if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
       if (node && !Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
@@ -531,8 +573,24 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     }
     for (const Step& step : out.steps) {
       if (step.check == "summary") throw Wrong(step.id + " comes after a step silence");
-      if (step.check == "silence") break;
+      if (step.check == "silence" && !step.firmware) break;
     }
+    // The stage firmware ends with its one step firmware, after a step link.
+    bool link = false;
+    for (size_t i = 0; i < out.steps.size(); ++i) {
+      const Step& step = out.steps[i];
+      link = link || step.check == "link";
+      if (step.check != "firmware") continue;
+      if (!link) throw Wrong(step.id + " comes after a step link");
+      if (step.lists.at("boards").empty()) throw Wrong(step.id + " names at least one board");
+      if (i + 1 < out.steps.size() && out.steps[i + 1].firmware) {
+        throw Wrong(step.id + " is the last step with firmware");
+      }
+    }
+    const auto firmware_steps = std::count_if(out.steps.begin(), out.steps.end(),
+                                              [](const Step& step) { return step.check == "firmware"; });
+    const bool measures = std::any_of(out.steps.begin(), out.steps.end(), [](const Step& s) { return s.firmware; });
+    if (measures && firmware_steps != 1) throw Wrong("the stage firmware has one step firmware");
     return out;
   } catch (const Wrong& wrong) {
     if (why) *why = wrong.what();
