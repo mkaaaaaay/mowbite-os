@@ -112,8 +112,9 @@ constexpr double kStandardGravity = 9.80665;
 constexpr double kReportMaxAge = 3.0;
 // hold.json is looked at this often.
 constexpr double kHoldPollS = 0.5;
-// Wait after a failed write or removal of the STOP clear mark.
+// Wait after a failed write or removal of the STOP clear mark, and how often the mark thread looks.
 constexpr double kMarkRetryS = 1.0;
+constexpr std::chrono::milliseconds kMarkLook{20};
 // hw/end: the exit code, and the wait for the answer to go out besides the last flush of the journal.
 constexpr int kEndExitCode = 3;
 constexpr double kEndAnswerS = 0.2;
@@ -328,12 +329,14 @@ class McuNode : public rclcpp::Node {
     watch_ = mowbite_watch::Attach(*this, kWatchLimitS);
     io_thread_ = std::thread([this] { IoLoop(); });
     if (!read_only_) guard_thread_ = std::thread([this] { GuardLoop(); });
+    if (stop_clear_mark_) mark_thread_ = std::thread([this] { MarkLoop(); });
   }
 
   ~McuNode() override {
     running_ = false;
     if (io_thread_.joinable()) io_thread_.join();
     if (guard_thread_.joinable()) guard_thread_.join();
+    if (mark_thread_.joinable()) mark_thread_.join();
   }
 
  private:
@@ -534,8 +537,6 @@ class McuNode : public rclcpp::Node {
         }
         if (!read_only_) Send(packets);
         EndIfDue(now);
-        watch.Mark("stop clear mark");
-        UpdateStopClearMark(now);
         PublishButton();
         // The clear a measurement asked for, at once: its step times the board from it.
         if (ClearSeqChanged()) PublishLinkStats();
@@ -590,6 +591,15 @@ class McuNode : public rclcpp::Node {
         break;
     }
     control_.Call<&C::LatchEmergency>(tron::kReasonHighLevel);
+  }
+
+  // The mark on a thread of its own: a sync under load can take longer than the guard grants the I/O thread. The core
+  // sends no such clear frame before SetStopClearMark(true), so the frames wait for the disk, the I/O thread does not.
+  void MarkLoop() {
+    while (running_) {
+      std::this_thread::sleep_for(kMarkLook);
+      UpdateStopClearMark(MonotonicSeconds());
+    }
   }
 
   // The mark is written and synced by this driver before its first clear frame of STOP in an emergency, and goes
@@ -1345,7 +1355,7 @@ class McuNode : public rclcpp::Node {
   std::string bms_version_;
 
   std::optional<mowbite_hold::HoldWatch> hold_watch_;
-  // Only for the I/O thread after the start; empty without stop_clear_mark or read only.
+  // Only for the mark thread after the start; empty without stop_clear_mark or read only.
   std::optional<tron::StopClearMark> stop_clear_mark_;
   // The file may be there: removed after the release.
   bool mark_present_ = false;
@@ -1359,6 +1369,8 @@ class McuNode : public rclcpp::Node {
   std::thread io_thread_;
   // F1: the guard thread, the last time the I/O thread came round, the frames it writes and whether it did.
   std::thread guard_thread_;
+  // Writes and removes the STOP clear mark.
+  std::thread mark_thread_;
   std::atomic<double> io_alive_s_{0.0};
   std::mutex guard_mutex_;
   std::vector<uint8_t> guard_bytes_;
