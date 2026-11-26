@@ -1008,7 +1008,8 @@ def main():
             antenna_history.push(now, (pose.antenna(*lever), pose.antenna_velocity(*lever)))
 
             if now >= next_sensor:
-                next_sensor = now + (REAL_SENSOR_PERIOD if real_rates else SENSOR_PERIOD)
+                # From the due time, not from now: the loop is late by up to its select timeout every time.
+                next_sensor = max(next_sensor + (REAL_SENSOR_PERIOD if real_rates else SENSOR_PERIOD), now - 0.1)
                 # bumper (one of both) stands for the right one
                 right = int(bool(flags.get("bumper", 0) or flags.get("bumper_right", 0)))
                 left = int(bool(flags.get("bumper_left", 0)))
