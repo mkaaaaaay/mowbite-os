@@ -235,6 +235,28 @@ class HostLinkTest(unittest.TestCase):
         self.assertEqual(host.setpoint(3.7, False), (0.3, 0.0))
         self.assertEqual(host.setpoint(3.76, False), (0.0, 0.0))
 
+    def test_setpoint_hold_keeps_a_setpoint_that_came_last(self):
+        host = ft.HostLink(0.2, 3.6, 3.6)
+        for t in (0.0, 0.1, 0.2):
+            host.on_speed(0.3, 0.0, t)
+        self.assertEqual(host.setpoint(3.8, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(3.81, False), (0.0, 0.0))
+
+    def test_setpoint_hold_ends_after_a_frame_that_follows(self):
+        host = ft.HostLink(0.2, 3.6, 3.6)
+        host.on_speed(0.3, 0.0, 0.0)
+        host.on_other(0.025)
+        host.on_other(0.1)
+        self.assertEqual(host.setpoint(0.225, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(0.226, False), (0.0, 0.0))
+        # A new SpeedData holds again, and a block ends it at once.
+        host.on_speed(0.3, 0.0, 1.0)
+        self.assertEqual(host.setpoint(2.0, False), (0.3, 0.0))
+        self.assertEqual(host.setpoint(2.0, True), (0.0, 0.0))
+
+    def test_version_bytes(self):
+        self.assertEqual(ft.version_bytes("0.6.38"), bytes([0, 6, 38]))
+
     def test_a_single_short_gap_does_not_hold(self):
         host = ft.HostLink(0.2, 3.6)
         for t in (0.0, 0.1, 0.14, 0.24):
@@ -748,6 +770,46 @@ class ProcessTest(unittest.TestCase):
         time.sleep(0.1)
         self.set_flags()
         self.assertEqual(stop_bytes(), {0})
+
+    def test_1c_flags_of_the_firmware_measurement(self):
+        def frames(seconds):
+            read_available(self.fds["mcu"], 0.05)
+            return [(m, payload) for packets in ft.Decoder().feed(read_available(self.fds["mcu"], seconds))
+                    for t, m, payload in packets or [] if t == ft.FROM_MCU]
+        clear = ft.encode([(ft.TO_MCU, 10, bytes(8))])
+        flags = {"real_rates": 1, "firmware": ["0.6.38", "0.6.35"], "lift_latches": 1, "stop_latches": 1}
+        self.set_flags(**flags)
+        got = frames(1.3)
+        sensors = sum(1 for m, _ in got if m == 10)
+        self.assertGreater(sensors, 100)
+        self.assertEqual({p for m, p in got if m == 12}, {bytes([0, 6, 38, 0, 6, 35, 0, 0, 0])})
+        self.assertGreaterEqual(sum(1 for m, _ in got if m == 24), 2)
+        # Lift stays after it is gone until a clear, and a clear while lifted leaves it.
+        self.set_flags(**flags, lift=1)
+        time.sleep(0.1)
+        os.write(self.fds["mcu"], clear)
+        time.sleep(0.05)
+        self.set_flags(**flags)
+        self.assertEqual({p[2] for m, p in frames(0.2) if m == 10}, {1})
+        os.write(self.fds["mcu"], clear)
+        self.assertEqual({p[2] for m, p in frames(0.2) if m == 10}, {0})
+        # clear_releases_held: a clear drops stop while it is still pressed, until it is let go and pressed again.
+        self.set_flags(**flags, stop=1, clear_releases_held=1)
+        time.sleep(0.1)
+        os.write(self.fds["mcu"], clear)
+        self.assertEqual({p[3] for m, p in frames(0.2) if m == 10}, {0})
+        self.set_flags(**flags, clear_releases_held=1)
+        time.sleep(0.1)
+        self.set_flags(**flags, stop=1, clear_releases_held=1)
+        self.assertEqual({p[3] for m, p in frames(0.2) if m == 10}, {1})
+        os.write(self.fds["mcu"], clear)
+        self.set_flags(**flags)
+        time.sleep(0.1)
+        # swap_bumpers: the left bumper shows as the right one.
+        self.set_flags(swap_bumpers=1, bumper_left=1)
+        self.assertEqual({(p[8], p[9]) for m, p in frames(0.2) if m == 10}, {(1, 0)})
+        self.set_flags()
+        read_available(self.fds["mcu"], 0.2)
 
     def test_2_gnss_follows_pose(self):
         self.set_flags()
