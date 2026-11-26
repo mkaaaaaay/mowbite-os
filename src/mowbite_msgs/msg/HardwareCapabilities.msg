@@ -58,6 +58,8 @@ float32 button_hold_s
 float32 failsafe_without_host_s
 # Longest silence hw/silence takes (s); 0 where the driver offers no hw/silence.
 float32 silence_max_s
+# Longest silence hw/silence takes with last_setpoint (s); 0 where the driver does not offer it.
+float32 silence_last_setpoint_max_s
 # The driver offers hw/end.
 bool driver_end
 # Date of the safety measurement of this platform (YYYY-MM-DD), empty without one. Without it the logic stays with

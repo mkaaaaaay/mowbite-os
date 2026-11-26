@@ -16,5 +16,9 @@ bool success
 string message
 # Why it was refused, empty otherwise: READ_ONLY, OUT_OF_RANGE (seconds not in 0.2 to silence_max_s), NO_SETUP (no
 # active setup/motion within the last second), CHARGING (on the charging contacts), BLADE (blade on or still turning
-# without blade), BUSY (already silent), LAST_SETPOINT.
+# without blade), BUSY (already silent), LAST_SETPOINT, NOT_STARTED (last_setpoint: no setpoint within 1 s to go silent
+# after).
 string code
+# When the silence began (its last frame to the board) on the clock of the stamps of hw/wheel_odom; zero where the
+# driver gives none, then the setup program takes the arrival of this answer.
+builtin_interfaces/Time silent_from
