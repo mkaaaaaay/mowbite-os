@@ -46,6 +46,18 @@ std::string NodeOf(const mowbite_serial::PortInfo& port, const std::map<std::str
   return "";
 }
 
+std::vector<mowbite_serial::PortInfo> ListedPorts(bool scan, const std::map<std::string, std::string>& driver_ports,
+                                                  const std::vector<std::string>& extra) {
+  std::vector<mowbite_serial::PortInfo> ports;
+  if (scan) {
+    ports = mowbite_serial::ListPorts();
+  } else {
+    for (const auto& [path, node] : driver_ports) ports.push_back({path, {}, "", std::nullopt});
+  }
+  for (const auto& path : extra) ports.push_back({path, {}, "", std::nullopt});
+  return ports;
+}
+
 json PortsAnswer(const PortsView& view) {
   json ports = json::array();
   for (const auto& port : view.ports) {

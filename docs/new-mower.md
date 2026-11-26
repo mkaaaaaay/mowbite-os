@@ -496,7 +496,9 @@ The app can look at the serial ports of the mower, in the stage of the choice to
 platform that uses it), and `setup.ports.listen` listens read-only on a free one at the usual rates and tells NMEA,
 WIT frames and RTCM apart (`mowbite_serial/ports.h`, `recognize.h`). It never listens on a port of a driver, only
 while the mower rests, and never sends. A port counts as used by a node when the parameter files give that node a
-parameter `port` with a device under `/dev`: name the port of your driver that way and it is left alone.
+parameter `port` with a device under `/dev`: name the port of your driver that way and it is left alone. The simulation
+turns the scan off (`ports_scan: false` in `sim.yaml`) and lists the ports of its drivers alone, so the serial
+devices of the PC it runs on never show up.
 
 Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
 itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a

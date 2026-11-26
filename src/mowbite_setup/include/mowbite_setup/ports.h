@@ -31,6 +31,11 @@ std::string CanonicalPort(const std::string& path);
 // The node of the platform that uses the port, under its path, a link of by-id or its canonical path; empty for none.
 std::string NodeOf(const mowbite_serial::PortInfo& port, const std::map<std::string, std::string>& driver_ports);
 
+// The ports setup.ports lists: with scan those of the machine, without it only those of the drivers (a simulation
+// shares its machine with devices that are not its own); the extra paths in both cases.
+std::vector<mowbite_serial::PortInfo> ListedPorts(bool scan, const std::map<std::string, std::string>& driver_ports,
+                                                  const std::vector<std::string>& extra);
+
 // The answer of setup.ports.
 json PortsAnswer(const PortsView& view);
 

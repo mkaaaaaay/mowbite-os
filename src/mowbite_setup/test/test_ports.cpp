@@ -52,6 +52,19 @@ TEST(Ports, AnswerTellsUseAndUsb) {
   EXPECT_FALSE(answer["listening"]);
 }
 
+TEST(Ports, WithoutScanOnlyDriverAndExtraPortsAreListed) {
+  PortsView view = View();
+  view.driver_ports = {{"/dev/pts/7", "tron_mcu"}};
+  view.ports = ListedPorts(false, view.driver_ports, {"/dev/pts/9"});
+  const json answer = PortsAnswer(view);
+  ASSERT_EQ(answer["ports"].size(), 2u);
+  EXPECT_EQ(answer["ports"][0]["path"], "/dev/pts/7");
+  EXPECT_EQ(answer["ports"][0]["node"], "tron_mcu");
+  EXPECT_FALSE(answer["ports"][0]["free"]);
+  EXPECT_EQ(answer["ports"][1]["path"], "/dev/pts/9");
+  EXPECT_TRUE(answer["ports"][1]["free"]);
+}
+
 TEST(Ports, ADriverPortNamedByItsLinkIsFound) {
   PortsView view = View();
   view.driver_ports = {{"/dev/serial/by-id/usb-FTDI_A1-if00-port0", "mowbite_nmea"}};

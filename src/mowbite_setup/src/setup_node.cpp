@@ -138,13 +138,15 @@ class SetupNode : public rclcpp::Node {
     LoadPlatformImages(&platforms);
     chosen_ = declare_parameter("chosen", std::string());
     const bool fixed = declare_parameter("fixed", std::string("false")) == "true";
-    // The ports the nodes of the platform use ({path: node}) and paths listed besides those of /sys (simulation).
+    // The ports the nodes of the platform use ({path: node}), whether setup.ports lists those of /sys (off in the
+    // simulation) and paths listed besides.
     const json drivers = json::parse(declare_parameter("driver_ports", std::string("{}")), nullptr, false);
     if (drivers.is_object()) {
       for (const auto& [path, node] : drivers.items()) {
         if (node.is_string()) driver_ports_[CanonicalPort(path)] = node.get<std::string>();
       }
     }
+    ports_scan_ = declare_parameter("ports_scan", true);
     const json extra = json::parse(declare_parameter("ports_extra", std::string("[]")), nullptr, false);
     if (extra.is_array()) {
       for (const auto& path : extra) {
@@ -763,8 +765,7 @@ class SetupNode : public rclcpp::Node {
     }
     view.driver_ports = driver_ports_;
     view.holders = mowbite_serial::HoldersOf;
-    view.ports = mowbite_serial::ListPorts();
-    for (const auto& path : ports_extra_) view.ports.push_back({path, {}, "", std::nullopt});
+    view.ports = ListedPorts(ports_scan_, driver_ports_, ports_extra_);
     return view;
   }
 
@@ -871,6 +872,7 @@ class SetupNode : public rclcpp::Node {
 
   std::mutex mutex_;
   std::map<std::string, std::string> driver_ports_;
+  bool ports_scan_ = true;
   std::vector<std::string> ports_extra_;
   // The port of the listen that runs, empty for none; its thread ends early once listen_stop_ is set.
   std::string listening_;
