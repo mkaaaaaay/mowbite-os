@@ -26,6 +26,11 @@
 
 ![Mowing, the setup and updates in the MowBite app](docs/screens.webp)
 
+<p align="center">
+  <a href="https://youtu.be/nUGaw1tlYOk"><img src="docs/video.webp" width="640" alt="MowBite in 83 seconds (YouTube)"></a><br>
+  <sub>MowBite in 83 seconds, on YouTube</sub>
+</p>
+
 MowBite OS runs on the mower's own computer in place of the vendor software. It finds its place on the lawn with RTK
 GNSS, mows the areas you recorded, drives home, docks and charges. The mower works on its own in your home network.
 
