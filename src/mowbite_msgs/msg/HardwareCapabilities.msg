@@ -63,3 +63,11 @@ bool driver_end
 # Date of the safety measurement of this platform (YYYY-MM-DD), empty without one. Without it the logic stays with
 # remote control: no autonomous driving, no blade.
 string safety_measurement_date
+# Whether the firmware the boards report may drive and turn the blade, the rule of the driver alone: empty until every
+# board reported its firmware; listed (the list of the driver), measured (an owner's measurement of exactly these
+# firmwares on this device, measured_firmware of the driver), older (a board older than every listed one: update it
+# first, no measurement), none (blocked until listed or measured). Only listed and measured let the mower drive.
+string firmware_source
+# sha256 (64 hex digits) of an id of this device the driver reads; empty where it has none. A measured firmware holds
+# only with the hash it was measured with.
+string device_hash

@@ -7,10 +7,14 @@ float32 seconds
 # The blade may be on or turning: the driver goes silent all the same, and the board has to stop the blade without
 # its host. Without it the driver refuses with BLADE.
 bool blade
+# The last frame before the silence is a setpoint, so that the board keeps it with its own limit only (the Tron:
+# SpeedData after the heartbeat); the setup program measures that limit with it. Refused with LAST_SETPOINT where the
+# driver has no such order.
+bool last_setpoint
 ---
 bool success
 string message
 # Why it was refused, empty otherwise: READ_ONLY, OUT_OF_RANGE (seconds not in 0.2 to silence_max_s), NO_SETUP (no
 # active setup/motion within the last second), CHARGING (on the charging contacts), BLADE (blade on or still turning
-# without blade), BUSY (already silent).
+# without blade), BUSY (already silent), LAST_SETPOINT.
 string code

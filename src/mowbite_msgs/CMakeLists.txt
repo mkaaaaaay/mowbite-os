@@ -59,6 +59,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/PartUse.msg"
   "msg/PartsUse.msg"
   "msg/SetupMotion.msg"
+  "msg/FirmwareMeasure.msg"
+  "msg/LinkStats.msg"
   "srv/AddArea.srv"
   "srv/ReplaceMap.srv"
   "srv/SetBlade.srv"
