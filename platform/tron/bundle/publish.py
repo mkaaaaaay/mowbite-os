@@ -2,6 +2,8 @@
 <component>-<revision> of the release repo with its .sig, then index.json with a new serial, signed for mowbite-index.
 
   python3 -I publish.py [--stable] <private key> <bundle.tar.gz>...
+  python3 -I publish.py --listed [--stable] <private key> <bundle.tar.gz>...
+  python3 -I publish.py --base [--stable] <private key> <platform>-base-<revision>...
   python3 -I publish.py --promote <private key> <component>-<revision>
 
 preview by default, --stable and --promote (preview to stable) only on the owner's word. Each bundle of any component
@@ -9,6 +11,9 @@ has to hold for allowed_signers of the rootfs (or MOWBITE_SIGNERS); one with a m
 in it, or a revision the index names already, is refused. Signing (sign-bundle.sh, with the test gate of the
 component) comes before. One publish at a time on this PC (LOCK). The index keeps the newest KEEP entries per
 component; releases stay. Needs gh logged in with write access to the repo; GH runs another gh (tests).
+--listed names bundles whose release is already there with the same file. --base names base systems of the installer
+by their release, from its base.json (<platform>-base, base number); updaters take no such entry, the installer takes
+the newest base an OS bundle fits from it.
 """
 import argparse
 import fcntl
@@ -94,6 +99,44 @@ def entry_of(path, channel):
             **{key: meta[key] for key in origin.FIELDS if key in meta}}
 
 
+# The index entry of a release that holds path as it is.
+def listed_entry_of(path, channel, work):
+    entry = entry_of(path, channel)
+    tag = entry["release"]
+    got = os.path.join(work, "listed", tag)
+    os.makedirs(got, exist_ok=True)
+    if gh("release", "view", tag, check=False).returncode != 0:
+        raise Stop(f"there is no release {tag}")
+    gh("release", "download", tag, "-p", entry["file"], "-D", got, "--clobber")
+    if sha256(os.path.join(got, entry["file"])) != entry["sha256"]:
+        raise Stop(f"release {tag} holds another {entry['file']}")
+    return entry
+
+
+# The index entry of a base system of the installer, from base.json of its release <platform>-base-<revision>.
+def base_entry_of(tag, channel, work):
+    got = os.path.join(work, "base", tag)
+    os.makedirs(got, exist_ok=True)
+    gh("release", "download", tag, "-p", "base.json", "-D", got, "--clobber")
+    path = os.path.join(got, "base.json")
+    try:
+        with open(path) as f:
+            sidecar = json.load(f)
+        platform, number = sidecar["platform"], sidecar["base"]
+    except (OSError, ValueError, KeyError, TypeError) as why:
+        raise Stop(f"base.json of {tag}: {why}")
+    component = f"{platform}-base"
+    revision = tag[len(component) + 1:]
+    if not tag.startswith(component + "-") or not re.fullmatch(r"[a-z0-9][a-z0-9.]*", revision):
+        raise Stop(f"{tag} is no {component}-<revision>")
+    if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        raise Stop(f"base.json of {tag}: base is no number from 1 on")
+    now = int(time.time())
+    return {"component": component, "revision": revision, "serial": now, "date": now,
+            "size": os.path.getsize(path), "sha256": sha256(path), "file": "base.json", "url": f"{tag}/base.json",
+            "release": tag, "channel": channel, "base": number}
+
+
 def keep_newest(entries):
     kept = []
     for component in sorted({e["component"] for e in entries}):
@@ -141,9 +184,13 @@ def main(argv):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--stable", action="store_true")
     parser.add_argument("--promote", action="store_true")
+    parser.add_argument("--listed", action="store_true")
+    parser.add_argument("--base", action="store_true")
     parser.add_argument("key")
     parser.add_argument("items", nargs="+")
     args = parser.parse_args(argv)
+    if args.promote + args.listed + args.base > 1:
+        parser.error("one of --promote, --listed and --base")
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     try:
         with open(LOCK, "w") as lock, tempfile.TemporaryDirectory(prefix="mowbite-publish-") as work:
@@ -157,6 +204,14 @@ def main(argv):
                         raise Stop(f"{tag} is not in the index")
                     named[tag]["channel"] = "stable"
                     gh("release", "edit", tag, "--prerelease=false", "--latest=false")
+            elif args.listed or args.base:
+                channel = "stable" if args.stable else "preview"
+                for item in args.items:
+                    entry = listed_entry_of(item, channel, work) if args.listed else base_entry_of(item, channel, work)
+                    if entry["release"] in named:
+                        raise Stop(f"{entry['release']} is in the index already")
+                    named[entry["release"]] = entry
+                    index["bundles"].append(entry)
             else:
                 channel = "stable" if args.stable else "preview"
                 entries = [entry_of(path, channel) for path in args.items]

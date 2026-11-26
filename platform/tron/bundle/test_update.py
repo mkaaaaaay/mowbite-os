@@ -994,6 +994,38 @@ class PublishTest(Base):
         self.assertFalse(os.path.exists(os.path.join(self.store, f"os-{A}", ".prerelease")))
         self.assertEqual(self.taken("stable")[1], [("os", A)])
 
+    def test_listed_takes_a_release_that_is_there_with_the_same_file(self):
+        a = self.bundle(A, component="app")
+        self.write(os.path.join(self.store, f"app-{A}", f"mowbite-app-{A}.tar.gz"), "other")
+        done = self.publish("--listed", self.key, a)
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("another", done.stderr)
+        shutil.copy(a, os.path.join(self.store, f"app-{A}"))
+        done = self.publish("--listed", self.key, a)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual([e["release"] for e in self.index()["bundles"]], [f"app-{A}"])
+        self.assertNotEqual(self.publish("--listed", self.key, self.bundle(B, component="app")).returncode, 0)
+        self.assertNotEqual(self.publish("--listed", self.key, a).returncode, 0)
+
+    def test_a_base_system_is_listed_for_the_installer_only(self):
+        self.assertEqual(self.publish(self.key, self.bundle(A)).returncode, 0)
+        for tag, sidecar in (("tron-base-10b", {"platform": "tron", "base": 2}),
+                             ("tron-base-bad", {"platform": "tron", "base": 0}),
+                             ("other-base-1", {"platform": "tron", "base": 1})):
+            os.makedirs(os.path.join(self.store, tag))
+            self.write(os.path.join(self.store, tag, "base.json"), json.dumps(sidecar))
+        done = self.publish("--base", self.key, "tron-base-10b")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        for bad in ("tron-base-bad", "other-base-1", "tron-base-10b", "tron-base-none"):
+            self.assertNotEqual(self.publish("--base", self.key, bad).returncode, 0, bad)
+        base = [e for e in self.index()["bundles"] if e["component"] == "tron-base"]
+        self.assertEqual([(e["revision"], e["base"], e["url"]) for e in base], [("10b", 2, "tron-base-10b/base.json")])
+        with open(os.path.join(self.store, "index", "index.json")) as f:
+            lines = [line.rstrip(",\n") for line in f if line.startswith('{"component"')]
+        self.assertEqual(sorted(json.loads(line)["release"] for line in lines), [f"os-{A}", "tron-base-10b"])
+        result, taken = self.taken("preview")
+        self.assertEqual((result["result"], taken), ("ok", [("os", A)]))
+
     def test_vendor_files_are_never_published(self):
         for name in ("install/share/models/x.rknn", "install/lib/librknnrt.so"):
             done = self.publish(self.key, self.bundle(A, extra={f"{A}/{name}": b"x"}))
