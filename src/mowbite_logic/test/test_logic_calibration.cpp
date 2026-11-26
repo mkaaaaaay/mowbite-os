@@ -11,8 +11,8 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStartMowing = "mower_logic:idle/start_mowing";
-const std::string kStartRecording = "mower_logic:idle/start_area_recording";
+const std::string kStartMowing = "mowing.start";
+const std::string kStartRecording = "recording.start";
 const Ring kLawn{{0, 0}, {10, 0}, {10, 6}, {0, 6}};
 
 HardwareSnapshot Healthy() {

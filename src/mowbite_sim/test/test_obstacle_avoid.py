@@ -158,9 +158,9 @@ class TestObstacleAvoid(ObstacleSim, unittest.TestCase):
     def mow_anew(self):
         """Ends mowing and starts it again: the circles go with it, the job goes on."""
         p = self.probe
-        p.act("mower_logic:mowing/abort_mowing")
+        p.act("mowing.abort")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 30), "mowing did not end")
-        p.act("mower_logic:idle/start_mowing")
+        p.act("mowing.start")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 60), "mowing did not start")
 
     def test_03_around_a_ball_amid_the_lanes_little_stays_unmowed(self):
@@ -199,7 +199,7 @@ class TestObstacleAvoid(ObstacleSim, unittest.TestCase):
         p = self.probe
         # No circle left from the balls: the mower mows lanes, no way around.
         if p.robot.current_state != "MOWING":
-            p.act("mower_logic:idle/start_mowing")
+            p.act("mowing.start")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 120), "no mowing")
         entries = p.rpc("vision.obstacles.list", {"client": "test"})["result"]["obstacles"]
         self.assertEqual([e for e in entries if e["keep_out_r"] is not None], [], "a circle stays")

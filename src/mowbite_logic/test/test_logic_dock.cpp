@@ -10,8 +10,7 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kRec = "mower_logic:area_recording/";
+const std::string kStart = "mowing.start";
 
 // The station of the map: the mower backs in going north, so on the contacts it faces south.
 const DockPose kDock{-1.0, 2.0, M_PI / 2};
@@ -60,14 +59,11 @@ TestCore Docked(LogicConfig config = Tron()) {
   return core;
 }
 
-bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
-  for (const auto& group : core.Actions()) {
-    if (group.prefix != prefix) continue;
-    for (const auto& action : group.actions) {
-      if (action.id == id) return action.enabled;
-    }
+bool Enabled(const TestCore& core, const std::string& id) {
+  for (const auto& action : core.Actions()) {
+    if (action.id == id) return action.enabled;
   }
-  ADD_FAILURE() << "missing action " << prefix << "/" << id;
+  ADD_FAILURE() << "missing action " << id;
   return false;
 }
 
@@ -87,13 +83,13 @@ void StartChecking(TestCore& core) {
 TEST(DockStart, OnTheContactsNoHeadingIsNeededButAStricterPosition) {
   TestCore core = Docked();
   EXPECT_TRUE(core.StartProblem().empty()) << core.StartProblem().code;
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_TRUE(Enabled(core, "mowing.start"));
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.05f, false));
   const Reason why = core.StartProblem();
   EXPECT_EQ(why.code, "POSITION_ACCURACY");
   EXPECT_DOUBLE_EQ(why.fields["limit"].get<double>(), 0.03);
   EXPECT_NE(why.message.find("on the docking station"), std::string::npos);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   // A limit of params.set below the one of the station holds there as well.
   core.SetGpsSettings(0.02, 10.0, 10.0);
   core.OnPose(PoseAt(kDock.x, kDock.y, 0.025f, false));
@@ -128,7 +124,7 @@ TEST(DockStart, TheCheckComesFirstAndTheMowerStaysIdle) {
   EXPECT_FALSE(core.TakeDockCheck());
   // A second start while it runs.
   EXPECT_EQ(core.StartProblem().code, "BUSY");
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   core.TakeEvents();
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
   const auto events = core.TakeEvents();
@@ -157,7 +153,7 @@ TEST(DockStart, FarFromTheRecordedStationIsAReferenceMismatch) {
   EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_NE(events[0].details["message"].get<std::string>().find("0.20 m"), std::string::npos);
   // The next attempt checks again.
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_TRUE(Enabled(core, "mowing.start"));
   StartChecking(core);
   EXPECT_TRUE(core.TakeDockCheck());
 }
@@ -261,12 +257,12 @@ TEST(DockRecording, ContactAndHeadingComeFromTheCore) {
   TestCore core = Docked();
   core.OnHardwareStatus(Healthy(false));
   core.OnMapStatus(MapDatum::kMatch, "");
-  ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
   core.OnPose(PoseAt(-1.0, 1.0));
-  ASSERT_EQ(core.OnAction(kRec + "record_dock"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.dock"), ActionResult::kDone);
   core.TakeNotices();
   core.OnPose(PoseAt(-1.0, 2.0));
-  EXPECT_EQ(core.OnAction(kRec + "record_dock"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("recording.dock"), ActionResult::kRejected);
   const auto events = core.TakeEvents();
   const Event* refused = Find(events, "RECORDING_REFUSED");
   ASSERT_TRUE(refused);
@@ -275,13 +271,13 @@ TEST(DockRecording, ContactAndHeadingComeFromTheCore) {
   // Without telemetry the contact counts as gone.
   core.OnHardwareStatus(Healthy(true));
   core.OnHardwareTimeout();
-  EXPECT_EQ(core.OnAction(kRec + "record_dock"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("recording.dock"), ActionResult::kRejected);
   core.OnHardwareStatus(Healthy(true));
   // Without a heading the point would be off by the antenna offset.
   core.OnPose(PoseAt(-1.0, 2.0, 0.02f, false));
-  EXPECT_EQ(core.OnAction(kRec + "record_dock"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("recording.dock"), ActionResult::kRejected);
   core.OnPose(PoseAt(-1.0, 2.0));
-  ASSERT_EQ(core.OnAction(kRec + "record_dock"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.dock"), ActionResult::kDone);
   const auto edit = core.TakeMapEdit();
   ASSERT_TRUE(edit);
   EXPECT_NEAR(edit->heading, M_PI / 2, 1e-9);

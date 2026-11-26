@@ -127,7 +127,7 @@ class TestWatchStall(unittest.TestCase):
 
     def mow(self):
         p = self.probe
-        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
+        since, _ = p.started(lambda: p.act("mowing.start"))
         self.assertIsNotNone(p.event(since, "STATE", 10, state="MOWING"), [e["type"] for e in p.events[since:]])
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")
@@ -205,7 +205,7 @@ class TestWatchStall(unittest.TestCase):
 
     def test_03_a_stalled_s2_stops_the_wheels_at_once_and_the_blade_with_the_end(self, proc_info):
         p = self.probe
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.hw.emergency, 10), p.hw)
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5), p.robot)
         # The new container begins without a heading.

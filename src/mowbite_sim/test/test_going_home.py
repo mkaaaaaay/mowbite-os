@@ -32,9 +32,9 @@ from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E4
 WORK = tempfile.mkdtemp(prefix="mowbite_going_home_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "going_home.yaml")
-START = "mower_logic:idle/start_mowing"
-ABORT_MOWING = "mower_logic:mowing/abort_mowing"
-P = "/mower_logic/"
+START = "mowing.start"
+ABORT_MOWING = "mowing.abort"
+P = "/logic/"
 
 # The yard and the station of test_dock.py, with a patch large enough for several starts of the same job.
 YARD = [(-0.5, -2.0), (4.0, -2.0), (4.0, 2.0), (-0.5, 2.0)]
@@ -268,7 +268,7 @@ class TestGoingHome(unittest.TestCase):
         self.assertIsNotNone(p.event(since, "BATTERY_LOW", LOW_WINDOW + 15), p.events[since:])
         self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"), p.events[since:])
         p.flags()
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5))
         # Released, it stays where it is.
         self.assert_still(3.0)

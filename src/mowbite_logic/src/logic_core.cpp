@@ -13,13 +13,6 @@ namespace mowbite_logic {
 
 namespace {
 
-const std::string kRootPrefix = "mower_logic";
-const std::string kIdlePrefix = "mower_logic:idle";
-const std::string kRecordingPrefix = "mower_logic:area_recording";
-const std::string kMowingPrefix = "mower_logic:mowing";
-const std::string kUndockingPrefix = "mower_logic:undocking";
-const std::string kDockingPrefix = "mower_logic:docking";
-
 EventObserver event_observer = nullptr;
 
 }  // namespace
@@ -212,7 +205,7 @@ void LogicCore::OnPoseTimeout() {
 std::vector<Effect> LogicCore::TakeEffects() {
   if (auto edit = recording_.recorder().TakeMapEdit()) effects_.push_back(std::move(*edit));
   for (auto& line : recording_.recorder().TakeNotices()) Notify(std::move(line));
-  // start_mowing and its reason follow the position, the battery and more, which change without an event.
+  // mowing.start and its reason follow the position, the battery and more, which change without an event.
   const std::string start_reason = StartProblem().code;
   if (start_reason != last_start_reason_) {
     last_start_reason_ = start_reason;
@@ -319,13 +312,9 @@ ActionResult LogicCore::OnAction(const std::string& action_id) {
     if (outcome.release) return ActionResult::kReleaseEmergency;
     return outcome.accepted ? ActionResult::kDone : ActionResult::kRejected;
   }
-  // start_manual_mowing and stop_manual_mowing have no command: the blade comes after phase 7.
-  const bool known_prefix = action_id.rfind(kIdlePrefix + "/", 0) == 0 ||
-                            action_id.rfind(kRecordingPrefix + "/", 0) == 0 ||
-                            action_id.rfind(kUndockingPrefix + "/", 0) == 0 ||
-                            action_id.rfind(kDockingPrefix + "/", 0) == 0;
-  if (known_prefix) CommandCancels();
-  return known_prefix ? ActionResult::kRejected : ActionResult::kUnknown;
+  // An action no command stands for: the press cancels what a command cancels and is refused.
+  CommandCancels();
+  return ActionResult::kRejected;
 }
 
 CommandOutcome LogicCore::Command(const std::string& name, const json& params, const Reason& node_problem) {
@@ -443,7 +432,7 @@ Reason LogicCore::RunCommand(const mowbite_api::Command& command, const json& pa
       EndJob(false, true, Reason("MANUAL", "Going home: mowing stopped " + by));
       return {};
     }
-    // skip_area, skip_path: only the area or path the client saw.
+    // mowing.skip_area, mowing.skip_path: only the area or path the client saw.
     const bool area = name == "mowing.skip_area";
     const char* key = area ? "area" : "path";
     const int now = area ? mowing_.job().progress().area : mowing_.job().progress().path;
@@ -515,14 +504,13 @@ Reason LogicCore::RecordingCommand(const mowbite_api::Command& command, const js
     bool fits = true;
     for (const auto& [key, value] : entry.params.items()) fits = fits && params.value(key, json()) == value;
     if (fits) {
-      action = entry.action;
+      action = mowbite_api::ActionId(command, entry);
       break;
     }
   }
-  if (action.rfind(kRecordingPrefix + "/", 0) != 0) return WrongState();
   Reason why;
-  const AreaRecorder::Result result = recording_.recorder().OnAction(
-      action.substr(kRecordingPrefix.size() + 1), &why, params.value("meters", kUndoDefaultM));
+  const AreaRecorder::Result result =
+      recording_.recorder().OnAction(action, &why, params.value("meters", kUndoDefaultM));
   recording_.PullRecorder(CoreAccess(*this));
   if (result != AreaRecorder::Result::kDone) return why.empty() ? WrongState() : why;
   if (command.name == "recording.undo") out->result["points"] = recording_.recorder().current().size();
@@ -704,38 +692,33 @@ RobotStateData LogicCore::RobotState() const {
   return s;
 }
 
-std::vector<ActionGroup> LogicCore::Actions() const {
+std::vector<Action> LogicCore::Actions() const {
   const bool idle = state_ == State::kIdle;
   const bool recording = state_ == State::kAreaRecording;
   const bool mowing = state_ == State::kMowing;
-  std::vector<ActionGroup> groups;
-  groups.push_back({kRootPrefix, {{"reset_emergency", "Unlatch emergency", true}}});
   const Reason start = StartProblem();
-  groups.push_back({kIdlePrefix,
-                    {{"start_mowing", "Begin mowing", start.empty(), start.code},
-                     {"start_area_recording", "Record an area",
-                      idle && !emergency_ && recording_.map_writable() && HoldProblem().empty()},
-                     {"reset_job", "Discard unfinished job", idle && mowing_.job().Unfinished()}}});
-  // Pause and continue take turns, like in OpenMower; continue waits for the emergency to be reset.
+  // Pause and continue take turns; continue waits for the emergency to be reset.
   const bool waits = (mowing_.pause() & kPauseWaitsForUser) != 0;
   const bool obstacle = (mowing_.pause() & kPauseObstacle) != 0;
-  groups.push_back({kMowingPrefix,
-                    {{"pause", "Pause", mowing && !waits},
-                     {"continue", "Resume", mowing && (waits || obstacle) && !emergency_ && !Held()},
-                     {"abort_mowing", "End mowing", mowing},
-                     {"skip_area", "Next area", mowing},
-                     {"skip_path", "Next path", mowing}}});
-  groups.push_back({kUndockingPrefix, {{"abort_undocking", "Cancel undocking", state_ == State::kUndocking}}});
-  groups.push_back({kDockingPrefix, {{"abort_docking", "Cancel docking", state_ == State::kDocking}}});
+  std::vector<Action> actions = {
+      {"emergency.reset", "Unlatch emergency", true},
+      {"mowing.start", "Begin mowing", start.empty(), start.code},
+      {"recording.start", "Record an area", idle && !emergency_ && recording_.map_writable() && HoldProblem().empty()},
+      {"mowing.reset_job", "Discard unfinished job", idle && mowing_.job().Unfinished()},
+      {"mowing.pause", "Pause", mowing && !waits},
+      {"mowing.continue", "Resume", mowing && (waits || obstacle) && !emergency_ && !Held()},
+      {"mowing.abort", "End mowing", mowing},
+      {"mowing.skip_area", "Next area", mowing},
+      {"mowing.skip_path", "Next path", mowing},
+      {"undocking.abort", "Cancel undocking", state_ == State::kUndocking},
+      {"docking.abort", "Cancel docking", state_ == State::kDocking}};
   // The recorder decides while recording; outside of it all are off.
   const std::vector<bool> enabled = recording_.recorder().Enabled();
-  const std::vector<std::string>& names = AreaRecorder::ActionLabels();
-  ActionGroup recording_group{kRecordingPrefix, {}};
-  for (size_t i = 0; i < names.size(); i++) {
-    recording_group.actions.push_back({AreaRecorder::ActionNames()[i], names[i], recording && enabled[i]});
+  const auto& entries = AreaRecorder::Actions();
+  for (size_t i = 0; i < entries.size(); i++) {
+    if (!entries[i].id.empty()) actions.push_back({entries[i].id, entries[i].label, recording && enabled[i]});
   }
-  groups.push_back(std::move(recording_group));
-  return groups;
+  return actions;
 }
 
 bool LogicCore::PoseGood() const {

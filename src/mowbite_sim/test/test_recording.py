@@ -28,7 +28,6 @@ from sim_common import HISTORY, LATCHED, SimProbe, layers, read_json  # noqa: E4
 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_recording_")
-REC = "mower_logic:area_recording/"
 
 
 # The dimensions of the platform, which the logic needs to start.
@@ -157,11 +156,11 @@ class TestRecording(unittest.TestCase):
     def test_01_no_recording_before_the_map_knows_its_datum(self):
         self.assertTrue(self.probe.wait(lambda: self.probe.status is not None
                                         and self.probe.status.datum_state == MapStatus.DATUM_UNKNOWN, 15))
-        self.assertTrue(self.enabled("mower_logic:idle/start_area_recording", False))
+        self.assertTrue(self.enabled("recording.start", False))
         # Until its first hw/status the logic may be in the emergency of the start, which refuses without an event.
         refused = None
         for _ in range(10):
-            self.probe.act("mower_logic:idle/start_area_recording")
+            self.probe.act("recording.start")
             refused = self.probe.wait(lambda: self.probe.events_of("RECORDING_REFUSED"), 1.0)
             if refused:
                 break
@@ -170,24 +169,24 @@ class TestRecording(unittest.TestCase):
 
     def test_02_records_an_area_with_an_obstacle(self):
         self.probe.datum(DATUM)
-        self.assertTrue(self.enabled("mower_logic:idle/start_area_recording"), "start_area_recording stays off")
-        self.probe.act("mower_logic:idle/start_area_recording")
-        self.assertTrue(self.enabled(REC + "start_recording"))
-        self.probe.act(REC + "start_recording")
-        self.assertTrue(self.enabled(REC + "stop_recording"))
+        self.assertTrue(self.enabled("recording.start"), "start_area_recording stays off")
+        self.probe.act("recording.start")
+        self.assertTrue(self.enabled("recording.ring_start"))
+        self.probe.act("recording.ring_start")
+        self.assertTrue(self.enabled("recording.ring_stop"))
         # Over the start at the end, crossing the first side flatly: only so the closing edge was driven.
         self.probe.drive([(0, 0), (4, 0), (4, 3), (0, 3), (0, 0.15), (0.6, -0.05)])
         line = self.probe.wait(lambda: [p for p in (self.probe.overlay or {}).get("polygons", [])
                                         if p["color"] == "blue" and len(p["poly"]) > 50])
         self.assertTrue(line, "no blue line on map_overlay/json")
-        self.probe.act(REC + "stop_recording")
-        self.assertTrue(self.enabled(REC + "finish_mowing_area"))
+        self.probe.act("recording.ring_stop")
+        self.assertTrue(self.enabled("recording.save:mow"))
         # To the obstacle first: a ring begins where the mower stands.
         self.probe.drive([(0.6, -0.05), (1, 1)])
-        self.probe.act(REC + "start_recording")
-        self.assertTrue(self.enabled(REC + "stop_recording"))
+        self.probe.act("recording.ring_start")
+        self.assertTrue(self.enabled("recording.ring_stop"))
         self.probe.drive([(1, 1), (2, 1), (2, 2), (1, 2), (1, 1.15), (1.6, 0.95)])
-        self.probe.act(REC + "finish_mowing_area")
+        self.probe.act("recording.save:mow")
 
         saved = self.probe.wait(lambda: self.probe.map if self.probe.map and len(self.probe.map["areas"]) == 2
                                 else None)
@@ -214,23 +213,23 @@ class TestRecording(unittest.TestCase):
         on_disk = read_json(os.path.join(WORK, "map.json"))
         self.assertEqual(on_disk["areas"][0]["properties"]["recorded_body"], bodies[0])
         self.assertTrue(self.probe.wait(lambda: self.probe.overlay == {"polygons": []}), str(self.probe.overlay)[:200])
-        self.assertTrue(self.enabled(REC + "start_recording"))
+        self.assertTrue(self.enabled("recording.ring_start"))
         # The first area ties the map to the datum.
         self.assertTrue(self.probe.wait(lambda: self.probe.status.datum_state == MapStatus.DATUM_MATCH))
 
     def test_03_records_the_docking_station(self):
         self.probe.drive([(self.probe.x, self.probe.y), (-1, 2.0)])
-        self.probe.act(REC + "record_dock")
-        self.assertTrue(self.enabled(REC + "start_recording", False))
+        self.probe.act("recording.dock")
+        self.assertTrue(self.enabled("recording.ring_start", False))
         self.probe.drive([(-1, 2.0), (-1, 1.0)])
         # The point on the contacts needs the contact.
-        self.probe.act(REC + "record_dock")
+        self.probe.act("recording.dock")
         refused = self.probe.wait(lambda: [e for e in self.probe.events_of("RECORDING_REFUSED")
                                            if e.get("reason") == "NO_DOCK_CONTACT"])
         self.assertTrue(refused, self.probe.events_of("RECORDING_REFUSED"))
         self.probe.contact = True
         time.sleep(0.5)
-        self.probe.act(REC + "record_dock")
+        self.probe.act("recording.dock")
         saved = self.probe.wait(lambda: self.probe.map if self.probe.map and self.probe.map["docking_stations"]
                                 else None)
         self.assertIsNotNone(saved, "no docking station in map/json")
@@ -241,17 +240,17 @@ class TestRecording(unittest.TestCase):
         recorded = self.probe.wait(lambda: self.probe.events_of("DOCK_RECORDED"))
         self.assertIsNotNone(recorded)
         self.assertEqual(recorded[-1]["dock_id"], dock["id"])
-        self.assertTrue(self.enabled(REC + "start_recording"))
+        self.assertTrue(self.enabled("recording.ring_start"))
         self.probe.contact = False
 
     def test_04_another_datum_keeps_the_area_open(self):
-        self.probe.act(REC + "start_recording")
-        self.assertTrue(self.enabled(REC + "stop_recording"))
+        self.probe.act("recording.ring_start")
+        self.assertTrue(self.enabled("recording.ring_stop"))
         self.probe.drive([(5, 0), (7, 0), (7, 2), (5, 2), (5, 0.1)])
         self.probe.datum((DATUM[0] + 0.001, DATUM[1], DATUM[2]))
         self.assertTrue(self.probe.wait(lambda: self.probe.status.datum_state == MapStatus.DATUM_MISMATCH))
         before = len(self.probe.events_of("RECORDING_REFUSED"))
-        self.probe.act(REC + "finish_mowing_area")
+        self.probe.act("recording.save:mow")
         refused = self.probe.wait(lambda: self.probe.events_of("RECORDING_REFUSED")[before:])
         self.assertIsNotNone(refused, "finish_mowing_area was not refused")
         self.assertEqual(refused[0]["reason"], "MAP_MISMATCH")
@@ -260,9 +259,9 @@ class TestRecording(unittest.TestCase):
         time.sleep(0.5)
         self.assertEqual(len(self.probe.map["areas"]), 2)
         # Still recording: the outline can be saved once the datum is back.
-        self.assertTrue(self.enabled(REC + "stop_recording"))
-        self.probe.act(REC + "exit_recording_mode")
-        self.assertTrue(self.enabled("mower_logic:idle/start_area_recording", False))
+        self.assertTrue(self.enabled("recording.ring_stop"))
+        self.probe.act("recording.exit")
+        self.assertTrue(self.enabled("recording.start", False))
 
     def test_05_a_new_body_follows_on_the_areas_recorded_here(self):
         self.probe.datum(DATUM)
@@ -283,19 +282,19 @@ class TestRecording(unittest.TestCase):
         self.assertEqual(self.probe.events_of("RECORDED_BODY_KEPT"), [])
 
     def test_06_points_by_hand_give_no_body(self):
-        self.probe.act("mower_logic:idle/start_area_recording")
-        self.assertTrue(self.enabled(REC + "start_recording"))
-        self.probe.act(REC + "start_recording")
-        self.assertTrue(self.enabled(REC + "auto_point_collecting_disable"))
-        self.probe.act(REC + "auto_point_collecting_disable")
-        self.assertTrue(self.enabled(REC + "collect_point"))
+        self.probe.act("recording.start")
+        self.assertTrue(self.enabled("recording.ring_start"))
+        self.probe.act("recording.ring_start")
+        self.assertTrue(self.enabled("recording.auto_points:off"))
+        self.probe.act("recording.auto_points:off")
+        self.assertTrue(self.enabled("recording.point"))
         corners = [(10, 0), (12, 0), (12, 2), (10, 2)]
         for corner in corners:
             self.probe.drive([(self.probe.x, self.probe.y), corner])
-            self.probe.act(REC + "collect_point")
+            self.probe.act("recording.point")
             time.sleep(0.5)
         since = len(self.probe.events_of("AREA_RECORDED"))
-        self.probe.act(REC + "finish_mowing_area")
+        self.probe.act("recording.save:mow")
         recorded = self.probe.wait(lambda: self.probe.events_of("AREA_RECORDED")[since:])
         self.assertIsNotNone(recorded, "no AREA_RECORDED")
         self.assertFalse(recorded[0]["driven"])
@@ -306,14 +305,14 @@ class TestRecording(unittest.TestCase):
         self.assertNotIn("recorded_body", saved["properties"])
 
     def test_07_reversing_gives_no_body(self):
-        self.probe.act("mower_logic:idle/start_area_recording")
-        self.assertTrue(self.enabled(REC + "start_recording"))
+        self.probe.act("recording.start")
+        self.assertTrue(self.enabled("recording.ring_start"))
         self.probe.drive([(self.probe.x, self.probe.y), (15, 0)])
-        self.probe.act(REC + "start_recording")
+        self.probe.act("recording.ring_start")
         # test_06 turned them off; only automatic points are taken back.
-        self.assertTrue(self.enabled(REC + "auto_point_collecting_enable"))
-        self.probe.act(REC + "auto_point_collecting_enable")
-        self.assertTrue(self.enabled(REC + "stop_recording"))
+        self.assertTrue(self.enabled("recording.auto_points:on"))
+        self.probe.act("recording.auto_points:on")
+        self.assertTrue(self.enabled("recording.ring_stop"))
         since = len(self.probe.events)
         self.probe.drive([(15, 0), (17, 0)])
         # 5 cm, under the two steps the pose needs: the wheels show it.
@@ -323,7 +322,7 @@ class TestRecording(unittest.TestCase):
                                         if e["type"] == "RECORDING_REFUSED" and e["reason"] == "REVERSING"])
         self.assertIsNotNone(hint, "no hint while reversing")
         recorded_since = len(self.probe.events_of("AREA_RECORDED"))
-        self.probe.act(REC + "finish_mowing_area")
+        self.probe.act("recording.save:mow")
         recorded = self.probe.wait(lambda: self.probe.events_of("AREA_RECORDED")[recorded_since:])
         self.assertIsNotNone(recorded, "no AREA_RECORDED")
         self.assertFalse(recorded[0]["driven"])

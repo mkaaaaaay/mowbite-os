@@ -35,14 +35,11 @@ HardwareSnapshot Stopped(int reason) {
   return hw;
 }
 
-bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
-  for (const auto& group : core.Actions()) {
-    if (group.prefix != prefix) continue;
-    for (const auto& action : group.actions) {
-      if (action.id == id) return action.enabled;
-    }
+bool Enabled(const TestCore& core, const std::string& id) {
+  for (const auto& action : core.Actions()) {
+    if (action.id == id) return action.enabled;
   }
-  ADD_FAILURE() << "missing action " << prefix << "/" << id;
+  ADD_FAILURE() << "missing action " << id;
   return false;
 }
 
@@ -109,7 +106,7 @@ TEST(Logic, IncompatibleFirmwareIsEmergencyWithItsOwnBit) {
   auto firmware = Stopped(kEmergencyFirmwareIncompatible);
   core.OnHardwareStatus(firmware);
   EXPECT_TRUE(core.RobotState().emergency);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_FALSE(Enabled(core, "recording.start"));
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_EQ(events[0].details["reason"], kEmergencyFirmwareIncompatible);
@@ -221,11 +218,11 @@ TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 0.0));
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
-  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  EXPECT_TRUE(Enabled(core, "recording.start"));
+  EXPECT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
   EXPECT_EQ(core.RobotState().state, "AREA_RECORDING");
-  EXPECT_TRUE(Enabled(core, "mower_logic:area_recording", "exit_recording_mode"));
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_TRUE(Enabled(core, "recording.exit"));
+  EXPECT_FALSE(Enabled(core, "recording.start"));
   auto cmd = core.OnTeleop(0.2, -0.1, 2.0);
   ASSERT_TRUE(cmd);
   EXPECT_DOUBLE_EQ(cmd->first, 0.2);
@@ -233,7 +230,7 @@ TEST(Logic, TeleopOnlyWhileRecordingAndNoEmergency) {
   core.OnHardwareStatus(stopped);
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 4.0));
   core.OnHardwareStatus(Healthy());
-  EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("recording.exit"), ActionResult::kDone);
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 6.0));
   auto events = core.TakeEvents();
   ASSERT_GE(events.size(), 2u);
@@ -249,7 +246,7 @@ TestCore RecordingCore() {
   TestCore core{LogicConfig{}};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   return core;
 }
 
@@ -300,8 +297,8 @@ TEST(Logic, PauseOfOneSecondArmsTeleopAfterRelease) {
 TEST(Logic, ANewRecordingWaitsForZeroOrQuiet) {
   TestCore core = RecordingCore();
   EXPECT_EQ(Passed(core, 10.0, 11.0), 10);
-  ASSERT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
-  ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.exit"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
   EXPECT_FALSE(core.OnTeleop(0.2, 0.0, 11.0).has_value());
 }
 
@@ -321,7 +318,7 @@ TEST(Logic, HeldJoystickWaitsWhenRecordingStarts) {
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_EQ(Passed(core, 10.0, 11.0), 0);
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   EXPECT_EQ(Passed(core, 11.0, 12.0), 0);
   EXPECT_TRUE(core.OnTeleop(0.0, 0.0, 12.0));
   EXPECT_EQ(Passed(core, 12.1, 13.0), 9);
@@ -332,13 +329,13 @@ TEST(Logic, LeavingRecordingStopsTheWheels) {
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   EXPECT_FALSE(core.TakeStopRequest());
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   EXPECT_FALSE(core.TakeStopRequest());
-  EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("recording.exit"), ActionResult::kDone);
   EXPECT_TRUE(core.TakeStopRequest());
   EXPECT_FALSE(core.TakeStopRequest());
   // Rejected actions change nothing.
-  EXPECT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("recording.exit"), ActionResult::kRejected);
   EXPECT_FALSE(core.TakeStopRequest());
 }
 
@@ -347,11 +344,11 @@ TEST(Logic, NoRecordingDuringEmergency) {
   core.OnMapStatus(MapDatum::kMatch, "");
   auto latched = Stopped(kEmergencyLatch | kEmergencyHighLevel);
   core.OnHardwareStatus(latched);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
-  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kRejected);
-  EXPECT_EQ(core.OnAction("mower_logic/reset_emergency"), ActionResult::kReleaseEmergency);
-  EXPECT_EQ(core.OnAction("mower_logic:idle/start_mowing"), ActionResult::kRejected);
-  EXPECT_EQ(core.OnAction("something/else"), ActionResult::kUnknown);
+  EXPECT_FALSE(Enabled(core, "recording.start"));
+  EXPECT_EQ(core.OnAction("recording.start"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("emergency.reset"), ActionResult::kReleaseEmergency);
+  EXPECT_EQ(core.OnAction("mowing.start"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("something/else"), ActionResult::kRejected);
 }
 
 TEST(Logic, ActionsChangeFlag) {
@@ -514,7 +511,7 @@ TEST(Logic, PoseTimeoutDropsPoseButEventsKeepLastPosition) {
   EXPECT_FLOAT_EQ(state.pos_accuracy, 999.0f);
   EXPECT_FLOAT_EQ(state.gps_percentage, 0.0f);
   EXPECT_EQ(Find(core.Readings(), "position_accuracy"), nullptr);
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_DOUBLE_EQ(events[0].details["x"].get<double>(), 4.0);
@@ -526,7 +523,7 @@ TEST(Logic, EventsCarryThePositionTheyHappenedAt) {
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
   core.OnPose(Pose(1.0, 2.0, 0.02f));
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   core.OnPose(Pose(7.0, 8.0, 0.02f));
   auto lift = Stopped(kEmergencyLatch | kEmergencyLift);
   core.OnHardwareStatus(lift);
@@ -561,7 +558,7 @@ TEST(Logic, EventsWithoutAnyPoseAreAtZero) {
   TestCore core{LogicConfig{}};
   core.OnMapStatus(MapDatum::kMatch, "");
   core.OnHardwareStatus(Healthy());
-  core.OnAction("mower_logic:idle/start_area_recording");
+  core.OnAction("recording.start");
   auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
   EXPECT_DOUBLE_EQ(events[0].details["x"].get<double>(), 0.0);
@@ -604,7 +601,7 @@ TEST(LogicDrive, StartsFromIdleAndShowsDriving) {
   EXPECT_TRUE(core.FollowerActive());
   EXPECT_EQ(core.RobotState().state, "IDLE");
   EXPECT_EQ(core.RobotState().sub_state, "DRIVING");
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_FALSE(Enabled(core, "recording.start"));
   const auto events = core.TakeEvents();
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].type, "STATE");
@@ -616,7 +613,7 @@ TEST(LogicDrive, StartsFromIdleAndShowsDriving) {
   const Reason busy = core.StartDrive(6, 3);
   EXPECT_EQ(busy.code, "BUSY");
   EXPECT_EQ(busy.fields["state"], "driving");
-  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kRejected);
+  EXPECT_EQ(core.OnAction("recording.start"), ActionResult::kRejected);
 }
 
 TEST(LogicDrive, EndStopsTheWheelsAndGoesBackToIdle) {
@@ -708,7 +705,7 @@ TEST(LogicDrive, RefusedWithAReason) {
   }
   {
     TestCore core = ReadyToDrive();
-    ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+    ASSERT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
     const Reason why = core.StartDrive(5, 3);
     EXPECT_EQ(why.code, "BUSY");
     EXPECT_EQ(why.fields["state"], "AREA_RECORDING");
@@ -768,9 +765,9 @@ TEST(LogicDrive, TeleopNeverReachesTheWheelsWhileDriving) {
 TEST(Logic, PoseTimeoutRefusesTheRequestedPointAtOnce) {
   TestCore core = RecordingCore();
   core.OnPose(Pose(1.0, 2.0, 0.02f));
-  ASSERT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
-  ASSERT_EQ(core.OnAction("mower_logic:area_recording/auto_point_collecting_disable"), ActionResult::kDone);
-  ASSERT_EQ(core.OnAction("mower_logic:area_recording/collect_point"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.ring_start"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.auto_points:off"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.point"), ActionResult::kDone);
   core.TakeEvents();
   core.OnPoseTimeout();
   const auto events = core.TakeEvents();
@@ -783,7 +780,7 @@ TEST(Logic, PoseTimeoutRefusesTheRequestedPointAtOnce) {
 // Leaving recording takes the actions change of the recorder along: a later answer of the map changes nothing.
 TEST(Logic, AMapAnswerAfterRecordingChangesNoActions) {
   TestCore core = RecordingCore();
-  ASSERT_EQ(core.OnAction("mower_logic:area_recording/exit_recording_mode"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.exit"), ActionResult::kDone);
   core.TakeActionsChanged();
   core.OnMapEditResult(true, "lawn1", "", "");
   EXPECT_FALSE(core.TakeActionsChanged());

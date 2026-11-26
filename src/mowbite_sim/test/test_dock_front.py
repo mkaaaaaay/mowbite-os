@@ -28,7 +28,7 @@ from sim_common import (HISTORY, LATCHED, SimProbe, host_packets, last_time, mov
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_front_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "dock_front.yaml")
-START = "mower_logic:idle/start_mowing"
+START = "mowing.start"
 CONTACT_X = 0.3
 CONTACT_SPEED = 0.04
 

@@ -258,7 +258,7 @@ TEST_F(CoreReplay, LogicCore) {
       pose.x = 1 + 0.01 * i;
       logic.Call<&L::OnPose>(pose);
       logic.Call<&L::OnTick>(now);
-      if (i == 10) logic.Call<&L::OnAction>(std::string("mower_logic:idle/start_mowing"));
+      if (i == 10) logic.Call<&L::OnAction>(std::string("mowing.start"));
       if (i == 50) logic.Call<&L::Command>(std::string("emergency.reset"), json::object(), Reason());
       if (i == 51) logic.Call<&L::OnReleaseAnswered>(now);
       if (i == 60) logic.Call<&L::Command>(std::string("mowing.start"), json{{"areas", {"front"}}}, Reason());

@@ -7,7 +7,7 @@ namespace mowbite_logic {
 
 namespace {
 
-// Indices into ActionNames(), the order OpenMower registers them in.
+// Indices into Actions().
 enum ActionIndex {
   kStartRecording,
   kStopRecording,
@@ -217,38 +217,22 @@ Reason RingProblem(const Ring& ring, double min_area_m2) {
 
 AreaRecorder::AreaRecorder(const RecorderConfig& config) : config_(config) {}
 
-const std::vector<std::string>& AreaRecorder::ActionNames() {
-  static const std::vector<std::string> names = {"start_recording",
-                                                 "stop_recording",
-                                                 "finish_navigation_area",
-                                                 "finish_mowing_area",
-                                                 "exit_recording_mode",
-                                                 "finish_discard",
-                                                 "record_dock",
-                                                 "auto_point_collecting_enable",
-                                                 "auto_point_collecting_disable",
-                                                 "collect_point",
-                                                 "start_manual_mowing",
-                                                 "stop_manual_mowing",
-                                                 "undo_points"};
-  return names;
-}
-
-const std::vector<std::string>& AreaRecorder::ActionLabels() {
-  static const std::vector<std::string> labels = {"Begin outline",
-                                                  "End outline",
-                                                  "Keep as navigation area",
-                                                  "Keep as mowing area",
-                                                  "Leave recording",
-                                                  "Drop outline",
-                                                  "Mark the dock here",
-                                                  "Automatic points on",
-                                                  "Automatic points off",
-                                                  "Take a point here",
-                                                  "Manual blade on",
-                                                  "Manual blade off",
-                                                  "Undo points"};
-  return labels;
+const std::vector<AreaRecorder::ActionEntry>& AreaRecorder::Actions() {
+  static const std::vector<ActionEntry> actions = {
+      {"recording.ring_start", "start_recording", "Begin outline"},
+      {"recording.ring_stop", "stop_recording", "End outline"},
+      {"recording.save:nav", "finish_navigation_area", "Keep as navigation area"},
+      {"recording.save:mow", "finish_mowing_area", "Keep as mowing area"},
+      {"recording.exit", "exit_recording_mode", "Leave recording"},
+      {"recording.discard", "finish_discard", "Drop outline"},
+      {"recording.dock", "record_dock", "Mark the dock here"},
+      {"recording.auto_points:on", "auto_point_collecting_enable", "Automatic points on"},
+      {"recording.auto_points:off", "auto_point_collecting_disable", "Automatic points off"},
+      {"recording.point", "collect_point", "Take a point here"},
+      {"", "start_manual_mowing", "Manual blade on"},
+      {"", "stop_manual_mowing", "Manual blade off"},
+      {"recording.undo", "undo_points", "Undo points"}};
+  return actions;
 }
 
 void AreaRecorder::Reset() {
@@ -276,19 +260,21 @@ AreaRecorder::Result AreaRecorder::Refuse(const std::string& action, const Reaso
   return Result::kRefused;
 }
 
-AreaRecorder::Result AreaRecorder::OnAction(const std::string& name, Reason* why, double undo_meters) {
+AreaRecorder::Result AreaRecorder::OnAction(const std::string& id, Reason* why, double undo_meters) {
   refusal_ = Reason();
   trimmed_points_ = 0;
-  const Result result = Act(name, undo_meters);
+  const Result result = Act(id, undo_meters);
   if (why) *why = result == Result::kRefused ? refusal_ : Reason();
   return result;
 }
 
-AreaRecorder::Result AreaRecorder::Act(const std::string& name, double undo_meters) {
-  const auto& names = ActionNames();
-  const auto it = std::find(names.begin(), names.end(), name);
-  if (it == names.end() || name == "exit_recording_mode") return Result::kUnknown;
-  const size_t index = static_cast<size_t>(it - names.begin());
+AreaRecorder::Result AreaRecorder::Act(const std::string& id, double undo_meters) {
+  const auto& actions = Actions();
+  const auto it = std::find_if(actions.begin(), actions.end(),
+                               [&id](const ActionEntry& entry) { return !id.empty() && entry.id == id; });
+  if (it == actions.end() || it - actions.begin() == kExitRecordingMode) return Result::kUnknown;
+  const size_t index = static_cast<size_t>(it - actions.begin());
+  const std::string& name = it->name;
   // The edit on its way decides what comes next; the app shows no buttons until then.
   if (pending_) return Refuse(name, Reason("STILL_SAVING", "The last change of the map is still being saved"));
   if (!Enabled()[index]) return Result::kRefused;

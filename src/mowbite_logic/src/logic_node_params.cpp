@@ -1,4 +1,4 @@
-// The settings of /mower_logic at the node: the parameter files, what params.set saved, mower_logic.json and
+// The settings of the logic at the node: the parameter files, what params.set saved, mower_logic.json and
 // params/json.
 #include <fstream>
 #include <mutex>

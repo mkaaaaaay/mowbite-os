@@ -104,8 +104,8 @@ struct ActionItem {
   std::string reason = "";
 };
 
-// actions/json: the groups sorted by prefix, each in the order of its node, as "<prefix>/<id>"; reason only on an
-// action that is off and has one.
+// actions/json: the groups sorted by prefix, each in its order, as "<prefix>/<id>", the id alone in a group
+// without a prefix; reason only on an action that is off and has one.
 std::string ActionsText(const std::map<std::string, std::vector<ActionItem>>& groups);
 
 // capabilities/json, indented by two spaces.

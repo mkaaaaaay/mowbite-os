@@ -5,6 +5,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 
 #include "fields.h"
 #include "mowbite_api/catalog.h"
@@ -633,7 +634,7 @@ const std::vector<Command>& Commands() {
                          Number("max_hold_s", "s", "Let go before this")},
                         false)),
         Nullable(Object("blade_height",
-                        "Cutting heights the platform sets for /mower_logic/mow_height_mm; null or missing where it "
+                        "Cutting heights the platform sets for /logic/mow_height_mm; null or missing where it "
                         "sets none, then the setting has no effect",
                         {Integer("min_mm", "Lowest height"), Integer("max_mm", "Highest height"),
                          Integer("default_mm", "Height of the platform for 0")},
@@ -740,8 +741,8 @@ const std::vector<Command>& Commands() {
             "Saves the outline and its obstacles as an area, closing an open ring first; AREA_RECORDED follows",
             {Text("type", "mow for a mowing area, nav for a navigation area", true, {"mow", "nav"})},
             Answer({TrimmedPoints()}), "RECORDING_REFUSED",
-            {{kRecord + "finish_mowing_area", {{"type", "mow"}}},
-             {kRecord + "finish_navigation_area", {{"type", "nav"}}}}),
+            {{kRecord + "finish_mowing_area", {{"type", "mow"}}, "mow"},
+             {kRecord + "finish_navigation_area", {{"type", "nav"}}, "nav"}}),
       Logic("recording.discard", "Drops what was recorded and not saved", {}, Answer(), "RECORDING_REFUSED",
             {{kRecord + "finish_discard"}}),
       Logic("recording.dock",
@@ -751,8 +752,8 @@ const std::vector<Command>& Commands() {
       Logic("recording.auto_points", "Switches the automatic points of the ring on or off",
             {Bool("enabled", "True: a point every few centimetres by itself; false: only recording.point")}, Answer(),
             "RECORDING_REFUSED",
-            {{kRecord + "auto_point_collecting_enable", {{"enabled", true}}},
-             {kRecord + "auto_point_collecting_disable", {{"enabled", false}}}}),
+            {{kRecord + "auto_point_collecting_enable", {{"enabled", true}}, "on"},
+             {kRecord + "auto_point_collecting_disable", {{"enabled", false}}, "off"}}),
       Logic("recording.point", "Takes the next position as a point of the ring", {}, Answer(), "RECORDING_REFUSED",
             {{kRecord + "collect_point"}}),
       Logic("recording.undo",
@@ -875,7 +876,8 @@ const std::vector<Method>& Methods() {
        "Changes settings of x-settings in IDLE, mow_height_mm alone at any time; all or nothing, a value outside its "
        "range is set to the bound",
        Object("params", "The settings by full name",
-              {Object("params", "\"/mower_logic/<name>\": number, for names of x-settings")}),
+              {Object("params", "\"/logic/<name>\": number, for names of x-settings; \"/mower_logic/<name>\" names the "
+                               "same setting")}),
        Object("result", "The values taken by full name, those outside the range at the bound"), ""},
       {"robot.geometry.get", "mowbite_logic", "The dimensions of the mower, keys of x-geometry", NoParams(),
        GeometryAnswer(), ""},
@@ -1363,7 +1365,7 @@ const std::vector<Method>& Methods() {
        Text("result", "Successfully stored map (n areas)"), ""},
       {"map.area_properties", "mowbite_map",
        "The properties an area of the map may have. mow_height_mm: the cutting height of a mowing area in mm instead of "
-       "/mower_logic/mow_height_mm while the blade cuts in it, a change at once; map.replace takes it as params.set takes "
+       "/logic/mow_height_mm while the blade cuts in it, a change at once; map.replace takes it as params.set takes "
        "that setting, rounded and within its range; no effect where system.info.blade_height is null",
        NoParams(),
        List("result", "Property names", Type::kString), ""},
@@ -1774,15 +1776,42 @@ const Command* FindCommand(const std::string& name) {
   return nullptr;
 }
 
-const Command* CommandOfAction(const std::string& action, Json* params) {
+std::string ActionId(const Command& command, const CommandAction& action) {
+  return action.variant.empty() ? command.name : command.name + ":" + action.variant;
+}
+
+namespace {
+
+// The command of an own action id and its action; both null for an id without one.
+std::pair<const Command*, const CommandAction*> FindAction(const std::string& id) {
+  const Command* command = FindCommand(id.substr(0, id.find(':')));
+  if (!command) return {nullptr, nullptr};
+  for (const auto& entry : command->actions) {
+    if (ActionId(*command, entry) == id) return {command, &entry};
+  }
+  return {nullptr, nullptr};
+}
+
+}  // namespace
+
+const Command* CommandOfAction(const std::string& id, Json* params) {
+  const auto [command, action] = FindAction(id);
+  if (action && params) *params = action->params;
+  return command;
+}
+
+std::string OwnActionId(const std::string& openmower_action) {
   for (const auto& command : Commands()) {
     for (const auto& entry : command.actions) {
-      if (entry.action != action) continue;
-      if (params) *params = entry.params;
-      return &command;
+      if (entry.action == openmower_action) return ActionId(command, entry);
     }
   }
-  return nullptr;
+  return "";
+}
+
+std::string OpenMowerActionId(const std::string& id) {
+  const CommandAction* action = FindAction(id).second;
+  return action ? action->action : "";
 }
 
 bool ReasonFits(const ReasonEntry& reason, const std::string& code, const Json& details) {

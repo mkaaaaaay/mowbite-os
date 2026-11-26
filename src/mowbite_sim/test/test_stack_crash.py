@@ -153,7 +153,7 @@ class TestStackCrash(unittest.TestCase):
         p = self.probe
         os.mkdir(SESSION + ".tmp")
         try:
-            since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
+            since, _ = p.started(lambda: p.act("mowing.start"))
             refused = p.event(since, "MOWING_REFUSED", 10)
             self.assertTrue(refused, [e["type"] for e in p.events[since:]])
             self.assertEqual((refused["reason"], refused["file"]), ("STORAGE_NOT_WRITABLE", "os-session.json"), refused)
@@ -166,7 +166,7 @@ class TestStackCrash(unittest.TestCase):
                 self.assertEqual(json.load(f)["state"], "IDLE")
             # Known now: the next start is refused before it begins, and the event does not come again.
             since = len(p.events)
-            p.act("mower_logic:idle/start_mowing")
+            p.act("mowing.start")
             refused = p.event(since, "MOWING_REFUSED", 10)
             self.assertEqual((refused or {}).get("reason"), "STORAGE_NOT_WRITABLE", refused)
             time.sleep(1.0)
@@ -178,7 +178,7 @@ class TestStackCrash(unittest.TestCase):
     def test_02_the_blade_turns_and_the_mower_drives(self):
         p = self.probe
         since = len(p.events)
-        p.act("mower_logic:idle/start_mowing")
+        p.act("mowing.start")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="MOWING"), [e["type"] for e in p.events[since:]])
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")
@@ -194,10 +194,10 @@ class TestStackCrash(unittest.TestCase):
         # Both stay until after the crash: the restart finds neither file writable.
         os.mkdir(SESSION + ".tmp")
         os.mkdir(RESTART_HOLD + ".tmp")
-        p.act("mower_logic:mowing/pause")
+        p.act("mowing.pause")
         storage = p.event(since, "STORAGE", 10)
         self.assertEqual((storage or {}).get("file"), "os-session.json", storage)
-        p.act("mower_logic:mowing/continue")
+        p.act("mowing.continue")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "MOWING", 10), p.robot)
         self.assertTrue(p.wait(lambda: (p.truth() or {}).get("linear", 0.0) > 0.05, 30), "the mower does not drive")
         self.assertFalse([e for e in p.events[since:] if e["type"] == "MOWING_REFUSED"])
@@ -335,7 +335,7 @@ class TestStackCrash(unittest.TestCase):
         self.assertTrue(os.path.exists(RESTART_HOLD))
         # emergency.reset of the logic: the file goes, then S2 and the driver let go.
         since = len(p.events)
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.hw.emergency, 5), p.hw)
         self.assertFalse(os.path.exists(RESTART_HOLD))
         self.assertTrue(p.wait(lambda: not p.robot.emergency and p.robot.emergency_reason == 0, 5), p.robot)

@@ -132,7 +132,7 @@ class TestStopRelease(unittest.TestCase):
         p.call(p.set_pose, request)
         self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
-        p.act("mower_logic:idle/start_mowing")
+        p.act("mowing.start")
         self.assertTrue(p.wait(lambda: p.robot is not None and p.robot.current_state == "MOWING"
                                and p.robot.current_path >= 0, 60), "mowing did not start")
 
@@ -173,7 +173,7 @@ class TestStopRelease(unittest.TestCase):
         self.assertTrue(still, poses)
         self.assertEqual(p.robot.current_state, "PAUSED")
         since = len(p.events)
-        p.act("mower_logic:mowing/continue")
+        p.act("mowing.continue")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
 
     def test_04_too_long_too_quick_and_an_imu_gap_release_nothing(self):

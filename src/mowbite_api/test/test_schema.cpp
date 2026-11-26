@@ -106,8 +106,10 @@ TEST(Schema, CommandsAndBits) {
   const Json& save = schema["x-commands"]["recording.save"];
   EXPECT_EQ(save["refused"], "RECORDING_REFUSED");
   EXPECT_EQ(save["actions"], Json::parse(R"([
-      {"action": "mower_logic:area_recording/finish_mowing_area", "params": {"type": "mow"}},
-      {"action": "mower_logic:area_recording/finish_navigation_area", "params": {"type": "nav"}}])"));
+      {"action": "mower_logic:area_recording/finish_mowing_area", "id": "recording.save:mow",
+       "params": {"type": "mow"}},
+      {"action": "mower_logic:area_recording/finish_navigation_area", "id": "recording.save:nav",
+       "params": {"type": "nav"}}])"));
   EXPECT_EQ(schema["x-commands"]["docking.start"]["actions"], Json::array());
   EXPECT_EQ(schema["$defs"]["mowing.pause.params"]["properties"]["client"]["pattern"], kClientPattern);
   EXPECT_EQ(schema["$defs"]["mowing.reset_job.result"]["required"], Json({"state", "sub_state", "job_id"}));

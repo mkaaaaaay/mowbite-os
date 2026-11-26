@@ -81,13 +81,73 @@ TEST(Compat, HistoryParamsAndAnswersOfOtherShapesStayAsTheyAre) {
   EXPECT_FALSE(mowbite_bridge::ShowsAnswer("sensors.history", false));
   EXPECT_FALSE(mowbite_bridge::ShowsAnswer("stats.get", true));
   for (const Json& result : {Json(), Json{{"sensors", 1}}, Json{{"sensors", {1, Json{{"sensor_id", 2}}}}}}) {
-    EXPECT_EQ(ShownAnswer(result), result) << result.dump();
+    EXPECT_EQ(ShownAnswer("sensors.history", result), result) << result.dump();
   }
   const Json answer = {{"sensors", {{{"sensor_id", "blade_temp"}, {"key", "blade_temp"}, {"name", "Blade Motor Temp"}}}}};
-  EXPECT_EQ(ShownAnswer(answer)["sensors"][0],
+  EXPECT_EQ(ShownAnswer("sensors.history", answer)["sensors"][0],
             (Json{{"sensor_id", "om_mow_motor_temp"}, {"key", "blade_temp"}, {"name", "Mow Motor Temp"}}));
 }
 
 TEST(Compat, BoardForTheAppOfOpenMower) {
   EXPECT_EQ(mowbite_bridge::BoardParams(), R"({"node":"/ll","params":{"board":"MowBite"}})");
+}
+
+// FP26 B: the actions of the logic under the ids of OpenMower, in its groups and with its two of manual mowing.
+TEST(Compat, ActionsAsOpenMowerListsThem) {
+  using mowbite_bridge::ActionItem;
+  const std::map<std::string, std::vector<ActionItem>> nodes = {
+      {"logic",
+       {{"emergency.reset", "Unlatch emergency", true},
+        {"mowing.start", "Begin mowing", false, "NO_POSITION"},
+        {"mowing.pause", "Pause", true},
+        {"recording.point", "Take a point here", false},
+        {"recording.undo", "Undo points", false},
+        {"no.such", "Nothing", true}}}};
+  EXPECT_EQ(mowbite_bridge::ShownActionsText(nodes, true),
+            R"([{"action_id":"mower_logic/reset_emergency","action_name":"Unlatch emergency","enabled":1},)"
+            R"({"action_id":"mower_logic:area_recording/collect_point","action_name":"Take a point here","enabled":0},)"
+            R"({"action_id":"mower_logic:area_recording/start_manual_mowing","action_name":"Manual blade on",)"
+            R"("enabled":0},)"
+            R"({"action_id":"mower_logic:area_recording/stop_manual_mowing","action_name":"Manual blade off",)"
+            R"("enabled":0},)"
+            R"({"action_id":"mower_logic:area_recording/undo_points","action_name":"Undo points","enabled":0},)"
+            R"({"action_id":"mower_logic:idle/start_mowing","action_name":"Begin mowing","enabled":0,)"
+            R"("reason":"NO_POSITION"},)"
+            R"({"action_id":"mower_logic:mowing/pause","action_name":"Pause","enabled":1}])");
+  const std::string own = mowbite_bridge::ShownActionsText(nodes, false);
+  EXPECT_EQ(own.find("mower_logic"), std::string::npos);
+  EXPECT_NE(own.find(R"({"action_id":"mowing.start","action_name":"Begin mowing","enabled":0,"reason":"NO_POSITION"})"),
+            std::string::npos);
+  EXPECT_NE(own.find(R"("action_id":"no.such")"), std::string::npos);
+}
+
+TEST(Compat, ActionsAClientSends) {
+  using mowbite_bridge::OwnAction;
+  for (const bool openmower : {true, false}) {
+    EXPECT_EQ(OwnAction("mower_logic:idle/start_mowing", openmower), "mowing.start");
+    EXPECT_EQ(OwnAction("recording.auto_points:off", openmower), "recording.auto_points:off");
+    EXPECT_EQ(OwnAction("mower_logic/unknown", openmower), std::nullopt);
+    EXPECT_EQ(OwnAction("mower_logic:mowing/unknown", openmower), std::nullopt);
+    EXPECT_EQ(OwnAction("", openmower), std::nullopt);
+  }
+  // A press without a command cancels an announced start as before, only for the app of OpenMower.
+  EXPECT_EQ(OwnAction("mower_logic:idle/start_manual_mowing", true), "mower_logic:idle/start_manual_mowing");
+  EXPECT_EQ(OwnAction("mower_logic:idle/start_manual_mowing", false), std::nullopt);
+}
+
+TEST(Compat, SettingsUnderTheNodeOfOpenMower) {
+  const std::string logic = R"({"node":"/logic","params":{"a":1}})";
+  EXPECT_EQ(mowbite_bridge::ShownParams(logic, true), R"({"node":"/mower_logic","params":{"a":1}})");
+  EXPECT_EQ(mowbite_bridge::ShownParams(logic, false), logic);
+  for (const char* other : {R"({"node":"/n","params":{"a":1}})", "broken", "[]"}) {
+    EXPECT_EQ(mowbite_bridge::ShownParams(other, true), other);
+  }
+  const Json sent = {{"params", {{"/mower_logic/a", 1}, {"/logic/b", 2}, {"/mower_logicx/c", 3}, {"/n/d", 4}}}};
+  EXPECT_EQ(OwnParams("params.set", sent),
+            (Json{{"params", {{"/logic/a", 1}, {"/logic/b", 2}, {"/mower_logicx/c", 3}, {"/n/d", 4}}}}));
+  EXPECT_EQ(OwnParams("params.set", Json{{"params", 1}}), (Json{{"params", 1}}));
+  EXPECT_TRUE(mowbite_bridge::ShowsAnswer("params.set", true));
+  EXPECT_FALSE(mowbite_bridge::ShowsAnswer("params.set", false));
+  EXPECT_EQ(ShownAnswer("params.set", Json{{"/logic/a", 1}}), (Json{{"/mower_logic/a", 1}}));
+  EXPECT_EQ(ShownAnswer("params.set", Json(3)), Json(3));
 }

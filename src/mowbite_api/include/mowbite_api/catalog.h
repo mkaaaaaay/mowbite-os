@@ -13,7 +13,7 @@ namespace mowbite_api {
 using Json = nlohmann::ordered_json;
 
 // The version of the app interface: one up for every change of the catalog, and only by adding (test_schema.cpp).
-constexpr int kApi = 69;
+constexpr int kApi = 70;
 
 // The break of the app interface: one up for a change that is not only adding (what counts: x-api-break in the
 // schema); an app goes with the OS of the same break whose api is at least the one it needs.
@@ -112,13 +112,16 @@ struct EmergencyBit {
 
 // An action of actions/json that does what a command does with these params.
 struct CommandAction {
-  CommandAction(std::string action_in, Json params_in = Json::object())
-      : action(std::move(action_in)), params(std::move(params_in)) {}
+  CommandAction(std::string action_in, Json params_in = Json::object(), std::string variant_in = "")
+      : action(std::move(action_in)), params(std::move(params_in)), variant(std::move(variant_in)) {}
+  // The action id of OpenMower.
   std::string action;
   Json params;
+  // Tells the actions of one command apart in their own ids, empty where it has one.
+  std::string variant;
 };
 
-// An RPC method of the interface; actions are the action ids it stands for, none for a method without one.
+// An RPC method of the interface; actions are the actions it stands for, none for a method without one.
 struct Command {
   std::string name;
   std::string text;
@@ -162,7 +165,7 @@ struct SensorEntry {
   std::string openmower_name = "";
 };
 
-// A setting of /mower_logic for params.set; a value outside the range is set to the bound.
+// A setting of the logic for params.set; a value outside the range is set to the bound.
 struct SettingEntry {
   std::string name;
   bool integer = false;
@@ -223,7 +226,7 @@ const std::vector<SensorEntry>& Sensors();
 const SensorEntry* FindSensor(const std::string& id);
 // By its id with openmower_names; null for an own id.
 const SensorEntry* FindOpenMowerSensor(const std::string& openmower_id);
-// The settings of /mower_logic in the order of the app's groups.
+// The settings of the logic in the order of the app's groups.
 const std::vector<SettingEntry>& LogicSettings();
 // A value of the setting of that name as params.set takes it: rounded for a whole number, then within min..max;
 // none for an unknown name.
@@ -305,8 +308,17 @@ const EventEntry* FindEvent(const std::string& type);
 const EventEntry* FindReasonGroup(const std::string& type);
 const Command* FindCommand(const std::string& name);
 const Method* FindMethod(const std::string& name);
-// The command an action stands for, with the params it means; nullptr for an action without one.
-const Command* CommandOfAction(const std::string& action, Json* params);
+// The node of the settings in params/json and params.set, and the one the app of OpenMower knows them under.
+constexpr char kSettingsNode[] = "/logic";
+constexpr char kOpenMowerSettingsNode[] = "/mower_logic";
+
+// The own id of an action: the name of its command, "<name>:<variant>" where the command has several.
+std::string ActionId(const Command& command, const CommandAction& action);
+// The command an own action id stands for, with the params it means; nullptr for an id without one.
+const Command* CommandOfAction(const std::string& id, Json* params);
+// The own id of an action id of OpenMower and back; empty for an id without a command.
+std::string OwnActionId(const std::string& openmower_action);
+std::string OpenMowerActionId(const std::string& id);
 
 // The text of the client field the command RPCs take: [a-z][a-z0-9_-]{0,15}.
 constexpr char kClientPattern[] = "^[a-z][a-z0-9_-]{0,15}$";

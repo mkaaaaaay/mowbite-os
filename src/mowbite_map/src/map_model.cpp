@@ -34,7 +34,7 @@ double ToNumber(const json& value, const std::string& what) {
   return value.get<double>();
 }
 
-// As params.set takes /mower_logic/mow_height_mm: a number, rounded and within the range of the setting.
+// As params.set takes /logic/mow_height_mm: a number, rounded and within the range of the setting.
 int ToHeight(const json& value, const std::string& what) {
   const auto height = mowbite_api::FitSetting("mow_height_mm", ToNumber(value, what));
   if (!height) throw MapError(what + ": no such setting");

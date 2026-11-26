@@ -180,7 +180,7 @@ class StatsNode : public rclcpp::Node {
         "bridge/params", rclcpp::QoS(rclcpp::KeepLast(50)).reliable().transient_local(),
         [this](const std_msgs::msg::String& msg) {
           const json value = json::parse(msg.data, nullptr, false);
-          if (!value.is_object() || value.value("node", "") != "/mower_logic") return;
+          if (!value.is_object() || value.value("node", "") != mowbite_api::kSettingsNode) return;
           const auto params = value.find("params");
           if (params == value.end() || !params->is_object()) return;
           const auto enabled = params->find("journal_enabled");

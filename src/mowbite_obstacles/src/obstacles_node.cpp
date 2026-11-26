@@ -213,7 +213,7 @@ class ObstaclesNode : public rclcpp::Node {
       if (it == params.end() || !it->is_number()) return std::nullopt;
       return it->get<double>();
     };
-    if (node == "/mower_logic") {
+    if (node == mowbite_api::kSettingsNode) {
       if (const auto mode = number("obstacle_mode")) service_->SetMode(static_cast<int>(*mode));
       if (const auto photos = number("obstacle_photos")) service_->SetPhotos(*photos != 0.0);
       FollowImages();

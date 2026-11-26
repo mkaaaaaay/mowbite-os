@@ -11,9 +11,9 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kAbortMowing = "mower_logic:mowing/abort_mowing";
-const std::string kAbortUndocking = "mower_logic:undocking/abort_undocking";
+const std::string kStart = "mowing.start";
+const std::string kAbortMowing = "mowing.abort";
+const std::string kAbortUndocking = "undocking.abort";
 
 // The station of the simulation: backing in going west, the mower faces east on the contacts.
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -215,7 +215,7 @@ TEST(Effects, AnAbortBeforeChargingWentOffDropsItAndAllowsChargingAgain) {
 TEST(Effects, TheCheckpointAndTheReferenceCheckCarryTheirValuesWhenTaken) {
   LogicCore core = Mowing();
   core.OnJobProgress(3);
-  ASSERT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   std::string text;
   for (const auto& effect : core.TakeEffects()) {
     if (const auto* checkpoint = std::get_if<Checkpoint>(&effect)) text = checkpoint->text;
@@ -238,7 +238,7 @@ TEST(Effects, TheCheckpointAndTheReferenceCheckCarryTheirValuesWhenTaken) {
 
 TEST(Effects, ComeInTheOrderTheyCameUp) {
   LogicCore core = Mowing();
-  ASSERT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   ASSERT_EQ(core.OnAction(kAbortMowing), ActionResult::kDone);
   std::vector<std::string> events;
   for (const auto& effect : core.TakeEffects()) {

@@ -373,5 +373,5 @@ class TestCalibration(unittest.TestCase):
         p.flags(bumper=1)
         self.ends_with(since, "EMERGENCY", 5)
         p.flags()
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 10), "the emergency stayed")

@@ -26,7 +26,7 @@ from sim_common import LATCHED, SimProbe, package_program, sim_description, sim_
 WORK = tempfile.mkdtemp(prefix="mowbite_sunset_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "sunset.yaml")
-START = "mower_logic:idle/start_mowing"
+START = "mowing.start"
 LAT = 52.0
 # s from the import of this file to the sunset: the start of the stack, the station and the way onto the patch.
 LEAD = 240.0

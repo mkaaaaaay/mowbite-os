@@ -1,4 +1,4 @@
-// The settings of /mower_logic an app changes with params.set: names, types, ranges and defaults of MowerLogic.cfg
+// The settings of the logic an app changes with params.set: names, types, ranges and defaults of MowerLogic.cfg
 // (OpenMower) as the app knows them, with bounds of MowBite OS on top. The planning values are with the planner.
 #ifndef MOWBITE_LOGIC_LOGIC_PARAMS_H
 #define MOWBITE_LOGIC_LOGIC_PARAMS_H
@@ -9,11 +9,13 @@
 #include <string>
 #include <vector>
 
+#include "mowbite_api/catalog.h"
+
 namespace mowbite_logic {
 
 using json = nlohmann::ordered_json;
 
-constexpr const char* kLogicParamsNode = "/mower_logic";
+constexpr const char* kLogicParamsNode = mowbite_api::kSettingsNode;
 
 enum class ParamType { kInt, kDouble };
 

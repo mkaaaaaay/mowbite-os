@@ -82,7 +82,7 @@ class TestPlannerSkip(unittest.TestCase):
         p.call(p.set_pose, request)
         self.assertTrue(p.wait(lambda: p.pose is not None and p.pose.heading_valid
                                and p.pose.position_accuracy < 0.1, 30), "no good pose with a heading")
-        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
+        since, _ = p.started(lambda: p.act("mowing.start"))
         skipped = p.event(since, "AREA_SKIPPED", 60, area_id="strip")
         self.assertIsNotNone(skipped, [e["type"] for e in p.events[since:]])
         self.assertIn(skipped["reason"], SKIP_CODES)

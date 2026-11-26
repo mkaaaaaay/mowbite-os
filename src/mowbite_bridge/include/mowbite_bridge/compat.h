@@ -2,7 +2,11 @@
 #define MOWBITE_BRIDGE_COMPAT_H
 
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "mowbite_bridge/app_json.h"
 
@@ -23,15 +27,30 @@ Json ShownSensorValue(const std::string& own_id, Json value, bool openmower);
 // The own id of an id a client sends; an id of OpenMower or an unknown one as it is.
 std::string OwnSensorId(const std::string& id);
 
-// The params of a call as its node takes them: the sensor_ids of sensors.history as own ids; other calls and params of
-// another shape as they are, the node answers those.
+// The params of a call as its node takes them: the sensor_ids of sensors.history as own ids, the names of params.set
+// under /logic; other calls and params of another shape as they are, the node answers those.
 Json OwnParams(const std::string& method, Json params);
 
-// Whether the answer of a call goes out in other words than its node's: sensors.history with openmower_names.
+// Whether the answer of a call goes out in other words than its node's: sensors.history and params.set with
+// openmower_names.
 bool ShowsAnswer(const std::string& method, bool openmower);
 
 // Such an answer with the ids and names shown; an answer of another shape as it is.
-Json ShownAnswer(Json result);
+Json ShownAnswer(const std::string& method, Json result);
+
+// actions/json from the actions of each node, each with its own id. With openmower_names every action goes under
+// the id of OpenMower, sorted by its group there, and the two of manual mowing OpenMower lists are in, always off;
+// an action without an id of OpenMower is left out.
+std::string ShownActionsText(const std::map<std::string, std::vector<ActionItem>>& nodes, bool openmower);
+
+// The own id of what a client sent on action; nothing for what no node takes. An id of OpenMower becomes the own
+// one in both modes. With openmower_names an action of its groups idle, area_recording, undocking and docking
+// without a command goes on as it is: the logic counts it as a press that is refused.
+std::optional<std::string> OwnAction(const std::string& sent, bool openmower);
+
+// A bridge/params message as params/json shows it: with openmower_names the settings of the logic under
+// /mower_logic.
+std::string ShownParams(std::string_view message, bool openmower);
 
 struct ReasonLine {
   bool warn = false;

@@ -147,7 +147,7 @@ class TestDriverCrash(unittest.TestCase):
 
     def test_2_the_blade_turns_and_the_mower_drives(self):
         p = self.probe
-        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
+        since, _ = p.started(lambda: p.act("mowing.start"))
         self.assertIsNotNone(p.event(since, "STATE", 10, state="MOWING"), [e["type"] for e in p.events[since:]])
         self.assertIsNotNone(p.event(since, "BLADES", 90, enabled=True), "the blade never ran")
         self.assertTrue(p.wait(lambda: p.hw is not None and p.hw.blade_motor.rpm > 1000, 5), "no rpm from fake_tron")
@@ -206,7 +206,7 @@ class TestDriverCrash(unittest.TestCase):
         still, poses = p.standing()
         self.assertTrue(still and poses[1]["linear"] == 0.0, poses)
         since = len(p.events)
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.robot.emergency and not p.hw.emergency, 10),
                         (p.robot, p.hw, [(e["type"], e.get("reason")) for e in p.events[since:]]))
         # The release alone starts neither the wheels nor the blade: the job waits paused until the user continues.
@@ -254,7 +254,7 @@ class TestDriverCrash(unittest.TestCase):
         self.assertTrue(p.wait(lambda: not p.emergency.service_is_ready(), 30))
         for _ in range(2):
             since = len(p.events)
-            p.act("mower_logic/reset_emergency")
+            p.act("emergency.reset")
             refused = p.event(since, "EMERGENCY_RESET_REFUSED", 10)
             self.assertTrue(refused, [(e["type"], e.get("reason")) for e in p.events[since:]])
             if refused["reason"] != "NO_ANSWER":

@@ -28,9 +28,8 @@ from sim_common import LATCHED, SimProbe, host_packets, last_time, sim_descripti
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "dock.yaml")
-REC = "mower_logic:area_recording/"
-START = "mower_logic:idle/start_mowing"
-ABORT = "mower_logic:undocking/abort_undocking"
+START = "mowing.start"
+ABORT = "undocking.abort"
 
 # A lawn in front of the station that the way out reaches; the station itself is not in the map until the test records
 # it.
@@ -149,18 +148,18 @@ class TestDockReference(unittest.TestCase):
 
     def test_02_record_the_station_backing_onto_the_contacts(self):
         p = self.probe
-        p.act("mower_logic:idle/start_area_recording")
+        p.act("recording.start")
         self.assertTrue(p.wait(lambda: p.robot and p.robot.current_state == "AREA_RECORDING", 10))
         # Forwards until the GPS course aligns the heading, which both points need, then back.
         p.teleop(0.2, 4.0, until=lambda: p.pose is not None and p.pose.heading_valid)
         self.assertTrue(p.wait(lambda: p.pose.heading_valid, 10), "the heading did not align")
         p.teleop(-0.2, 2.5)
         since = len(p.events)
-        p.act(REC + "record_dock")
+        p.act("recording.dock")
         self.assertTrue(p.wait(lambda: p.robot.current_sub_state == "RECORD_DOCKING_POSITION", 5),
                         p.events[since:])
         # Not on the contacts yet.
-        p.act(REC + "record_dock")
+        p.act("recording.dock")
         refused = p.event(since, "RECORDING_REFUSED", 5, reason="NO_DOCK_CONTACT")
         self.assertIsNotNone(refused, p.events[since:])
         self.assertEqual((refused["severity"], refused["resume"]), ("warning", "user"))
@@ -173,14 +172,14 @@ class TestDockReference(unittest.TestCase):
         self.assertTrue(truth["dock_ok"])
         # The raw contact came first, the debounced one after three battery reports at 1 Hz.
         self.assertGreater(p.contact_since - p.raw_since, 1.5)
-        p.act(REC + "record_dock")
+        p.act("recording.dock")
         recorded = p.event(since, "DOCK_RECORDED", 10)
         self.assertIsNotNone(recorded, p.events[since:])
         dock = p.wait(lambda: p.map and p.map["docking_stations"] and p.map["docking_stations"][0], 10)
         self.assertAlmostEqual(dock["position"]["x"], -1.0, delta=0.05)
         self.assertAlmostEqual(dock["position"]["y"], 0.0, delta=0.05)
         self.assertLess(abs(math.remainder(dock["heading"] - math.pi, 2 * math.pi)), math.radians(6))
-        p.act(REC + "exit_recording_mode")
+        p.act("recording.exit")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE", 10))
         # The driver switches charging on, the station gives current only then.
         self.assertTrue(p.wait(lambda: p.hw.battery_current < 0, 5), p.hw.battery_current)

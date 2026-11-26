@@ -77,7 +77,7 @@ TEST(BridgeCoreConnection, NothingIsSentWithoutConnectionAndTheRestGoesOn) {
   core.OnRobotState(state);
   core.OnSensorValue("v", 1.0, 1.0);
   core.OnPublish("events/json", R"({"type":"X"})", false);
-  core.OnMqtt("action", "a/b", false);
+  core.OnMqtt("action", "mowing.pause", false);
   const Outbox out = core.Take();
   EXPECT_TRUE(out.mqtt.empty());
   EXPECT_EQ(out.actions.size(), 1u);
@@ -205,13 +205,19 @@ TEST_F(Core, CommandsTheBrokerKeptAreDropped) {
 
 // B5, B6
 TEST_F(Core, ActionTextAndTeleopGoToTheNodes) {
+  // An id of OpenMower goes on as the own one, an own one as it is, a press without a command in a group of
+  // OpenMower as sent; what no node takes is dropped.
+  core_.OnMqtt("action", "mower_logic:mowing/pause", false);
+  core_.OnMqtt("action", "recording.save:nav", false);
+  core_.OnMqtt("action", "mower_logic:idle/bad \xe4", false);
   core_.OnMqtt("action", "mower_logic/o19b_probe_unknown", false);
-  core_.OnMqtt("action", "bad \xe4", false);
+  core_.OnMqtt("action", "recording.save", false);
   const auto bson = Json::to_bson(Json{{"vx", 0.12}, {"vz", -0.05}});
   core_.OnMqtt("teleop", std::string(bson.begin(), bson.end()), false);
   core_.OnMqtt("teleop", "garbage", false);
   const Outbox out = core_.Take();
-  EXPECT_EQ(out.actions, (std::vector<std::string>{"mower_logic/o19b_probe_unknown", "bad \xef\xbf\xbd"}));
+  EXPECT_EQ(out.actions, (std::vector<std::string>{"mowing.pause", "recording.save:nav",
+                                                   "mower_logic:idle/bad \xef\xbf\xbd"}));
   ASSERT_EQ(out.teleop.size(), 1u);
   EXPECT_DOUBLE_EQ(out.teleop[0].vx, 0.12);
   EXPECT_DOUBLE_EQ(out.teleop[0].vz, -0.05);
@@ -219,10 +225,10 @@ TEST_F(Core, ActionTextAndTeleopGoToTheNodes) {
 }
 
 TEST_F(Core, ActionWithANulByteIsDropped) {
-  core_.OnMqtt("action", std::string("mower_logic/a\0b", 15), false);
-  core_.OnMqtt("action", "mower_logic/a", false);
+  core_.OnMqtt("action", std::string("mowing.pause\0b", 14), false);
+  core_.OnMqtt("action", "mowing.pause", false);
   const Outbox out = core_.Take();
-  EXPECT_EQ(out.actions, (std::vector<std::string>{"mower_logic/a"}));
+  EXPECT_EQ(out.actions, (std::vector<std::string>{"mowing.pause"}));
   ASSERT_EQ(out.logs.size(), 1u);
   EXPECT_EQ(out.logs[0].level, kLogWarn);
   EXPECT_EQ(out.logs[0].text, "Bridge: 1 action(s) with a NUL byte dropped");
@@ -826,6 +832,16 @@ TEST(BridgeCoreNames, OwnNamesOnly) {
   EXPECT_EQ(infos[0]["sensor_name"], "Charge State (derived)");
   EXPECT_EQ(out.mqtt[1].payload, "charging");
 
+  core.OnActions("logic", {{"mowing.start", "Begin mowing", true}});
+  core.OnParams(R"({"node":"/logic","params":{"a":1}})");
+  core.OnMqtt("action", "mowing.start", false);
+  core.OnMqtt("action", "mower_logic:idle/start_manual_mowing", false);
+  out = core.Take();
+  EXPECT_EQ(Find(out, "actions/json")->payload,
+            R"([{"action_id":"mowing.start","action_name":"Begin mowing","enabled":1}])");
+  EXPECT_EQ(Find(out, "params/json")->payload, R"({"/logic/a":1})");
+  EXPECT_EQ(out.actions, (std::vector<std::string>{"mowing.start"}));
+
   core.OnReasonChange(0, 9);
   core.OnReasonChange(9, 0);
   out = core.Take();
@@ -879,16 +895,24 @@ TEST_F(Core, SensorsHistoryUnderTheIdsShown) {
 }
 
 // B14
-TEST_F(Core, ActionsOfAPrefixReplaceItsOldOnes) {
-  core_.OnActions("mower_logic", {{"reset_emergency", "Unlatch emergency", true}});
-  core_.OnActions("mower_logic:mowing", {{"pause", "Pause", false}});
-  core_.OnActions("mower_logic", {{"reset_emergency", "Unlatch emergency", false}});
+TEST_F(Core, ActionsOfANodeReplaceItsOldOnes) {
+  core_.OnActions("a", {{"emergency.reset", "Unlatch emergency", true}});
+  core_.OnActions("b", {{"mowing.pause", "Pause", false}});
+  core_.OnActions("a", {{"emergency.reset", "Unlatch emergency", false}});
   const Outbox out = core_.Take();
   ASSERT_EQ(out.mqtt.size(), 3u);
   EXPECT_TRUE(out.mqtt[2].retain);
   EXPECT_EQ(out.mqtt[2].payload,
             R"([{"action_id":"mower_logic/reset_emergency","action_name":"Unlatch emergency","enabled":0},)"
             R"({"action_id":"mower_logic:mowing/pause","action_name":"Pause","enabled":0}])");
+}
+
+// FP26 B: the settings of the logic go out under the node of OpenMower.
+TEST_F(Core, SettingsOfTheLogicUnderTheNodeOfOpenMower) {
+  core_.OnParams(R"({"node":"/logic","params":{"a":1}})");
+  const Outbox out = core_.Take();
+  ASSERT_EQ(out.mqtt.size(), 1u);
+  EXPECT_EQ(Json::parse(out.mqtt[0].payload).value("/mower_logic/a", 0), 1);
 }
 
 // B15
@@ -1130,16 +1154,16 @@ TEST(BridgeCoreConnection, MethodsChangedWaitsForTheBroker) {
 }
 
 TEST_F(Timed, TheActionsOfAProviderThatIsGoneGoWithIt) {
-  core_.OnActions("mower_logic:mowing", {{"mower_logic:mowing/start", "Start", true, ""}}, "aa");
-  core_.OnActions("mower_logic:record", {{"mower_logic:record/start", "Record", true, ""}}, "bb");
+  core_.OnActions("a", {{"mowing.pause", "Pause", true, ""}}, "aa");
+  core_.OnActions("b", {{"recording.point", "Point", true, ""}}, "bb");
   core_.Take();
   core_.OnProviders({"bb"});
   core_.OnProviders({"bb"});
   const Outbox out = core_.Take();
   const MqttMessage* actions = Find(out, "actions/json");
   ASSERT_TRUE(actions);
-  EXPECT_EQ(actions->payload.find("mowing/start"), std::string::npos);
-  EXPECT_NE(actions->payload.find("record/start"), std::string::npos);
+  EXPECT_EQ(actions->payload.find("mowing/pause"), std::string::npos);
+  EXPECT_NE(actions->payload.find("area_recording/collect_point"), std::string::npos);
 }
 
 // M5: a provider the graph lacks twice in a row is gone with its methods, its open calls and its sensors.

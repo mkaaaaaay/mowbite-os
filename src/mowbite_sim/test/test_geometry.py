@@ -237,17 +237,17 @@ class TestGeometry(unittest.TestCase):
 
     def test_7_only_in_idle(self):
         self.probe.datum_pub.publish(NavSatFix(latitude=DATUM[0], longitude=DATUM[1], altitude=DATUM[2]))
-        start = "mower_logic:idle/start_area_recording"
+        start = "recording.start"
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)), "start_area_recording stays off")
         self.probe.act(start)
-        self.assertTrue(self.probe.wait(lambda: self.probe.actions.get("mower_logic:area_recording/start_recording")))
+        self.assertTrue(self.probe.wait(lambda: self.probe.actions.get("recording.ring_start")))
         before = saved()
         answer = self.set("recording", 10, {"blade_offset": 0.01})
         self.assertEqual(answer[:2], (RpcError.ERROR_INVALID_REQUEST,
                                       "The dimensions change only in IDLE, not while recording, driving or mowing"))
         self.assertEqual(answer[2], {"reason": "BUSY"})
         self.assertEqual(saved(), before)
-        self.probe.act("mower_logic:area_recording/exit_recording_mode")
+        self.probe.act("recording.exit")
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)))
         answer = self.set("idle", 10, {"blade_offset": 0.01})
         self.assertEqual(answer["version"], 11)

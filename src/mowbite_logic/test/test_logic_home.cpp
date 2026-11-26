@@ -13,8 +13,7 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kMowing = "mower_logic:mowing/";
+const std::string kStart = "mowing.start";
 
 // The station of the simulation and a lawn that reaches to 0.5 m in front of it, as in test_logic_docking.cpp.
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -244,7 +243,7 @@ TEST(GoingHome, NeverFromAPauseThatWaitsForTheUser) {
     TestCore core = Mowing();
     core.SetHomeSettings(1, 20, 60, 40);
     if (std::string(how) == "manual") {
-      ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+      ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
     } else {
       HardwareSnapshot stop = Healthy();
       stop.emergency = true;
@@ -351,7 +350,7 @@ TEST(GoingHome, DockingStartAndAbortCarryManualAndJobCompleteNone) {
 
   // abort_mowing without a station: IDLE, no DOCKING.
   TestCore lost = Mowing(Tron(), false);
-  ASSERT_EQ(lost.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_EQ(lost.OnAction("mowing.abort"), ActionResult::kDone);
   EXPECT_TRUE(lost.Idle());
   EXPECT_FALSE(Find(lost.TakeEvents(), "DOCKING"));
 }
@@ -480,7 +479,7 @@ TEST(SilentPlanner, AnAnswerBeginsTheCountAnew) {
   const auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
   EXPECT_EQ(events[0].details["reason"], "APPROACH_FAILED");
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
   StaySilent(core);
   core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
@@ -490,11 +489,11 @@ TEST(SilentPlanner, AnAnswerBeginsTheCountAnew) {
 TEST(SilentPlanner, AnApproachTheLogicStoppedKeepsTheCount) {
   TestCore core = Approaching();
   StaySilent(core);
-  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   const auto cancel = core.TakeDriveCancel();
   ASSERT_TRUE(cancel);
   core.OnLegEnded(LegEnd::kCanceled, 0, *cancel);
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
   core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
   EXPECT_TRUE(core.Docking());
@@ -504,14 +503,14 @@ TEST(SilentPlanner, NeverHomeFromAPauseThatWaitsForTheUser) {
   TestCore core = Approaching();
   StaySilent(core);
   // The user pauses while the fourth question is out, and its end without an answer comes after that.
-  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   core.TakeEvents();
   core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_TRUE(core.TakeEvents().empty());
   EXPECT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kNone);
   // With continue the job asks once more.
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
   core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
   EXPECT_TRUE(core.Docking());
@@ -530,7 +529,7 @@ TEST(SilentPlanner, WithoutAWayHomeMowingPausesAsForAFailedApproach) {
   EXPECT_EQ(events[0].details["resume"], "user");
   EXPECT_EQ(events[0].details["message"], "No answer from the planner in 10 s");
   // The job goes on with continue; a planner that stays silent pauses it again at the next question.
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kApproach);
   core.OnLegEnded(LegEnd::kCanceled, 0, kNoAnswer);
   EXPECT_EQ(core.RobotState().state, "PAUSED");
@@ -598,7 +597,7 @@ TEST(SilentPlanner, ARefusedPlanPausesAsBefore) {
   ASSERT_EQ(Types(events), (std::vector<std::string>{"STATE"}));
   EXPECT_EQ(events[0].details["reason"], "PLANNING_FAILED");
   EXPECT_EQ(events[0].details["message"], "Planning failed: no lanes fit");
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   ASSERT_EQ(core.NextJobStep(0).kind, JobStep::Kind::kPlan);
   core.OnJobPlanFailed(kNotRunning);
   EXPECT_EQ(core.RobotState().state, "MOWING");
@@ -687,11 +686,11 @@ TEST(Sunset, APauseByHandOverTheSunsetThenContinueMowsOn) {
   TestCore core = ReadyForTheSun(Before(100));
   Start(core);
   Hold(core, Healthy(), 0, 50);
-  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   Hold(core, Healthy(), 51, 200);
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   core.TakeEvents();
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   Hold(core, Healthy(), 201, 400);
   EXPECT_EQ(core.RobotState().state, "MOWING");
   EXPECT_FALSE(Find(core.TakeEvents(), "DOCKING"));
@@ -847,7 +846,7 @@ TEST(Sunset, ContinueInTheRainWithoutAWayHomeIsRefusedUntilItStops) {
   ASSERT_EQ(Types(events), (std::vector<std::string>{"MOWING_REFUSED"}));
   EXPECT_EQ(events[0].details["reason"], "RAIN");
   Hold(core, Healthy(), 26, 27);
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   EXPECT_EQ(core.RobotState().state, "MOWING");
 }
 
@@ -857,7 +856,7 @@ TEST(Sunset, ContinueAfterTheDarkPauseMowsOn) {
   Hold(core, Healthy(), 0, 40);
   EXPECT_EQ(core.RobotState().state, "PAUSED");
   EXPECT_EQ(Find(core.TakeEvents(), "STATE")->details["reason"], "DARK");
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   Hold(core, Healthy(), 41, 600);
   EXPECT_EQ(core.RobotState().state, "MOWING");
   const auto events = core.TakeEvents();
@@ -888,12 +887,12 @@ TEST(Sunset, APauseForGpsWithRainAndNoWayHomeTurnsIntoTheRainPauseAsItEnds) {
 TEST(Sunset, ContinueFromAManualPauseInTheRainGoesHomeInTheSameCall) {
   TestCore core = Mowing();
   core.SetHomeSettings(1, 20, 70, 40);
-  ASSERT_EQ(core.OnAction(kMowing + "pause"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   HardwareSnapshot wet = Healthy();
   wet.rain = true;
   Hold(core, wet, 0, 30);
   core.TakeEvents();
-  ASSERT_EQ(core.OnAction(kMowing + "continue"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   EXPECT_TRUE(core.Docking());
   EXPECT_EQ(Find(core.TakeEvents(), "DOCKING")->details["reason"], "RAIN");
 }
@@ -903,7 +902,7 @@ TEST(GoingHome, ANewRunWatchesTheBatteryAnew) {
   TestCore core = Mowing(Tron(), false);
   Hold(core, Volts(19.5f), 0, 1);
   core.OnHardwareStatus(Healthy());
-  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.abort"), ActionResult::kDone);
   ASSERT_TRUE(core.Idle());
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   core.TakeEvents();
@@ -935,7 +934,7 @@ TEST(Sunset, ANewRunAfterTheSunsetMowsOnUntilTheNextEvening) {
   TestCore core = ReadyForTheSun(Before(100), false);
   Start(core);
   Hold(core, Healthy(), 0, 50);
-  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.abort"), ActionResult::kDone);
   ASSERT_TRUE(core.Idle());
   Start(core);
   Hold(core, Healthy(), 200, 300);
@@ -950,7 +949,7 @@ TEST(Sunset, EachRunTellsTheUnsafeClockOnce) {
   Start(core);
   Hold(core, Healthy(), 0, 10);
   EXPECT_EQ(Lines(core.TakeNotices(), "No going home at sunset yet"), 1);
-  ASSERT_EQ(core.OnAction(kMowing + "abort_mowing"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("mowing.abort"), ActionResult::kDone);
   ASSERT_TRUE(core.Idle());
   Start(core);
   Hold(core, Healthy(), 11, 20);

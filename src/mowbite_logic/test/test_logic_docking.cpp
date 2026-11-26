@@ -10,9 +10,9 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kAbortMowing = "mower_logic:mowing/abort_mowing";
-const std::string kAbort = "mower_logic:docking/abort_docking";
+const std::string kStart = "mowing.start";
+const std::string kAbortMowing = "mowing.abort";
+const std::string kAbort = "docking.abort";
 
 // The station of the simulation: backing in going west, the mower faces east on the contacts. The line onto it begins
 // 0.8 m east of it at (-0.2, 0), the gate is at (-0.75, 0).
@@ -87,14 +87,11 @@ TestCore Ready(LogicConfig config = Tron(), const Ring& lawn = kLawn) {
   return core;
 }
 
-bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
-  for (const auto& group : core.Actions()) {
-    if (group.prefix != prefix) continue;
-    for (const auto& action : group.actions) {
-      if (action.id == id) return action.enabled;
-    }
+bool Enabled(const TestCore& core, const std::string& id) {
+  for (const auto& action : core.Actions()) {
+    if (action.id == id) return action.enabled;
   }
-  ADD_FAILURE() << "missing action " << prefix << "/" << id;
+  ADD_FAILURE() << "missing action " << id;
   return false;
 }
 
@@ -378,7 +375,7 @@ TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
   auto events = core.TakeEvents();
   ASSERT_EQ(Types(events), (std::vector<std::string>{"JOB_COMPLETE", "STATE"}));
   EXPECT_EQ(events[1].details["state"], "DOCKING");
-  EXPECT_TRUE(Enabled(core, "mower_logic:docking", "abort_docking"));
+  EXPECT_TRUE(Enabled(core, "docking.abort"));
   EXPECT_EQ(core.StartProblem().code, "BUSY");
   EXPECT_EQ(core.StartProblem().fields["state"], "DOCKING");
   // Nothing drives before the node took the leg; never the blade.
@@ -421,7 +418,7 @@ TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
   EXPECT_TRUE(core.TakeDriveCancel());
   EXPECT_FALSE(core.FollowerActive());
   EXPECT_FALSE(core.TakeDockingLeg());
-  EXPECT_TRUE(Enabled(core, "mower_logic:docking", "abort_docking"));
+  EXPECT_TRUE(Enabled(core, "docking.abort"));
   // The late end of the follower changes nothing.
   core.OnDockingLegEnded(LegEnd::kCanceled, Reason("STOPPED", "Contact (canceled)"));
   EXPECT_TRUE(core.Docking());
@@ -441,7 +438,7 @@ TEST(Docking, AfterTheJobTheMowerBacksOntoTheStation) {
   EXPECT_FALSE(core.TakeChargeOff());
   EXPECT_FALSE(core.TakeChargeOn());
   EXPECT_FALSE(core.FollowerActive());
-  EXPECT_FALSE(Enabled(core, "mower_logic:docking", "abort_docking"));
+  EXPECT_FALSE(Enabled(core, "docking.abort"));
   EXPECT_TRUE(core.RobotState().is_charging);
   core.OnHardwareStatus(Charging(120.0));
   EXPECT_TRUE(core.TakeEvents().empty());
@@ -1558,7 +1555,7 @@ TEST(ChargingLost, LostTelemetryKeepsTheConfirmationAndStartsTheStayAnew) {
 
 TEST(ChargingLost, NothingWhileTheMowerIsBusy) {
   TestCore core = OnTheStation();
-  ASSERT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  ASSERT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
   core.OnHardwareStatus(At(Healthy(), 20.0));
   core.OnHardwareStatus(At(Healthy(), 40.0));
   EXPECT_FALSE(Find(core.TakeEvents(), "CHARGING_LOST"));

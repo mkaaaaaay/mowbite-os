@@ -150,7 +150,7 @@ class TestMowing(unittest.TestCase):
 
     def test_02_start_opens_a_job_on_the_lawn(self):
         p = self.probe
-        since, _ = p.started(lambda: p.act("mower_logic:idle/start_mowing"))
+        since, _ = p.started(lambda: p.act("mowing.start"))
         state = p.event(since, "STATE", 10, state="MOWING")
         self.assertIsNotNone(state, [e["type"] for e in p.events[since:]])
         self.assertEqual(len(state["job_id"]), 32)
@@ -173,11 +173,11 @@ class TestMowing(unittest.TestCase):
         p = self.probe
         frames = len(p.cutter_frames())
         try:
-            self.assertIn("result", p.rpc("params.set", {"params": {"/mower_logic/mow_height_mm": 40}}, 10))
+            self.assertIn("result", p.rpc("params.set", {"params": {"/logic/mow_height_mm": 40}}, 10))
             self.assertTrue(p.wait(lambda: any(f["cutter"] > 0 and f.get("height") == 40
                                                for f in p.cutter_frames()[frames:]), 20), p.cutter_frames()[frames:])
         finally:
-            p.rpc("params.set", {"params": {"/mower_logic/mow_height_mm": 60}}, 10)
+            p.rpc("params.set", {"params": {"/logic/mow_height_mm": 60}}, 10)
 
     def test_04_pause_stops_wheels_and_blade_and_continue_goes_on(self):
         p = self.probe
@@ -207,7 +207,7 @@ class TestMowing(unittest.TestCase):
         self.assertEqual([e["type"] for e in p.events[since:]], [])
         since = len(p.events)
         t0 = time.time() - 10.0
-        p.act("mower_logic:mowing/continue")
+        p.act("mowing.continue")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
         self.assertIsNotNone(p.event(since, "BLADES", 60, enabled=True),
                              "the blade did not come back: " + p.accuracy_report(t0))

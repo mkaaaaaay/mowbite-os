@@ -285,7 +285,7 @@ TEST(MapModel, RefusesBadProperties) {
   EXPECT_NE(Error(map).find("properties must be an object"), std::string::npos);
 }
 
-// As params.set takes /mower_logic/mow_height_mm: rounded and within 0..150, written back as a whole number.
+// As params.set takes /logic/mow_height_mm: rounded and within 0..150, written back as a whole number.
 TEST(MapModel, TheCuttingHeightOfAnAreaAsTheSettingTakesIt) {
   const auto height = [](const json& value) {
     json map = SampleMap();

@@ -31,7 +31,7 @@ WORK = tempfile.mkdtemp(prefix="mowbite_s2_")
 STATE, FLAGS, _, _ = sim_files(WORK)
 TILT = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_TILT
 FENCE = HardwareStatus.REASON_LATCH | HardwareStatus.REASON_FENCE
-RESET = "mower_logic/reset_emergency"
+RESET = "emergency.reset"
 
 # One lawn around the start; the mower starts at (0, 0) facing +x.
 LAWN = [(-2, -2), (8, -2), (8, 5), (-2, 5)]
@@ -167,7 +167,7 @@ class TestSafetyFilter(unittest.TestCase):
     def test_02_tilt_while_recording_latches_until_the_mower_is_level(self):
         p = self.probe
         since, logs = len(p.events), len(p.logs)
-        p.act("mower_logic:idle/start_area_recording")
+        p.act("recording.start")
         self.assertIsNotNone(p.event(since, lambda e: e["type"] == "STATE" and e["state"] == "AREA_RECORDING"))
         teleop = threading.Thread(target=p.send, args=(None, 0.1, 8.0), kwargs={"period": 0.1, "teleop": True},
                                   daemon=True)
@@ -196,7 +196,7 @@ class TestSafetyFilter(unittest.TestCase):
         p.flags(tilt_roll=10.0)
         self.assertTrue(p.reset(), "no release once level")
         self.assertIsNotNone(p.event(since, lambda e: e["type"] == "EMERGENCY" and not e["emergency"], 5))
-        p.act("mower_logic:area_recording/exit_recording_mode")
+        p.act("recording.exit")
         p.flags()
 
     def test_03_tilt_ends_a_drive(self):
@@ -230,14 +230,14 @@ class TestSafetyFilter(unittest.TestCase):
         self.assertLess(p.moved(1.0), 0.01)
         # Standing outside, the release goes through; remote control brings the mower back without a fence.
         self.assertTrue(p.reset())
-        p.act("mower_logic:idle/start_area_recording")
+        p.act("recording.start")
         self.assertIsNotNone(p.event(since, lambda e: e["type"] == "STATE" and e["state"] == "AREA_RECORDING"))
         threading.Thread(target=p.send, args=(None, 0.1, 3.0), kwargs={"period": 0.1, "teleop": True},
                          daemon=True).start()
         time.sleep(1.0)
         self.assertGreater(p.moved(1.0), 0.05, "remote control is fenced")
         time.sleep(1.5)
-        p.act("mower_logic:area_recording/exit_recording_mode")
+        p.act("recording.exit")
         self.assertTrue(p.put(0.0, 0.0))
 
     def test_05_bad_position_refuses_autonomous_commands_without_latch(self):

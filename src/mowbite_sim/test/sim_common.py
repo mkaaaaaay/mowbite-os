@@ -734,7 +734,7 @@ class SimProbe:
     def _actions(self, msg):
         with self.lock:
             for a in msg.actions:
-                self.actions[msg.node_prefix + "/" + a.id] = a.enabled
+                self.actions[a.id] = a.enabled
 
     def _params(self, msg):
         with self.lock:
@@ -776,7 +776,7 @@ class SimProbe:
             time.sleep(0.5)
 
     def act(self, action):
-        """An action of the app on mower_logic/actions (self.action_pub)."""
+        """An action by its own id on bridge/action (self.action_pub)."""
         self.wait(lambda: self.action_pub.get_subscription_count() > 0)
         self.action_pub.publish(String(data=action))
 

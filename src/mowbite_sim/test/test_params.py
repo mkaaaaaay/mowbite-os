@@ -28,7 +28,7 @@ from sim_common import HISTORY, LATCHED, ROSOUT, SimProbe, TestShutdown, layers 
 DATUM = (52.0, 9.0, 50.0)
 WORK = tempfile.mkdtemp(prefix="mowbite_params_")
 SAVED = os.path.join(WORK, "params", "mower_logic.json")
-P = "/mower_logic/"
+P = "/logic/"
 
 
 # The dimensions of the platform, which the logic needs to start.
@@ -137,7 +137,7 @@ class TestParams(unittest.TestCase):
         before = saved()
         cases = {
             "unknown": ({"params": {P + "gps_wait_time": 5, P + "tool_width": 0.2}}, None,
-                        "/mower_logic/tool_width is not a setting of MowBite OS"),
+                        "/logic/tool_width is not a setting of MowBite OS"),
             "other_node": ({"params": {"/xbot_positioning/antenna_offset_x": 0.1}}, None,
                            "/xbot_positioning/antenna_offset_x is not a setting of MowBite OS"),
             "cold": ({"params": {P + "motor_cold_temperature": 80}}, None,
@@ -153,18 +153,18 @@ class TestParams(unittest.TestCase):
 
     def test_4_only_in_idle(self):
         self.probe.datum_pub.publish(NavSatFix(latitude=DATUM[0], longitude=DATUM[1], altitude=DATUM[2]))
-        start = "mower_logic:idle/start_area_recording"
+        start = "recording.start"
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)), "start_area_recording stays off")
         # logic/idle tells the other nodes with settings (the NTRIP access) the same, once per change.
         self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True]), self.probe.idle)
         self.probe.act(start)
-        self.assertTrue(self.probe.wait(lambda: self.probe.actions.get("mower_logic:area_recording/start_recording")))
+        self.assertTrue(self.probe.wait(lambda: self.probe.actions.get("recording.ring_start")))
         self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True, False]), self.probe.idle)
         answer = self.probe.set_params("recording", {"params": {P + "gps_wait_time": 5}})
         self.assertEqual(answer, (RpcError.ERROR_INVALID_REQUEST,
                                   "Settings change only in IDLE, not while recording, driving or mowing"))
         self.assertNotEqual(saved()["gps_wait_time"], 5)
-        self.probe.act("mower_logic:area_recording/exit_recording_mode")
+        self.probe.act("recording.exit")
         self.assertTrue(self.probe.wait(lambda: self.probe.actions.get(start)))
         self.assertTrue(self.probe.wait(lambda: self.probe.idle == [True, False, True]), self.probe.idle)
         self.assertEqual(self.probe.set_params("idle", {"params": {P + "gps_wait_time": 5}}), {P + "gps_wait_time": 5.0})

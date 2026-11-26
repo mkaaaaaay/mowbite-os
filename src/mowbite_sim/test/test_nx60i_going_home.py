@@ -42,8 +42,8 @@ MOWER = layers.device_file(DATA, "nx60i")
 EXTRA = os.path.join(WORK, "extra.yaml")
 GROUP_PORT, BIND_IP = loopback_group()
 DATUM = (52.0, 9.0, 80.0)
-START = "mower_logic:idle/start_mowing"
-P = "/mower_logic/"
+START = "mowing.start"
+P = "/logic/"
 LAWN = [(-2.0, -2.5), (6.0, -2.5), (6.0, 2.5), (-2.0, 2.5)]
 # The NX60i: empty 24.5 V (the highest voltage of 20 s); motor_hot/cold_temperature 70/40 of the logic.
 EMPTY, LOW_WINDOW = 24.5, 20.0

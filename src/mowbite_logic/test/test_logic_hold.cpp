@@ -10,12 +10,12 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kRecord = "mower_logic:idle/start_area_recording";
-const std::string kPause = "mower_logic:mowing/pause";
-const std::string kContinue = "mower_logic:mowing/continue";
-const std::string kAbort = "mower_logic:mowing/abort_mowing";
-const std::string kReset = "mower_logic/reset_emergency";
+const std::string kStart = "mowing.start";
+const std::string kRecord = "recording.start";
+const std::string kPause = "mowing.pause";
+const std::string kContinue = "mowing.continue";
+const std::string kAbort = "mowing.abort";
+const std::string kReset = "emergency.reset";
 constexpr int64_t kUntil = 1800000900;
 
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -65,14 +65,11 @@ TestCore Ready() {
   return core;
 }
 
-bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
-  for (const auto& group : core.Actions()) {
-    if (group.prefix != prefix) continue;
-    for (const auto& action : group.actions) {
-      if (action.id == id) return action.enabled;
-    }
+bool Enabled(const TestCore& core, const std::string& id) {
+  for (const auto& action : core.Actions()) {
+    if (action.id == id) return action.enabled;
   }
-  ADD_FAILURE() << "missing action " << prefix << "/" << id;
+  ADD_FAILURE() << "missing action " << id;
   return false;
 }
 
@@ -126,7 +123,7 @@ TEST(LogicHold, StartMowingIsRefused) {
   core.SetHold(kUntil);
   EXPECT_TRUE(core.Held());
   EXPECT_EQ(core.StartProblem().code, "HOLD");
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
   EXPECT_EQ(core.RobotState().state, "IDLE");
   ExpectHold(Find(core.TakeEvents(), "MOWING_REFUSED"), "MOWING_REFUSED");
@@ -135,7 +132,7 @@ TEST(LogicHold, StartMowingIsRefused) {
 TEST(LogicHold, RecordingIsRefused) {
   TestCore core = Ready();
   core.SetHold(kUntil);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_FALSE(Enabled(core, "recording.start"));
   EXPECT_EQ(core.OnAction(kRecord), ActionResult::kRejected);
   EXPECT_EQ(core.RobotState().state, "IDLE");
   const auto events = core.TakeEvents();
@@ -172,10 +169,10 @@ TEST(LogicHold, ContinueIsRefused) {
   TestCore core = Ready();
   ASSERT_EQ(core.OnAction(kStart), ActionResult::kDone);
   ASSERT_EQ(core.OnAction(kPause), ActionResult::kDone);
-  ASSERT_TRUE(Enabled(core, "mower_logic:mowing", "continue"));
+  ASSERT_TRUE(Enabled(core, "mowing.continue"));
   core.SetHold(kUntil);
   core.TakeEvents();
-  EXPECT_FALSE(Enabled(core, "mower_logic:mowing", "continue"));
+  EXPECT_FALSE(Enabled(core, "mowing.continue"));
   EXPECT_EQ(core.OnAction(kContinue), ActionResult::kRejected);
   ExpectHold(Find(core.TakeEvents(), "MOWING_REFUSED"), "MOWING_REFUSED");
   // Stopping still works.
@@ -209,8 +206,8 @@ TEST(LogicHold, EndsAndEverythingStartsAgain) {
   EXPECT_TRUE(core.TakeActionsChanged());
   EXPECT_FALSE(core.Held());
   EXPECT_TRUE(core.HoldProblem().empty());
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_TRUE(Enabled(core, "mowing.start"));
+  EXPECT_TRUE(Enabled(core, "recording.start"));
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kDone);
 }
 
@@ -259,13 +256,13 @@ TEST(LogicDataRollback, MowingWaitsForTheConfirmation) {
   const Reason why = core.StartProblem();
   EXPECT_EQ(why.code, "DATA_ROLLBACK");
   EXPECT_EQ(why.fields["backup_of"], 1767225600);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
   events = core.TakeEvents();
   const Event* refused = Find(events, "MOWING_REFUSED");
   ASSERT_NE(refused, nullptr);
   EXPECT_EQ(refused->details["reason"], "DATA_ROLLBACK");
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_area_recording"));
+  EXPECT_TRUE(Enabled(core, "recording.start"));
   EXPECT_TRUE(core.DriveProblem().empty());
   core.SetDataRollback(nullptr);
   events = core.TakeEvents();
@@ -273,7 +270,7 @@ TEST(LogicDataRollback, MowingWaitsForTheConfirmation) {
   ASSERT_NE(confirmed, nullptr);
   EXPECT_EQ(confirmed->details["what"], "confirmed");
   EXPECT_TRUE(core.StartProblem().empty());
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_TRUE(Enabled(core, "mowing.start"));
 }
 
 TEST(LogicDataRollback, ANoteWithoutConfirmLocksNothing) {

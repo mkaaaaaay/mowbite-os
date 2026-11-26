@@ -149,7 +149,9 @@ std::string ActionsText(const std::map<std::string, std::vector<ActionItem>>& gr
   Json all = Json::array();
   for (const auto& [prefix, items] : groups) {
     for (const auto& item : items) {
-      Json entry{{"action_id", prefix + "/" + item.id}, {"action_name", item.name}, {"enabled", Switch(item.enabled)}};
+      Json entry{{"action_id", prefix.empty() ? item.id : prefix + "/" + item.id},
+                 {"action_name", item.name},
+                 {"enabled", Switch(item.enabled)}};
       if (!item.enabled && !item.reason.empty()) entry["reason"] = item.reason;
       all.push_back(std::move(entry));
     }

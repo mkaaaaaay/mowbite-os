@@ -13,7 +13,7 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
+const std::string kStart = "mowing.start";
 
 // The station of the field: backing in going west, the lawn east of it.
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -109,7 +109,7 @@ TestCore Following() {
 
 TestCore Paused() {
   TestCore core = Mowing();
-  EXPECT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   Settle(core);
   return core;
 }
@@ -130,7 +130,7 @@ TestCore Held(TestCore core) {
 // After abort_mowing on a planned path the mower goes home; the job stays unfinished.
 TestCore Docking() {
   TestCore core = Following();
-  EXPECT_EQ(core.OnAction("mower_logic:mowing/abort_mowing"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("mowing.abort"), ActionResult::kDone);
   EXPECT_TRUE(core.Docking());
   Settle(core);
   return core;
@@ -138,14 +138,14 @@ TestCore Docking() {
 
 TestCore IdleWithJob() {
   TestCore core = Docking();
-  EXPECT_EQ(core.OnAction("mower_logic:docking/abort_docking"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("docking.abort"), ActionResult::kDone);
   Settle(core);
   return core;
 }
 
 TestCore Recording() {
   TestCore core = Idle();
-  EXPECT_EQ(core.OnAction("mower_logic:idle/start_area_recording"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("recording.start"), ActionResult::kDone);
   Settle(core);
   return core;
 }
@@ -153,7 +153,7 @@ TestCore Recording() {
 // Recording a ring of three points.
 TestCore Ring3() {
   TestCore core = Recording();
-  EXPECT_EQ(core.OnAction("mower_logic:area_recording/start_recording"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("recording.ring_start"), ActionResult::kDone);
   // Forward: east, then north.
   core.OnPose(PoseAt(2.0, 0.5, 0));
   core.OnPose(PoseAt(3.0, 0.5, 0));
@@ -234,10 +234,8 @@ const std::vector<Scenario>& Scenarios() {
 }
 
 bool Enabled(const TestCore& core, const std::string& action_id) {
-  for (const auto& group : core.Actions()) {
-    for (const auto& action : group.actions) {
-      if (group.prefix + "/" + action.id == action_id) return action.enabled;
-    }
+  for (const auto& action : core.Actions()) {
+    if (action.id == action_id) return action.enabled;
   }
   ADD_FAILURE() << "missing action " << action_id;
   return false;
@@ -268,11 +266,12 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
   for (const auto& scenario : Scenarios()) {
     for (const auto& command : mowbite_api::Commands()) {
       for (const auto& entry : command.actions) {
-        const std::string where = std::string(scenario.name) + " " + entry.action;
+        const std::string id = mowbite_api::ActionId(command, entry);
+        const std::string where = std::string(scenario.name) + " " + id;
         TestCore by_action = scenario.make();
         TestCore by_rpc = scenario.make();
-        const bool enabled = Enabled(by_action, entry.action);
-        const ActionResult result = by_action.OnAction(entry.action);
+        const bool enabled = Enabled(by_action, id);
+        const ActionResult result = by_action.OnAction(id);
         const CommandOutcome outcome = Rpc(by_rpc, command.name, entry.params);
         ASSERT_TRUE(outcome.invalid.empty()) << where << ": " << outcome.invalid;
         const ActionResult same = outcome.release    ? ActionResult::kReleaseEmergency
@@ -294,11 +293,8 @@ TEST(LogicCommands, ActionAndRpcAlikeInEveryState) {
         }
         EXPECT_EQ(by_action.RobotState().state, by_rpc.RobotState().state) << where;
         EXPECT_EQ(by_action.RobotState().sub_state, by_rpc.RobotState().sub_state) << where;
-        for (const auto& group : by_rpc.Actions()) {
-          for (const auto& action : group.actions) {
-            EXPECT_EQ(Enabled(by_action, group.prefix + "/" + action.id), action.enabled)
-                << where << ": " << action.id;
-          }
+        for (const auto& action : by_rpc.Actions()) {
+          EXPECT_EQ(Enabled(by_action, action.id), action.enabled) << where << ": " << action.id;
         }
         EXPECT_EQ(by_action.TakeDriveCancel().has_value(), by_rpc.TakeDriveCancel().has_value()) << where;
         EXPECT_EQ(by_action.TakeStopRequest(), by_rpc.TakeStopRequest()) << where;
@@ -566,7 +562,7 @@ TEST(LogicCommands, UndoTakesMetresWithinItsRange) {
   ASSERT_TRUE(outcome.accepted);
   EXPECT_EQ(outcome.result["points"], 2);
   EXPECT_EQ(outcome.result["state"], "AREA_RECORDING");
-  EXPECT_FALSE(Enabled(core, "mower_logic:area_recording/auto_point_collecting_disable"));
+  EXPECT_FALSE(Enabled(core, "recording.auto_points:off"));
   outcome = Rpc(core, "recording.undo");
   EXPECT_EQ(outcome.result["points"], 1);
   outcome = Rpc(core, "recording.ring_stop");
@@ -595,7 +591,7 @@ TEST(LogicCommands, ReleaseCarriesSourceAndClient) {
   // By the action: source rpc without a client.
   core.OnHardwareStatus(InEmergency());
   core.TakeEvents();
-  EXPECT_EQ(core.OnAction("mower_logic/reset_emergency"), ActionResult::kReleaseEmergency);
+  EXPECT_EQ(core.OnAction("emergency.reset"), ActionResult::kReleaseEmergency);
   core.OnHardwareStatus(Healthy());
   events = core.TakeEvents();
   ASSERT_EQ(events.size(), 1u);
@@ -827,12 +823,10 @@ TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
   for (const auto& scenario : Scenarios()) {
     TestCore core = scenario.make();
     const Action* start = nullptr;
-    std::vector<ActionGroup> groups = core.Actions();
-    for (const auto& group : groups) {
-      for (const auto& action : group.actions) {
-        EXPECT_TRUE(action.reason.empty() || action.id == "start_mowing") << scenario.name << " " << action.id;
-        if (group.prefix == "mower_logic:idle" && action.id == "start_mowing") start = &action;
-      }
+    const std::vector<Action> actions = core.Actions();
+    for (const auto& action : actions) {
+      EXPECT_TRUE(action.reason.empty() || action.id == "mowing.start") << scenario.name << " " << action.id;
+      if (action.id == "mowing.start") start = &action;
     }
     ASSERT_NE(start, nullptr) << scenario.name;
     EXPECT_EQ(start->enabled, start->reason.empty()) << scenario.name << " " << start->reason;
@@ -842,7 +836,7 @@ TEST(LogicCommands, StartMowingShowsTheReasonOfItsRefusal) {
                             [&](const mowbite_api::ReasonEntry& r) { return r.code == start->reason; }))
         << scenario.name << " " << start->reason;
     core.TakeEvents();
-    EXPECT_EQ(core.OnAction("mower_logic:idle/start_mowing"), ActionResult::kRejected) << scenario.name;
+    EXPECT_EQ(core.OnAction("mowing.start"), ActionResult::kRejected) << scenario.name;
     const auto events = core.TakeEvents();
     const auto event = std::find_if(events.begin(), events.end(), [](const Event& e) { return e.type == "MOWING_REFUSED"; });
     ASSERT_NE(event, events.end()) << scenario.name;
@@ -899,14 +893,12 @@ TEST(LogicStorage, NothingStartsFromIdleWhileTheSessionCannotBeWritten) {
   EXPECT_EQ(events[0].details["file"], "os-session.json");
   EXPECT_TRUE(core.Idle());
   EXPECT_FALSE(core.FollowerActive());
-  for (const auto& group : core.Actions()) {
-    for (const auto& action : group.actions) {
-      if (action.id == "start_mowing") {
-        EXPECT_EQ(action.reason, "STORAGE_NOT_WRITABLE");
-      }
-      if (action.id == "start_area_recording") {
-        EXPECT_FALSE(action.enabled);
-      }
+  for (const auto& action : core.Actions()) {
+    if (action.id == "mowing.start") {
+      EXPECT_EQ(action.reason, "STORAGE_NOT_WRITABLE");
+    }
+    if (action.id == "recording.start") {
+      EXPECT_FALSE(action.enabled);
     }
   }
   // Another file while it lasts is the same incident; written again, starts go.
@@ -941,9 +933,9 @@ TEST(LogicStorage, AJobGoesOnWhenTheDiskFailsMeanwhile) {
   EXPECT_FALSE(core.TakeStopRequest());
   EXPECT_EQ(core.NextJobStep(1).kind, JobStep::Kind::kNone);
   // A pause and its continue stay in the job.
-  EXPECT_EQ(core.OnAction("mower_logic:mowing/pause"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("mowing.pause"), ActionResult::kDone);
   Settle(core);
-  EXPECT_EQ(core.OnAction("mower_logic:mowing/continue"), ActionResult::kDone);
+  EXPECT_EQ(core.OnAction("mowing.continue"), ActionResult::kDone);
   EXPECT_TRUE(core.Mowing());
   EXPECT_EQ(core.RobotState().state, "MOWING");
 }

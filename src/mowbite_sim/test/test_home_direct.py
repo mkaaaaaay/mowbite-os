@@ -31,9 +31,9 @@ from sim_common import LATCHED, SimProbe, sim_description, sim_files  # noqa: E4
 WORK = tempfile.mkdtemp(prefix="mowbite_home_direct_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "home_direct.yaml")
-START = "mower_logic:idle/start_mowing"
-PAUSE = "mower_logic:mowing/pause"
-CONTINUE = "mower_logic:mowing/continue"
+START = "mowing.start"
+PAUSE = "mowing.pause"
+CONTINUE = "mowing.continue"
 
 # The station of test_dock.py in a yard that reaches 1.2 m behind it: around the point in front of it, 0.8 m east of
 # the station, the 0.9 m the straight way needs are free (turning circle 0.644 m, direct_margin 0.15 m, accuracy limit

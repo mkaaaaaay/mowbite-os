@@ -62,7 +62,7 @@ class TestOsDataRollback(unittest.TestCase):
 
     def test_2_nothing_mows_by_itself(self):
         mark = len(self.broker.msgs)
-        self.broker.client.publish("action", "mower_logic:idle/start_mowing")
+        self.broker.client.publish("action", "mowing.start")
         refused = self.broker.wait(lambda: self.broker.events("MOWING_REFUSED", mark), 5)
         self.assertTrue(refused, "no MOWING_REFUSED")
         self.assertEqual((refused[-1]["reason"], refused[-1]["backup_of"]), ("DATA_ROLLBACK", BACKUP_OF))
@@ -82,7 +82,7 @@ class TestOsDataRollback(unittest.TestCase):
         self.assertTrue(self.broker.wait(lambda: self.schedule() == (True, None), 10), self.schedule())
         self.assertIsNone(self.broker.rpc("system.info", rid="info_after")["result"]["data_rollback"])
         mark = len(self.broker.msgs)
-        self.broker.client.publish("action", "mower_logic:idle/start_mowing")
+        self.broker.client.publish("action", "mowing.start")
         time.sleep(2)
         self.assertFalse([e for e in self.broker.events("MOWING_REFUSED", mark) if e["reason"] == "DATA_ROLLBACK"])
         self.assertEqual(self.broker.rpc("data.rollback.confirm", rid="again")["result"], {"released": False})

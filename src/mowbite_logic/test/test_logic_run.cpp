@@ -12,7 +12,7 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
+const std::string kStart = "mowing.start";
 
 // The station of the simulation and a lawn that reaches to 0.5 m in front of it, as in test_logic_undock.cpp.
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -359,7 +359,7 @@ TEST(ScheduleAnnouncement, EachSourceCancelsIt) {
             "hold");
   EXPECT_EQ(canceled([](TestCore& core) { core.SetHold(static_cast<int64_t>(kNoon) + 600); }), "hold");
   EXPECT_EQ(canceled([](TestCore& core) { core.Command("mowing.reset_job", json::object()); }), "rpc");
-  EXPECT_EQ(canceled([](TestCore& core) { core.OnAction("mower_logic:idle/start_manual_mowing"); }), "rpc");
+  EXPECT_EQ(canceled([](TestCore& core) { core.OnAction("start_manual_mowing"); }), "rpc");
   EXPECT_EQ(canceled([](TestCore& core) { core.AbortCalibration(Reason("STOPPED", "by hand")); }), "rpc");
   EXPECT_EQ(canceled([](TestCore& core) { core.RefuseCalibration(Reason("NO_ROOM", "no room")); }), "rpc");
   EXPECT_EQ(canceled([](TestCore& core) { core.CheckDockBeforeDrive(1.0, 0.0); }), "rpc");

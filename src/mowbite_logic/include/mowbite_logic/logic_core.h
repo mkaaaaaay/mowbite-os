@@ -152,7 +152,7 @@ class LogicCore {
   void SetUndockDistance(double distance);
   // The driver reports a debounced contact with the docking station.
   bool DockContact() const;
-  // On the docking station mowing (start_mowing) and drives start only after the reference check (G24): the node sets
+  // On the docking station mowing (mowing.start) and drives start only after the reference check (G24): the node sets
   // the heading of the ReferenceCheck with localization/set_heading and hands the answer to OnDockCheck. A drive to
   // (x, y) asks for its check here, after DriveProblem found nothing.
   void CheckDockBeforeDrive(double x, double y);
@@ -182,9 +182,9 @@ class LogicCore {
   bool UndockingForDrive() const;
   void OnChargeOff(bool ok, const std::string& message);
   void OnUndockEnded(LegEnd end, const Reason& reason);
-  // Stops undocking without UNDOCKING_FAILED, like abort_undocking (also logic/stop_drive for a drive).
+  // Stops undocking without UNDOCKING_FAILED, like undocking.abort (also logic/stop_drive for a drive).
   void AbortUndocking(const Reason& why);
-  // DOCKING: back onto the station of the map after JOB_COMPLETE, abort_mowing or a reason of HomeWatch, or on
+  // DOCKING: back onto the station of the map after JOB_COMPLETE, mowing.abort or a reason of HomeWatch, or on
   // docking.start, where the platform has charging contacts (CanDock); else IDLE as before. Each but JOB_COMPLETE begins with
   // the event DOCKING and its reason. The node hands the leg of TakeDockingLeg to the follower,
   // once and when nothing else is on its way, and its end to OnDockingLegEnded. On the way onto the station the first
@@ -194,7 +194,7 @@ class LogicCore {
   // or after docking_retry_count DOCKING_FAILED; the last try without a charge current (NO_CHARGE_CURRENT) leaves the
   // mower on the contacts, and a stable charge current there later still ends in DOCKED. A bad position waits like
   // mowing, at most gps_timeout, then DOCKING_FAILED NO_POSITION, NO_HEADING or POSITION_ACCURACY. An emergency and
-  // abort_docking end it without DOCKING_FAILED. In IDLE on the contacts CHARGING_LOST tells when the contact or the
+  // docking.abort end it without DOCKING_FAILED. In IDLE on the contacts CHARGING_LOST tells when the contact or the
   // charge current goes away (ChargeConfig); the mower stays.
   // Where the planner gives no answer for the way to the point in front of the station (PlannerSilent as the reason
   // of the approach), the try takes the straight way (DockConfig::direct): free for the body in every heading, with
@@ -275,7 +275,7 @@ class LogicCore {
   Reason StartProblem(const std::vector<std::string>& tasks = {}) const;
   // A start refused by the node (planner or follower missing): event MOWING_REFUSED.
   void RefuseStart(const Reason& why);
-  // reset_emergency did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
+  // emergency.reset did not release: EMERGENCY_RESET_REFUSED with the reason of the driver, of S2 or of the node;
   // returns the id of the event.
   std::string RefuseReset(const Reason& why);
   const ReleaseOutcome& LastReleaseOutcome() const {
@@ -321,7 +321,7 @@ class LogicCore {
   // IDLE without a drive: no recording, no job (also paused). Settings change only then.
   bool Idle() const;
   // The hold of an update (system.hold), until in unix s, 0 for none. While it or the hold the driver reports in
-  // hw/status lasts, nothing starts the wheels or the blade: start_mowing, continue, start_area_recording, drives and
+  // hw/status lasts, nothing starts the wheels or the blade: mowing.start, continue, recording.start, drives and
   // docking.start are refused with the reason HOLD.
   void SetHold(int64_t until);
   // until of the logic's own hold, 0 without one.
@@ -411,7 +411,7 @@ class LogicCore {
   }
 
   RobotStateData RobotState() const;
-  std::vector<ActionGroup> Actions() const;
+  std::vector<Action> Actions() const;
   std::vector<SensorDefinition> Sensors() const;
   std::vector<SensorReading> Readings() const;
 
@@ -481,7 +481,7 @@ class LogicCore {
   void BeginDrive(double x, double y);
   void StopUndocking(const std::optional<Reason>& failure, const Reason& why);
   void EndUndocking(const std::optional<Reason>& failure, const Reason& why);
-  // After JOB_COMPLETE, abort_mowing and a reason to go home: DOCKING where the platform docks and the map has a
+  // After JOB_COMPLETE, mowing.abort and a reason to go home: DOCKING where the platform docks and the map has a
   // station, else IDLE. why: the reason of the event DOCKING, none after JOB_COMPLETE.
   void GoHome(const Reason& why = Reason());
   // Whether mowing can go home from here: a station the platform docks onto, a way to it, safe, not on it already.

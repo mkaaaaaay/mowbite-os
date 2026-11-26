@@ -41,9 +41,9 @@ FAULTS = REAL_FAULTS if RATE else {}
 WORK = tempfile.mkdtemp(prefix="mowbite_dock_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "dock.yaml")
-START = "mower_logic:idle/start_mowing"
-ABORT_MOWING = "mower_logic:mowing/abort_mowing"
-ABORT = "mower_logic:docking/abort_docking"
+START = "mowing.start"
+ABORT_MOWING = "mowing.abort"
+ABORT = "docking.abort"
 
 # A yard to drive in from 0.5 m in front of the station, and a small patch in it to mow. The station: the docked mower
 # at (-1, 0), backing in going west; the line onto it begins at (-0.2, 0), the gate at (-0.75, 0).
@@ -311,7 +311,7 @@ class TestDock(Base):
         self.assertIsNotNone(p.event(since, "STATE", 3, state="IDLE"), p.events[since:])
         self.assert_still()
         p.flags()
-        p.act("mower_logic/reset_emergency")
+        p.act("emergency.reset")
         self.assertTrue(p.wait(lambda: not p.robot.emergency, 5))
         # It never goes on by itself.
         self.assert_still(3.0)
@@ -321,8 +321,8 @@ class TestDock(Base):
 
     def test_07_a_station_beside_its_place_in_the_map(self):
         p = self.probe
-        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 1}})
-        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 1}})
+        answer = p.rpc("params.set", {"params": {"/logic/docking_retry_count": 1}})
+        self.assertEqual(answer, {"result": {"/logic/docking_retry_count": 1}})
         p.flags(dock_shift_y=0.04)
         sim_since, since = sim_time(), len(p.events)
         self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
@@ -344,13 +344,13 @@ class TestDock(Base):
         self.assertTrue(all(e["speed"][0] >= -0.1 - 1e-3 for e in rx if moving(e)))
         self.assertNotIn("DOCKED", [e["type"] for e in p.events[since:]])
         p.flags()
-        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 4}})
-        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 4}})
+        answer = p.rpc("params.set", {"params": {"/logic/docking_retry_count": 4}})
+        self.assertEqual(answer, {"result": {"/logic/docking_retry_count": 4}})
 
     def test_08_contacts_that_do_not_charge(self):
         p = self.probe
-        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 1}})
-        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 1}})
+        answer = p.rpc("params.set", {"params": {"/logic/docking_retry_count": 1}})
+        self.assertEqual(answer, {"result": {"/logic/docking_retry_count": 1}})
         p.flags(charge_current=0.0)
         sim_since, since = sim_time(), len(p.events)
         self.assertEqual(p.rpc("docking.start"), {"result": {"state": "DOCKING", "sub_state": ""}})
@@ -387,8 +387,8 @@ class TestDock(Base):
         self.assertEqual(lost["battery_percentage"], 80)
         self.assertEqual(p.robot.current_state, "IDLE")
         p.flags()
-        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 4}})
-        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 4}})
+        answer = p.rpc("params.set", {"params": {"/logic/docking_retry_count": 4}})
+        self.assertEqual(answer, {"result": {"/logic/docking_retry_count": 4}})
 
     def test_09_a_nearly_full_battery_needs_no_charge_current(self):
         p = self.probe
@@ -411,8 +411,8 @@ class TestDockRate(Base):
     def test_rate(self):
         p = self.probe
         self.ready()
-        answer = p.rpc("params.set", {"params": {"/mower_logic/docking_retry_count": 0}})
-        self.assertEqual(answer, {"result": {"/mower_logic/docking_retry_count": 0}})
+        answer = p.rpc("params.set", {"params": {"/logic/docking_retry_count": 0}})
+        self.assertEqual(answer, {"result": {"/logic/docking_retry_count": 0}})
         results = []
         for run in range(RATE):
             x, y = self.STARTS[run % len(self.STARTS)]

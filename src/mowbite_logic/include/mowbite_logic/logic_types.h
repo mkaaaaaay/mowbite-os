@@ -128,7 +128,7 @@ struct LogicConfig {
   // After the reference check the mower leaves the station before mowing or a drive starts, straight against the way
   // in: forwards with the contacts behind base_link, else backwards (PlanLeave).
   UndockConfig undock;
-  // After JOB_COMPLETE, abort_mowing and on docking.start the mower drives onto the station contacts first; a try that
+  // After JOB_COMPLETE, mowing.abort and on docking.start the mower drives onto the station contacts first; a try that
   // fails also drives out like undocking.
   DockConfig dock;
   // Docking by the dock marker in the station frame, where the platform has one: docking.test, and with its guide
@@ -185,17 +185,13 @@ struct UndockOutcome {
   Reason why;
 };
 
+// An action of the catalog (mowbite_api::ActionId) as a client may offer it now.
 struct Action {
   std::string id;
   std::string name;
   bool enabled = false;
-  // Only start_mowing while off: the reason of MOWING_REFUSED a start would get now.
+  // Only mowing.start while off: the reason of MOWING_REFUSED a start would get now.
   std::string reason = "";
-};
-
-struct ActionGroup {
-  std::string prefix;
-  std::vector<Action> actions;
 };
 
 struct RobotStateData {
@@ -253,7 +249,7 @@ struct SensorReading {
   std::string text;
 };
 
-enum class ActionResult { kUnknown, kRejected, kDone, kReleaseEmergency };
+enum class ActionResult { kRejected, kDone, kReleaseEmergency };
 
 // How a command of the catalog (mowbite_api::Commands) went, the same whether its action or its RPC sent it.
 struct CommandOutcome {

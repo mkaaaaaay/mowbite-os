@@ -436,7 +436,6 @@ void LogicNode::OnAction(const std::string& action_id) {
       result = core_.Call<&LogicCore::OnAction>(action_id);
     }
     if (result == ActionResult::kRejected) RCLCPP_WARN(get_logger(), "Action %s not possible", action_id.c_str());
-    if (result == ActionResult::kUnknown) RCLCPP_DEBUG(get_logger(), "Ignoring action %s", action_id.c_str());
     Step();
     return;
   }
@@ -2189,24 +2188,22 @@ void LogicNode::PublishIdleIfChanged() {
 }
 
 void LogicNode::PublishActions() {
-  std::vector<ActionGroup> groups;
+  std::vector<Action> actions;
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    groups = core_.View().Actions();
+    actions = core_.View().Actions();
   }
-  for (const auto& group : groups) {
-    mowbite_msgs::msg::ActionList msg;
-    msg.node_prefix = group.prefix;
-    for (const auto& action : group.actions) {
-      mowbite_msgs::msg::ActionEntry entry;
-      entry.id = action.id;
-      entry.name = action.name;
-      entry.enabled = action.enabled;
-      entry.reason = action.reason;
-      msg.actions.push_back(entry);
-    }
-    actions_pub_->publish(msg);
+  mowbite_msgs::msg::ActionList msg;
+  msg.node_prefix = "logic";
+  for (const auto& action : actions) {
+    mowbite_msgs::msg::ActionEntry entry;
+    entry.id = action.id;
+    entry.name = action.name;
+    entry.enabled = action.enabled;
+    entry.reason = action.reason;
+    msg.actions.push_back(entry);
   }
+  actions_pub_->publish(msg);
 }
 
 }  // namespace mowbite_logic

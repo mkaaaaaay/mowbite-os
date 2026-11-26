@@ -198,7 +198,8 @@ Field Text(std::string name, std::string text, bool required) {
   return {std::move(name), Type::kString, "", required, std::move(text), {}, false, {}, ""};
 }
 
-const Field kActionId = Text("action_id", "<prefix>/<id>, what the app sends on action", true);
+const Field kActionId =
+    Text("action_id", "What the app sends on action: <prefix>/<id> with openmower_names, else the own id", true);
 const Field kActionName = Text("action_name", "Name to show", true);
 const Field kActionEnabled = {"enabled", Type::kInteger, "", true, "1 when the action works now, else 0", {}, false, {}, ""};
 
@@ -259,7 +260,9 @@ Json BuildSchema(const Json& planner) {
     defs[command.name + ".params"] = Object("The params of " + command.name, Pointers(command.params), true);
     defs[command.name + ".result"] = Object("The result of " + command.name, Pointers(command.result), true);
     Json actions = Json::array();
-    for (const auto& entry : command.actions) actions.push_back({{"action", entry.action}, {"params", entry.params}});
+    for (const auto& entry : command.actions) {
+      actions.push_back({{"id", ActionId(command, entry)}, {"action", entry.action}, {"params", entry.params}});
+    }
     commands[command.name] = {{"description", command.text},
                               {"params", "#/$defs/" + command.name + ".params"},
                               {"result", "#/$defs/" + command.name + ".result"},
@@ -383,10 +386,14 @@ Json BuildSchema(const Json& planner) {
                   "x-texts), x-emergency-bits the bits of "
                   "emergency with their class, x-commands the commands with params, result, the event of their "
                   "refusal and the actions "
-                  "that do the same, x-methods every RPC method of the OS with its node (planner.* are the planner's, "
+                  "that do the same (id: the own id, in actions/json and on action without openmower_names; action: "
+                  "the id with openmower_names; action takes both in either mode), x-methods every RPC method of "
+                  "the OS with its node (planner.* are the planner's, "
                   "sim.* only in the simulation), x-sensors the sensors by id and key (an id with "
                   "openmower_names has the key of its own id), x-settings the settings of params.set "
-                  "with the ranges of the OS, x-geometry the keys of robot.geometry, x-schedule-log the words of "
+                  "with the ranges of the OS (in params/json and the answer of params.set under /mower_logic with "
+                  "openmower_names, else under /logic), x-geometry the keys of robot.geometry, x-schedule-log the "
+                  "words of "
                   "schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api "
                   "counts every change, "
                   "x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or "

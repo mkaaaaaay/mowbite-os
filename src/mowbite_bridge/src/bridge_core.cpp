@@ -91,7 +91,7 @@ BridgeCore::BridgeCore(BridgeConfig config)
   Keep("version/json", VersionText(config_.software_version));
   if (config_.openmower_names) params_.Apply(BoardParams());
   Keep("params/json", params_.Text());
-  Keep("actions/json", ActionsText(actions_));
+  Keep("actions/json", ShownActionsText(actions_, config_.openmower_names));
   Keep(kBridgeStatusTopic, BridgeStatusText(true));
 }
 
@@ -182,8 +182,8 @@ void BridgeCore::OnMqtt(const std::string& topic, std::string_view payload, bool
           nul_actions_ = 0;
           nul_logged_ = now;
         }
-      } else {
-        out_.actions.push_back(CleanUtf8(payload));
+      } else if (auto own = OwnAction(CleanUtf8(payload), config_.openmower_names)) {
+        out_.actions.push_back(std::move(*own));
       }
     } else if (topic == "teleop") {
       if (auto teleop = ReadTeleop(payload)) out_.teleop.push_back(*teleop);
@@ -327,13 +327,13 @@ void BridgeCore::OnActions(const std::string& prefix, const std::vector<ActionIt
   Guard("actions", [&] {
     actions_[prefix] = items;
     action_provider_[prefix] = provider;
-    Keep("actions/json", ActionsText(actions_));
+    Keep("actions/json", ShownActionsText(actions_, config_.openmower_names));
   });
 }
 
 void BridgeCore::OnParams(std::string_view message) {
   Guard("params", [&] {
-    if (params_.Apply(message)) Keep("params/json", params_.Text());
+    if (params_.Apply(ShownParams(message, config_.openmower_names))) Keep("params/json", params_.Text());
   });
 }
 
@@ -427,7 +427,7 @@ void BridgeCore::OnProviders(const std::set<std::string>& alive) {
       actions = actions_.erase(action->first) != 0 || actions;
       action = action_provider_.erase(action);
     }
-    if (actions) Keep("actions/json", ActionsText(actions_));
+    if (actions) Keep("actions/json", ShownActionsText(actions_, config_.openmower_names));
 
     std::string sensors;
     for (auto sensor = sensor_provider_.begin(); sensor != sensor_provider_.end();) {
@@ -477,7 +477,7 @@ void BridgeCore::OnRpcResponse(const std::string& id, std::string_view result) {
     if (ShowsAnswer(method, config_.openmower_names) && NestingDepth(result) <= kMaxDataDepth) {
       const Json answer = Json::parse(result.begin(), result.end(), nullptr, false);
       if (!answer.is_discarded()) {
-        SendResult(to, client_id, ResultReply(client_id, ShownAnswer(answer)));
+        SendResult(to, client_id, ResultReply(client_id, ShownAnswer(method, answer)));
         return;
       }
     }

@@ -216,7 +216,7 @@ class TestNx60iStack(unittest.TestCase):
     def test_2_mowing_and_drives_wait_for_the_safety_measurement(self):
         p = self.probe
         since = len(p.events)
-        p.action_pub.publish(String(data="mower_logic:idle/start_mowing"))
+        p.action_pub.publish(String(data="mowing.start"))
         refused = p.event(since, "MOWING_REFUSED", 10, reason="NO_SAFETY_MEASUREMENT")
         self.assertTrue(refused, [e for e in p.events[since:]])
         answer = p.call(p.drive_to, DriveTo.Request(x=1.0, y=0.0))

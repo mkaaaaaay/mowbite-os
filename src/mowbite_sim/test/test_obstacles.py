@@ -119,7 +119,7 @@ class TestObstacles(unittest.TestCase):
     @classmethod
     def settings(cls, mode, photos):
         params = {"obstacle_mode": mode, "obstacle_photos": photos}
-        cls.params_pub.publish(String(data=json.dumps({"node": "/mower_logic", "params": params})))
+        cls.params_pub.publish(String(data=json.dumps({"node": "/logic", "params": params})))
 
     @classmethod
     def publish_pose(cls):

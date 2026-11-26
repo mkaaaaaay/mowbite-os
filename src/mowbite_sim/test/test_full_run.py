@@ -35,8 +35,6 @@ LIMITS = (0.03, 0.08, 0.15) if REAL else (0.01, 0.03, 0.05)
 WORK = tempfile.mkdtemp(prefix="mowbite_full_run_")
 STATE, FLAGS, _, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "full_run.yaml")
-REC = "mower_logic:area_recording/"
-MOW = "mower_logic:mowing/"
 # The lawn the teleop drives around.
 # At the end over the start, crossing the first side flatly.
 CORNERS = [(2.6, 0.0), (2.6, 1.6), (0.0, 1.6), (0.0, 0.15), (0.6, -0.05)]
@@ -201,17 +199,17 @@ class TestFullRun(unittest.TestCase):
     def test_02_record_the_lawn_by_teleop(self):
         p = self.probe
         since = len(p.events)
-        p.act("mower_logic:idle/start_area_recording")
+        p.act("recording.start")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="AREA_RECORDING"))
-        p.act(REC + "start_recording")
+        p.act("recording.ring_start")
         # Like the app on a mode change: one zero, then the joystick.
         p.twist(0.0, 0.0)
         time.sleep(1.2)
         for x, y in CORNERS:
             self.assertLess(p.teleop_to(x, y), 0.1, f"teleop did not reach {x, y}")
-        p.act(REC + "stop_recording")
+        p.act("recording.ring_stop")
         time.sleep(1.0)
-        p.act(REC + "finish_mowing_area")
+        p.act("recording.save:mow")
         recorded = p.event(since, "AREA_RECORDED", 10)
         self.assertIsNotNone(recorded, [e["type"] for _, e in p.events[since:]])
         self.assertAlmostEqual(recorded["area_m2"], 2.6 * 1.5, delta=0.5)
@@ -235,13 +233,13 @@ class TestFullRun(unittest.TestCase):
         # approach_distance.
         self.assertLess(p.teleop_to(*paths[0]["points"][0]), 0.1)
         since = len(p.events)
-        p.act(REC + "exit_recording_mode")
+        p.act("recording.exit")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="IDLE"))
 
     def test_04_start_and_the_blade(self):
         p = self.probe
         since = len(p.events)
-        p.act("mower_logic:idle/start_mowing")
+        p.act("mowing.start")
         state = p.event(since, "STATE", 10, state="MOWING")
         self.assertIsNotNone(state, [e["type"] for _, e in p.events[since:]])
         type(self).job = state["job_id"]
@@ -252,14 +250,14 @@ class TestFullRun(unittest.TestCase):
         p = self.probe
         time.sleep(4.0)
         since = len(p.events)
-        p.act(MOW + "pause")
+        p.act("mowing.pause")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="PAUSED"))
         self.assertTrue(p.wait(p.blade_off, 5), "the blade kept running")
         time.sleep(1.0)
         still, poses = p.standing()
         self.assertTrue(still, poses)
         since = len(p.events)
-        p.act(MOW + "continue")
+        p.act("mowing.continue")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="MOWING"))
         # The blade comes back on the next mow segment, which may lie after a turn or a transit.
         self.assertIsNotNone(p.event(since, "BLADES", 120, enabled=True), "the blade did not come back")
@@ -268,7 +266,7 @@ class TestFullRun(unittest.TestCase):
         p = self.probe
         time.sleep(6.0)
         since = len(p.events)
-        p.act(MOW + "abort_mowing")
+        p.act("mowing.abort")
         self.assertIsNotNone(p.event(since, "STATE", 5, state="IDLE"))
         self.assertTrue(p.wait(p.blade_off, 5), "the blade kept running")
         time.sleep(1.0)
@@ -277,7 +275,7 @@ class TestFullRun(unittest.TestCase):
         with open(os.path.join(DATA, "checkpoint.json")) as f:
             self.assertEqual(json.load(f)["job_id"], self.job)
         since = len(p.events)
-        p.act("mower_logic:idle/start_mowing")
+        p.act("mowing.start")
         state = p.event(since, "STATE", 10, state="MOWING")
         self.assertIsNotNone(state)
         self.assertEqual(state["job_id"], self.job)

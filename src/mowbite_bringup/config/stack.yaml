@@ -138,7 +138,7 @@ mowbite_logic:
     undock_speed: <platform>
     undock_stall_time: 2.0
     undock_course_limit: 10.0
-    # Docking after JOB_COMPLETE, abort_mowing and on docking.start: over the drivable areas to the point
+    # Docking after JOB_COMPLETE, mowing.abort and on docking.start: over the drivable areas to the point
     # docking_approach_distance m in front of the station, the contacts towards it, then along its line at
     # docking_speed m/s, steered by RTK, or by the dock marker with dock_guide (below). dock_gate_distance m before the
     # station the mower stops: base_link at most dock_gate_lateral m beside the line, the heading within

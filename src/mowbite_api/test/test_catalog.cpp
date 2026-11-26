@@ -525,22 +525,33 @@ TEST(Catalog, ReasonsOfTheCameras) {
 // Every action of the logic but manual mowing stands for exactly one command, with params that command takes.
 TEST(Catalog, ActionsAndCommands) {
   std::set<std::string> actions;
+  std::set<std::string> ids;
   for (const auto& command : Commands()) {
     const bool logic = std::any_of(command.params.begin(), command.params.end(),
                                    [](const Field& param) { return param.name == "client"; });
     EXPECT_EQ(logic, command.name.rfind("system.", 0) != 0) << command.name;
     for (const auto& entry : command.actions) {
       EXPECT_TRUE(actions.insert(entry.action).second) << entry.action;
+      const std::string id = ActionId(command, entry);
+      EXPECT_TRUE(ids.insert(id).second) << id;
+      EXPECT_EQ(OwnActionId(entry.action), id);
+      EXPECT_EQ(OpenMowerActionId(id), entry.action);
       Json params;
-      EXPECT_EQ(CommandOfAction(entry.action, &params), &command) << entry.action;
+      EXPECT_EQ(CommandOfAction(id, &params), &command) << id;
       EXPECT_EQ(params, entry.params) << entry.action;
       std::string field;
       EXPECT_EQ(CheckParams(command, params, &field), "") << entry.action;
     }
   }
   EXPECT_EQ(actions.size(), 22u);
-  EXPECT_EQ(CommandOfAction("mower_logic:area_recording/start_manual_mowing", nullptr), nullptr);
-  EXPECT_EQ(FindCommand("mowing.start")->actions[0].action, "mower_logic:idle/start_mowing");
+  EXPECT_EQ(OwnActionId("mower_logic:area_recording/start_manual_mowing"), "");
+  // An id of OpenMower is no own id; a command with several actions has none without its variant.
+  EXPECT_EQ(CommandOfAction("mower_logic:idle/start_mowing", nullptr), nullptr);
+  EXPECT_EQ(CommandOfAction("recording.save", nullptr), nullptr);
+  EXPECT_EQ(CommandOfAction("mowing.start:x", nullptr), nullptr);
+  EXPECT_EQ(OpenMowerActionId("docking.start"), "");
+  EXPECT_EQ(OwnActionId("mower_logic:area_recording/finish_navigation_area"), "recording.save:nav");
+  EXPECT_EQ(OwnActionId("mower_logic:idle/start_mowing"), "mowing.start");
   EXPECT_EQ(FindCommand("no.such"), nullptr);
 }
 

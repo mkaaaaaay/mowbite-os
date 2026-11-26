@@ -10,8 +10,8 @@ using namespace mowbite_logic;
 
 namespace {
 
-const std::string kStart = "mower_logic:idle/start_mowing";
-const std::string kAbort = "mower_logic:undocking/abort_undocking";
+const std::string kStart = "mowing.start";
+const std::string kAbort = "undocking.abort";
 
 // The station of the simulation: backing in going west, the mower faces east on the contacts.
 const DockPose kDock{-1.0, 0.0, M_PI};
@@ -74,14 +74,11 @@ TestCore Docked(const Ring& lawn = kLawn, LogicConfig config = Tron()) {
   return core;
 }
 
-bool Enabled(const TestCore& core, const std::string& prefix, const std::string& id) {
-  for (const auto& group : core.Actions()) {
-    if (group.prefix != prefix) continue;
-    for (const auto& action : group.actions) {
-      if (action.id == id) return action.enabled;
-    }
+bool Enabled(const TestCore& core, const std::string& id) {
+  for (const auto& action : core.Actions()) {
+    if (action.id == id) return action.enabled;
   }
-  ADD_FAILURE() << "missing action " << prefix << "/" << id;
+  ADD_FAILURE() << "missing action " << id;
   return false;
 }
 
@@ -230,8 +227,8 @@ TEST(Undock, ACheckThatPassesStartsWithChargingOff) {
   ASSERT_TRUE(state);
   EXPECT_EQ(state->details["state"], "UNDOCKING");
   EXPECT_FALSE(Find(events, "MOWING_REFUSED"));
-  EXPECT_TRUE(Enabled(core, "mower_logic:undocking", "abort_undocking"));
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_TRUE(Enabled(core, "undocking.abort"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   EXPECT_EQ(core.StartProblem().code, "BUSY");
   EXPECT_EQ(core.StartProblem().fields["state"], "UNDOCKING");
   EXPECT_FALSE(core.BladeWanted());
@@ -330,7 +327,7 @@ TEST(Undock, UndockedThenMowing) {
   EXPECT_FALSE(outcome->for_drive);
   EXPECT_TRUE(outcome->why.empty());
   EXPECT_FALSE(core.TakeChargeOn());
-  EXPECT_FALSE(Enabled(core, "mower_logic:undocking", "abort_undocking"));
+  EXPECT_FALSE(Enabled(core, "undocking.abort"));
   // A late end of the follower changes nothing.
   core.OnUndockEnded(LegEnd::kFailed, Reason("TIMEOUT", "late"));
   EXPECT_TRUE(core.Mowing());
@@ -374,7 +371,7 @@ TEST(Undock, AStartGoesPastAnAnimalOutOfViewOnlyAndCountsAnObjectOnTheWayOut) {
   core.SetObstacleMode(2, 2);
   core.OnObstacleStatus(Holding("ANIMAL", true, -0.3), 0);
   // The button stays: the user may let go what is out of view.
-  EXPECT_TRUE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_TRUE(Enabled(core, "mowing.start"));
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
   auto events = core.TakeEvents();
   const Event* refused = Find(events, "MOWING_REFUSED");
@@ -615,7 +612,7 @@ TEST(Undock, AStationOutsideOfTheAreasIsUnreachable) {
   const Reason why = core.StartProblem();
   EXPECT_EQ(why.code, "DOCK_UNREACHABLE");
   EXPECT_DOUBLE_EQ(why.fields["distance"].get<double>(), 0.8);
-  EXPECT_FALSE(Enabled(core, "mower_logic:idle", "start_mowing"));
+  EXPECT_FALSE(Enabled(core, "mowing.start"));
   EXPECT_EQ(core.DriveProblem().code, "DOCK_UNREACHABLE");
   EXPECT_EQ(core.OnAction(kStart), ActionResult::kRejected);
   EXPECT_FALSE(core.DockCheckPending());

@@ -29,8 +29,8 @@ from sim_common import LATCHED, SimProbe, host_packets, last_time, moving, sim_d
 WORK = tempfile.mkdtemp(prefix="mowbite_undock_")
 STATE, FLAGS, RX, DATA = sim_files(WORK)
 CONFIG = os.path.join(WORK, "undock.yaml")
-START = "mower_logic:idle/start_mowing"
-ABORT = "mower_logic:undocking/abort_undocking"
+START = "mowing.start"
+ABORT = "undocking.abort"
 
 # The lawn reaches to 0.5 m in front of the station, where the way out ends 0.2 m inside it; the far one begins 1 m in
 # front of the station.
@@ -179,9 +179,9 @@ class TestUndock(unittest.TestCase):
         self.assertFalse(truth["dock_ok"], truth)
         # Stopping the job docks again (test_dock.py); here it is stopped on the way.
         since = len(p.events)
-        p.act("mower_logic:mowing/abort_mowing")
+        p.act("mowing.abort")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="DOCKING"), p.events[since:])
-        p.act("mower_logic:docking/abort_docking")
+        p.act("docking.abort")
         self.assertIsNotNone(p.event(since, "STATE", 10, state="IDLE"), p.events[since:])
 
     def test_04_a_drive_from_the_station_goes_on_after_undocking(self):

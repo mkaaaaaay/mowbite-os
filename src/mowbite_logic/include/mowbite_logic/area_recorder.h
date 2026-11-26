@@ -160,9 +160,9 @@ class AreaRecorder {
 
   // Drops everything recorded and not saved; an edit on its way is still reported when it is answered.
   void Reset();
-  // An action of mower_logic:area_recording without the prefix, except exit_recording_mode; why: the reason of a
-  // refusal that went out as RECORDING_REFUSED, empty for one without an event (the action is not enabled).
-  Result OnAction(const std::string& name, Reason* why = nullptr, double undo_meters = kUndoDefaultM);
+  // An action id of Actions(), except recording.exit; why: the reason of a refusal that went out as
+  // RECORDING_REFUSED, empty for one without an event (the action is not enabled).
+  Result OnAction(const std::string& id, Reason* why = nullptr, double undo_meters = kUndoDefaultM);
   // Points the last action cut off where the ring ran past its start.
   size_t trimmed_points() const {
     return trimmed_points_;
@@ -196,11 +196,16 @@ class AreaRecorder {
 
   // RECORD_OUTLINE, RECORD_OBSTACLE, RECORD_DOCKING_POSITION or empty, as OpenMower names them.
   std::string SubState() const;
-  // Enabled flags in the order of ActionNames().
+  // An action of the recorder: id of the catalog (empty for the two places of manual mowing, which no command
+  // stands for), name of the step as RECORDING_REFUSED gives it in action, label to show.
+  struct ActionEntry {
+    std::string id;
+    std::string name;
+    std::string label;
+  };
+  // Enabled flags in the order of Actions().
   std::vector<bool> Enabled() const;
-  static const std::vector<std::string>& ActionNames();
-  // The display name of each of them, in the same order.
-  static const std::vector<std::string>& ActionLabels();
+  static const std::vector<ActionEntry>& Actions();
 
   // Events since the last call, without a position.
   std::vector<Event> TakeEvents();
@@ -233,7 +238,7 @@ class AreaRecorder {
 
  private:
   Result Refuse(const std::string& action, const Reason& reason);
-  Result Act(const std::string& name, double undo_meters);
+  Result Act(const std::string& id, double undo_meters);
   // Ends the open ring: the outline if there is none yet, else an obstacle; a ring without points just ends.
   bool CloseRing(const std::string& action);
   Result Finish(const std::string& action, const std::string& type);
