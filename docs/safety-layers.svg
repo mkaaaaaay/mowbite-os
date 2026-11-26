@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 384" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <title>The safety layers of MowBite OS</title>
+  <rect width="960" height="384" rx="16" fill="#101114"/>
+
+  <path d="M52 356 V34" fill="none" stroke="#3a3d47" stroke-width="2" stroke-linecap="round"/>
+  <path d="M45 42 l7 -8 l7 8" fill="none" stroke="#3a3d47" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <text transform="translate(34 196) rotate(-90)" font-size="12" fill="#9a9ba0" text-anchor="middle" letter-spacing="0.6">EACH LAYER WORKS WITHOUT THE ONES ABOVE</text>
+
+  <g>
+    <rect x="84" y="24" width="852" height="58" rx="10" fill="#181a20" stroke="#2a2d35" stroke-width="1.5"/>
+    <circle cx="118" cy="53" r="15" fill="#22252d"/>
+    <text x="118" y="58.5" font-size="15" font-weight="700" fill="#f1f1f1" text-anchor="middle">5</text>
+    <text x="150" y="59" font-size="17" font-weight="600" fill="#f1f1f1">Plan</text>
+    <text x="352" y="59" font-size="14" fill="#9a9ba0">checks a path for the whole body of the mower, not just its middle</text>
+  </g>
+  <g>
+    <rect x="84" y="92" width="852" height="58" rx="10" fill="#181a20" stroke="#2a2d35" stroke-width="1.5"/>
+    <circle cx="118" cy="121" r="15" fill="#22252d"/>
+    <text x="118" y="126.5" font-size="15" font-weight="700" fill="#f1f1f1" text-anchor="middle">4</text>
+    <text x="150" y="127" font-size="17" font-weight="600" fill="#f1f1f1">Logic</text>
+    <text x="352" y="127" font-size="14" fill="#9a9ba0">asks for the blade only while it mows a lane and is not paused</text>
+  </g>
+  <g>
+    <rect x="84" y="160" width="852" height="58" rx="10" fill="#241f12" stroke="#d4ac4a" stroke-width="1.5"/>
+    <circle cx="118" cy="189" r="15" fill="#d4ac4a"/>
+    <text x="118" y="194.5" font-size="15" font-weight="700" fill="#101114" text-anchor="middle">3</text>
+    <text x="150" y="195" font-size="17" font-weight="600" fill="#f1f1f1">Safety filter</text>
+    <text x="352" y="195" font-size="14" fill="#c9bf9f">stops on tilt, outside the map and when the IMU falls silent</text>
+  </g>
+  <g>
+    <rect x="84" y="228" width="852" height="58" rx="10" fill="#181a20" stroke="#2a2d35" stroke-width="1.5"/>
+    <circle cx="118" cy="257" r="15" fill="#22252d"/>
+    <text x="118" y="262.5" font-size="15" font-weight="700" fill="#f1f1f1" text-anchor="middle">2</text>
+    <text x="150" y="263" font-size="17" font-weight="600" fill="#f1f1f1">Driver</text>
+    <text x="352" y="263" font-size="14" fill="#9a9ba0">its own process and watchdogs, the blade runs on a lease</text>
+  </g>
+  <g>
+    <rect x="84" y="296" width="852" height="58" rx="10" fill="#13241a" stroke="#4cbf72" stroke-width="1.5"/>
+    <circle cx="118" cy="325" r="15" fill="#4cbf72"/>
+    <text x="118" y="330.5" font-size="15" font-weight="700" fill="#101114" text-anchor="middle">1</text>
+    <text x="150" y="331" font-size="17" font-weight="600" fill="#f1f1f1">Board of the mower</text>
+    <text x="352" y="331" font-size="14" fill="#a3b8a9">stop button, lift and bumper in its own firmware</text>
+  </g>
+</svg>
