@@ -1,0 +1,11 @@
+# The YardForce NX60i itself: its values are those of the files of the platform (geometry.yaml, platform.yaml), with
+# what is measured and what is assumed noted there.
+texts:
+  de:
+    name: YardForce NX60i
+    help: Die Werte dieses Mähers sind in MowBite OS hinterlegt.
+  en:
+    name: YardForce NX60i
+    help: The values of this mower come with MowBite OS.
+measured: []
+parameters: {}

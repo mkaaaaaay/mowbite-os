@@ -1,14 +1,35 @@
 # The steps of the setup program of the NX60i (mowbite_setup, setup.*), in the order the app shows them. A step is one
 # of the checks of x-setup in the interface; params stay within the bounds given there. catalog goes up with every
 # change of the steps or of an image.
-catalog: 9
-# inputs_assign, blade and summary restart the OS: the launch ends and whatever runs it starts it again.
+catalog: 10
+# inputs_assign, blade, summary and an answer of model that changes values restart the OS: the launch ends and whatever
+# runs it starts it again.
 restart: self
 steps:
   - id: platform
     stage: device
     check: platform
     symbol: board
+  # The mower with this board: a file of profiles/ or another one. The start fills in values, texts and the values
+  # each writes (mowbite_bringup layers.expanded).
+  - id: model
+    stage: device
+    check: choice
+    from: profiles
+    params: {name: model}
+    texts:
+      de:
+        name: Mäher
+        help: >-
+          Welcher Mäher trägt die Platine? Die Werte eines bekannten Mähers kommen mit, für einen anderen gelten die
+          Maße aus dem Schritt Maße.
+        fix: Im Zweifel den anderen Mäher wählen und die Maße nachmessen.
+      en:
+        name: Mower
+        help: >-
+          Which mower carries the board? The values of a known mower come with it, for another one the dimensions of
+          the step dimensions count.
+        fix: When in doubt pick another mower and measure the dimensions.
   - id: variant
     stage: device
     check: choice

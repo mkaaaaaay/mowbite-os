@@ -1,6 +1,7 @@
 #include "mowbite_setup/steps.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <fstream>
 #include <iterator>
@@ -281,6 +282,27 @@ json DefaultTexts(const mowbite_api::SetupCheck& check, const Step& step) {
   return Texts(check.texts);
 }
 
+// {value: {node: {key: value}}} of a choice: every value one of its values, every parameter one MayWrite allows.
+json ValueParams(const json& given, const std::vector<std::string>& values, const std::string& where) {
+  if (!given.is_object()) throw Wrong(where + ": value_params is no object");
+  for (const auto& item : given.items()) {
+    const std::string at = where + ".value_params." + item.key();
+    if (std::find(values.begin(), values.end(), item.key()) == values.end()) throw Wrong(at + " is no value");
+    if (!item.value().is_object()) throw Wrong(at + " is no object");
+    for (const auto& node : item.value().items()) {
+      if (!node.value().is_object()) throw Wrong(at + "." + node.key() + " is no object");
+      for (const auto& param : node.value().items()) {
+        Layer probe;
+        if (!probe.Set(node.key(), param.key(), param.value()) ||
+            !MayWrite(node.key(), param.key(), param.value())) {
+          throw Wrong(at + ": " + node.key() + "." + param.key() + " is no value a choice may write");
+        }
+      }
+    }
+  }
+  return given;
+}
+
 Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_index) {
   if (!entry.is_object()) throw Wrong("a step is no object");
   Step step;
@@ -289,7 +311,7 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
   const std::string where = step.id;
   OnlyKeys(entry,
            {"id", "stage", "check", "params", "parts", "confirm", "needs", "skippable", "skip_reasons", "image",
-            "accent", "symbol", "mark", "open", "texts", "note", "value_texts"},
+            "accent", "symbol", "mark", "open", "texts", "note", "value_texts", "value_params"},
            where);
   for (const Step& other : before) {
     if (other.id == step.id) throw Wrong(where + " comes twice");
@@ -333,8 +355,9 @@ Step ReadStep(const json& entry, const std::vector<Step>& before, size_t* stage_
       NeedNames(named.texts, where + ".value_texts." + value);
       step.choices.push_back(std::move(named));
     }
-  } else if (entry.contains("value_texts")) {
-    throw Wrong(where + ": value_texts go with choice only");
+    if (entry.contains("value_params")) step.value_params = ValueParams(entry["value_params"], values, where);
+  } else if (entry.contains("value_texts") || entry.contains("value_params")) {
+    throw Wrong(where + ": value_texts and value_params go with choice only");
   }
   if (step.check == "geometry") {
     auto& keys = step.lists["keys"];
@@ -493,9 +516,10 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why) {
     size_t stage_index = 0;
     for (const auto& entry : list["steps"]) out.steps.push_back(ReadStep(entry, out.steps, &stage_index));
     for (const Step& step : out.steps) {
-      if (step.check != "inputs_assign" && step.check != "blade" && step.check != "summary") continue;
+      const bool node = step.check == "inputs_assign" || step.check == "blade" || step.check == "summary";
+      if (!node && step.value_params.empty()) continue;
       if (out.restart.empty()) throw Wrong(step.id + " needs restart at the top of the list");
-      if (!Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
+      if (node && !Layer::IsNode(step.Word("node"))) throw Wrong(step.id + ": node is no name of a node");
     }
     // summary writes the stand time of a step silence: one has to come before it, and only one summary.
     const auto summaries = std::count_if(out.steps.begin(), out.steps.end(),
@@ -548,6 +572,25 @@ std::string LoadImage(const std::string& folder, const std::string& name, std::s
   bytes->resize(static_cast<size_t>(in.gcount()));
   if (in.bad()) return "it cannot be read";
   return CheckImage(*bytes);
+}
+
+bool MayWrite(const std::string& node, const std::string& key, const json& value) {
+  if (!value.is_number() || !std::isfinite(value.get<double>()) || value.get<double>() < 0) return false;
+  if (node == "mowbite_localization") return key == "antenna_height";
+  if (node != "mowbite_logic") return false;
+  static const std::set<std::string> charge = {"battery_empty_voltage",  "battery_full_voltage",
+                                               "battery_critical_voltage", "dock_charge_voltage",
+                                               "charge_confirm_current",   "charge_confirm_timeout",
+                                               "charge_expected_below"};
+  if (charge.count(key)) return true;
+  const std::string prefix = "geometry.";
+  if (key.rfind(prefix, 0) != 0) return false;
+  const std::string name = key.substr(prefix.size());
+  const auto& keys = mowbite_api::GeometryKeys();
+  const auto found = std::find_if(keys.begin(), keys.end(), [&name](const auto& entry) { return entry.name == name; });
+  if (found == keys.end() || found->points || found->shape) return false;
+  const double x = value.get<double>();
+  return found->relative || (x >= found->min && x <= found->max);
 }
 
 unsigned EmergencyBit(const std::string& name) {

@@ -4,6 +4,8 @@ project(platform_nx60i)
 find_package(ament_cmake REQUIRED)
 
 install(FILES platform.py platform.yaml geometry.yaml DESTINATION share/${PROJECT_NAME})
+# The mowers with this board whose values differ (step model of the setup program).
+install(DIRECTORY profiles DESTINATION share/${PROJECT_NAME})
 # The steps of the setup program and their images.
 install(DIRECTORY setup DESTINATION share/${PROJECT_NAME})
 # The name mowbite.launch.py finds this platform by (platform:=nx60i).

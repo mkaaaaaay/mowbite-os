@@ -333,8 +333,8 @@ arguments may be out of scope.
 
 Optional `setup/setup.yaml` with `setup/images/`: the steps of the setup program the app walks the user through
 (`setup.*`, node `mowbite_setup`). Without the file the methods are not offered. `catalog` counts up with every change
-of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign` or `blade` and names how
-the OS restarts for it, `steps` come in the order the app shows them:
+of a step or an image, `restart` (`self` or `host`) is needed with a step `inputs_assign`, `blade` or a `choice` with
+`value_params` and names how the OS restarts for it, `steps` come in the order the app shows them:
 
 | Field | What |
 |---|---|
@@ -342,6 +342,8 @@ the OS restarts for it, `steps` come in the order the app shows them:
 | `params` | the params of the check, within the bounds the schema names; without an entry the default there |
 | `parts` | of `input`: `id`, optional `mode` (press, short), `role` and `texts`; of `inputs_assign`: `id`, `role`, `delay_ms`, optional `texts`; of `imu`: the moves in their order; of `stop_moving`: `id`, `role`, optional `texts`; none of `wheels`, `ground` and `blade` (fixed) |
 | `value_texts` | of `choice`: `de` and `en` with `name` for every value |
+| `value_params` | of `choice`: `{value: {node: {key: value}}}`, what the answer writes into the parameter file |
+| `from` | `profiles`: the start fills `values`, `value_texts` and `value_params` from `profiles/` (below) |
 | `confirm` | points the user ticks before the step begins (`x-setup.points`, or own ones with texts) |
 | `needs` | steps ahead of it that have to be ok first |
 | `skippable` | false for a step the user must not skip |
@@ -375,6 +377,22 @@ that counts and holds an input has to say so in `hw/inputs`, else the part waits
 With `hw/inputs` the step checks line by line: a part has to switch a line no part of its role switched before, as long
 as the role has one left, and at the end every line of the roles of the step has switched once, else it fails with
 `LINE_SILENT` and the lines. Two buttons on two lines need two parts; a pair of contacts on one part shows a dead one.
+
+Another mower with the same board needs no driver of its own, only its values: a file `profiles/<name>.yaml` in the
+package (installed with the share folder) with `texts` (`de`, `en`: `name`, `help`), `parameters` (a parameter file
+with the values of that mower) and `measured` (`<node>.<key>` of the values measured on such a mower; every other one
+is an assumption). A step `choice` with `from: profiles` offers every profile and `own`, another mower that keeps the
+values of the platform and gets its dimensions from the step `geometry`; the NX60i has it as step `model`. The answer
+writes the values of its profile into `<data_dir>/<name>.setup.yaml` and restarts the OS; another answer, `setup.reset`
+or an update that changed a profile writes the file anew, the file kept by hand still has the last word. Only values a
+mower can differ in are taken, anything else refuses the list (`PLATFORM_CONFIG`): `geometry.*` of `mowbite_logic`
+(numbers within the bounds of `x-geometry`, not `geometry.platform`), `battery_empty_voltage`,
+`battery_full_voltage`, `battery_critical_voltage`, `dock_charge_voltage`, `charge_confirm_current`,
+`charge_confirm_timeout`, `charge_expected_below` and `antenna_height` of `mowbite_localization`. Never a bound of
+motion, of the blade or of the safety, and never what the board charges with: like the firmware of the xCore, which is
+built for one battery, the battery of a board is not chosen in the app. Changes an answer the dimensions, the safety
+steps count again and a lock that is open closes with `RESET` until they and the summary passed. A profile is an
+assumption until the safety measurement of the mower: `NO_SAFETY_MEASUREMENT` holds as on every mower.
 
 `inputs_assign` is for a driver whose table of inputs is a setting, on a mower that may be wired another way than the
 table of the platform. `params.node` names the node of the driver, each part is one sensor with its `role` (stop,

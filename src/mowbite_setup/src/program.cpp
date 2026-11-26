@@ -39,6 +39,16 @@ constexpr double kLayerRetry = 5.0;
 constexpr double kRestartLost = 120.0;
 constexpr double kDegrees = 180.0 / M_PI;
 
+// The dimensions of params of ChoiceParams: the keys geometry.* of mowbite_logic.
+json GeometryOf(const json& params) {
+  json out = json::object();
+  if (!params.contains("mowbite_logic")) return out;
+  for (const auto& item : params["mowbite_logic"].items()) {
+    if (item.key().rfind("geometry.", 0) == 0) out[item.key()] = item.value();
+  }
+  return out;
+}
+
 constexpr const char* kStepEvent = "SETUP_STEP";
 
 // The roles that stand for all inputs of their kind: stop, lift, bumper.
@@ -1027,10 +1037,59 @@ std::optional<Refusal> Program::Answer(const json& params, double now, double wa
   }
   if (!valid) return Refuse("INVALID_VALUE", name + " is no value " + step.id + " takes", {{"name", name}});
   Record& record = RecordOf(step);
+  const json before = ChoiceParams();
   ++record.attempt;
   record.answers = {{name, value}};
   Pass(step, 0, wall);
+  if (!step.value_params.empty() && GeometryOf(before) != GeometryOf(ChoiceParams())) GeometryChanged(wall);
   return std::nullopt;
+}
+
+json Program::ChoiceParams() const {
+  json params = json::object();
+  for (const Step& step : list_.steps) {
+    const Record& record = records_.at(step.id);
+    if (step.value_params.empty() || record.state != "ok") continue;
+    const json& answer = record.answers.value(step.Word("name"), json());
+    if (!answer.is_string() || !step.value_params.contains(answer.get<std::string>())) continue;
+    for (const auto& node : step.value_params[answer.get<std::string>()].items()) {
+      for (const auto& param : node.value().items()) params[node.key()][param.key()] = param.value();
+    }
+  }
+  return params;
+}
+
+void Program::TickChoiceParams(double now) {
+  if (!layer_set_ || !writable_ || layer_dirty_ || layer_pending_) return;
+  if (layer_failed_ >= 0 && now - layer_failed_ < kLayerRetry) return;
+  const json wanted = ChoiceParams();
+  bool changed = false;
+  for (const Step& step : list_.steps) {
+    for (const auto& value : step.value_params) {
+      for (const auto& node : value.items()) {
+        for (const auto& param : node.value().items()) {
+          const json want = wanted.contains(node.key()) ? wanted[node.key()].value(param.key(), json()) : json();
+          if (layer_.Get(node.key(), param.key()) == want) continue;
+          if (want.is_null()) {
+            layer_.Erase(node.key(), param.key());
+          } else {
+            layer_.Set(node.key(), param.key(), want);
+          }
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) WantRestart();
+}
+
+void Program::GeometryChanged(double wall) {
+  for (const Step& step : list_.steps) {
+    const mowbite_api::SetupCheck* check = mowbite_api::FindSetupCheck(step.check);
+    if (check && check->safety && RecordOf(step).state == "ok") RecordOf(step) = Record();
+  }
+  ReopenSummary();
+  if (!capabilities_.safety_measurement_date.empty()) CloseWithReset(wall);
 }
 
 // accept yes takes the line ask names for its part, no leaves the part waiting for another one.
@@ -1230,6 +1289,7 @@ void Program::Tick(double now, double wall) {
     settings_due_ = EraseSettings();
   }
   TickLearning(now);
+  TickChoiceParams(now);
   TickRelease(now);
   TickWaiting(wall);
 }

@@ -467,6 +467,13 @@ class Program {
   bool RestartAllowed(double now) const;
   void WantRestart();
   void TickLearning(double now);
+  // What the answered choices with value_params write, {node: {key: value}}, a later step winning.
+  json ChoiceParams() const;
+  // The parameter file holds what ChoiceParams gives and nothing else of value_params; after a change the OS restarts
+  // with it. Also after an update that changed the values of an answer.
+  void TickChoiceParams(double now);
+  // An answer changed the dimensions: the safety steps and the summary count again, and an open lock closes.
+  void GeometryChanged(double wall);
   void TickAssign(double now, double wall);
   void EnterAssign(Assign stage, double now);
   void BeginAssignPart(double now, double wall);

@@ -2256,3 +2256,131 @@ TEST(Lock, TheCountOfFailuresOutlivesTheFileThatWent) {
   bench.Bump(false);
   EXPECT_EQ(mowbite_hold::ParseSafetyLock(*bench.program.TakeLock())->failures, 2u);
 }
+
+namespace {
+
+const char* const kModelList = R"({
+  "catalog": 1,
+  "restart": "self",
+  "steps": [
+    {"id": "model", "stage": "device", "check": "choice", "params": {"name": "model", "values": ["a", "b", "own"]},
+     "value_texts": {"a": {"de": {"name": "A"}, "en": {"name": "A"}}, "b": {"de": {"name": "B"}, "en": {"name": "B"}},
+                     "own": {"de": {"name": "Eigener"}, "en": {"name": "Own"}}},
+     "value_params": {"a": {"mowbite_logic": {"geometry.robot_width": 0.6, "battery_empty_voltage": 24.0}},
+                      "b": {"mowbite_logic": {"geometry.robot_width": 0.6, "battery_empty_voltage": 25.0}}},
+     "texts": {"de": {"name": "Mäher"}, "en": {"name": "Mower"}}},
+    {"id": "board", "stage": "device", "check": "board", "params": {"time": 2, "battery": 20}},
+    {"id": "stop", "stage": "inputs", "check": "input", "params": {"role": "stop", "time": 10},
+     "parts": [{"id": "top"}]}
+  ]})";
+
+struct ModelBench : Bench {
+  ModelBench() : Bench(kModelList) {
+    node = true;
+    world.state = "IDLE";
+    program.OnWorld(world);
+    program.SetLayer(Layer(), {});
+    Run(0.2);
+  }
+  std::string Choose(const std::string& value) {
+    const std::string refused = Refused(
+        program.Answer({{"step", "model"}, {"version", program.version()}, {"values", {{"model", value}}}}, now,
+                       kWall + now));
+    Run(0.3);
+    return refused;
+  }
+  // The OS started again with this list over the record and the parameter file as written.
+  void Restart(const json& list) {
+    program = Program(*ParseSteps(list, nullptr), "tron");
+    std::string why;
+    ASSERT_TRUE(program.Load(saved, kWall + now, &why)) << why;
+    Layer layer;
+    ASSERT_TRUE(layer.Parse(layer_text, &why)) << why;
+    program.SetLayer(layer, {});
+    program.OnCapabilities(capabilities);
+    program.OnWorld(world);
+    Run(0.3);
+  }
+  json Safety() {
+    return State()["safety"];
+  }
+
+  World world;
+};
+
+}  // namespace
+
+TEST(Choice, AnAnswerWritesTheValuesOfItsValueAndRestartsOnce) {
+  ModelBench bench;
+  ASSERT_EQ(bench.Choose("a"), "");
+  EXPECT_EQ(bench.StepState("model")["state"], "ok");
+  EXPECT_EQ(bench.restarts, 1);
+  EXPECT_NE(bench.layer_text.find("    geometry.robot_width: 0.6\n"), std::string::npos) << bench.layer_text;
+  EXPECT_NE(bench.layer_text.find("    battery_empty_voltage: 24.0\n"), std::string::npos) << bench.layer_text;
+  // The same answer again changes nothing.
+  ASSERT_EQ(bench.Choose("a"), "");
+  EXPECT_EQ(bench.restarts, 1);
+  // A value without values takes those of the other one out again.
+  ASSERT_EQ(bench.Choose("own"), "");
+  EXPECT_EQ(bench.restarts, 2);
+  EXPECT_EQ(bench.layer_text, "");
+}
+
+TEST(Choice, TheParameterFileFollowsTheValuesOfTheList) {
+  ModelBench bench;
+  ASSERT_EQ(bench.Choose("a"), "");
+  ASSERT_EQ(bench.restarts, 1);
+  // Started again with the same list, nothing is written or restarted.
+  bench.Restart(json::parse(kModelList));
+  EXPECT_EQ(bench.restarts, 1);
+  // An update changed the values of a: the file takes them, once.
+  json list = json::parse(kModelList);
+  list["steps"][0]["value_params"]["a"]["mowbite_logic"]["geometry.robot_width"] = 0.65;
+  bench.Restart(list);
+  EXPECT_EQ(bench.restarts, 2);
+  EXPECT_NE(bench.layer_text.find("geometry.robot_width: 0.65\n"), std::string::npos) << bench.layer_text;
+  bench.Restart(list);
+  EXPECT_EQ(bench.restarts, 2);
+  // setup.reset takes the answer and with it the values.
+  ASSERT_FALSE(bench.program.Reset({{"version", bench.program.version()}}));
+  bench.Run(0.3);
+  EXPECT_EQ(bench.restarts, 3);
+  EXPECT_EQ(bench.layer_text, "");
+}
+
+TEST(Choice, NothingIsWrittenWhileTheFileCannotBe) {
+  ModelBench bench;
+  bench.layer_ok = false;
+  ASSERT_EQ(bench.Choose("a"), "");
+  EXPECT_EQ(bench.restarts, 0);
+  bench.layer_ok = true;
+  bench.Run(5.2);
+  EXPECT_EQ(bench.restarts, 1);
+  EXPECT_NE(bench.layer_text.find("geometry.robot_width: 0.6\n"), std::string::npos) << bench.layer_text;
+}
+
+TEST(Choice, OtherDimensionsCloseTheLockAndOpenTheSafetySteps) {
+  ModelBench bench;
+  ASSERT_EQ(bench.Choose("a"), "");
+  bench.PassBoard();
+  ASSERT_EQ(bench.Refused(bench.Start("stop")), "");
+  bench.Run(0.2);
+  bench.Press(&Hardware::stop, 4, 0.1, 0.5);
+  bench.hardware.emergency_reason = 0;
+  bench.Run(0.3);
+  ASSERT_EQ(bench.StepState("stop")["state"], "ok");
+  bench.capabilities.safety_measurement_date = "2026-11-26";
+  bench.program.OnCapabilities(bench.capabilities);
+  ASSERT_EQ(bench.Safety()["open"], true);
+  // Another battery with the same dimensions keeps both.
+  ASSERT_EQ(bench.Choose("b"), "");
+  EXPECT_EQ(bench.Safety()["open"], true);
+  EXPECT_EQ(bench.StepState("stop")["state"], "ok");
+  // Other dimensions: the safety steps count again, and a reset holds the lock until they and a summary passed.
+  ASSERT_EQ(bench.Choose("own"), "");
+  const json safety = bench.Safety();
+  EXPECT_EQ(safety["open"], false);
+  EXPECT_EQ(safety["why"], "RESET");
+  EXPECT_EQ(bench.StepState("stop")["state"], "open");
+  EXPECT_EQ(bench.StepState("board")["state"], "ok");
+}

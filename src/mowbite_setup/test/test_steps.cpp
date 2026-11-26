@@ -196,3 +196,50 @@ TEST(Steps, EmergenciesByTheBitsOfTheInterface) {
   EXPECT_EQ(mowbite_setup::EmergencyBit("COLLISION"), 32u);
   EXPECT_EQ(mowbite_setup::EmergencyBit("NONE"), 0u);
 }
+
+TEST(Steps, AChoiceWritesOnlyDimensionsBatteryAndCharge) {
+  json list = List();
+  list["restart"] = "self";
+  json& variant = list["steps"][0];
+  variant["value_params"] = {{"rebuilt", {{"mowbite_logic", {{"geometry.robot_width", 0.6},
+                                                             {"battery_empty_voltage", 24.0}}},
+                                          {"mowbite_localization", {{"antenna_height", 0.3}}}}}};
+  std::string why;
+  const auto read = ParseSteps(list, &why);
+  ASSERT_TRUE(read) << why;
+  EXPECT_EQ(read->steps[0].value_params["rebuilt"]["mowbite_logic"]["geometry.robot_width"], 0.6);
+
+  const auto refused = [&list](const json& params) {
+    json changed = list;
+    changed["steps"][0]["value_params"] = {{"rebuilt", params}};
+    std::string why;
+    EXPECT_FALSE(ParseSteps(changed, &why).has_value()) << params.dump();
+    return why;
+  };
+  // Never a bound of motion, of the blade or of the safety, nor what the board charges with.
+  EXPECT_NE(refused({{"mowbite_safety", {{"tilt_limit", 40.0}}}}).find("no value a choice may write"),
+            std::string::npos);
+  refused({{"mowbite_follower", {{"max_linear", 0.5}}}});
+  refused({{"xcore_driver", {{"charge_voltage", 30.0}}}});
+  refused({{"mowbite_logic", {{"contact_speed", 0.2}}}});
+  // geometry.platform names the driver; a list or a value outside the interface is none either.
+  refused({{"mowbite_logic", {{"geometry.platform", "other"}}}});
+  refused({{"mowbite_logic", {{"geometry.robot_outline", json::array({0.1, 0.2})}}}});
+  refused({{"mowbite_logic", {{"geometry.robot_width", 30.0}}}});
+  refused({{"mowbite_logic", {{"battery_empty_voltage", -1.0}}}});
+  refused({{"mowbite_logic", {{"battery_empty_voltage", "24"}}}});
+
+  json other = list;
+  other["steps"][0]["value_params"] = {{"older", json::object()}};
+  EXPECT_FALSE(ParseSteps(other, &why).has_value());
+  EXPECT_NE(why.find("older is no value"), std::string::npos) << why;
+  // Values written need a restart to count.
+  other = list;
+  other.erase("restart");
+  EXPECT_FALSE(ParseSteps(other, &why).has_value());
+  EXPECT_NE(why.find("needs restart"), std::string::npos) << why;
+  other = list;
+  other["steps"][8]["value_params"] = json::object();
+  EXPECT_FALSE(ParseSteps(other, &why).has_value());
+  EXPECT_NE(why.find("go with choice only"), std::string::npos) << why;
+}

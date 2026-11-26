@@ -4,6 +4,7 @@ the latch of a restart.
 Run in a sourced workspace (stack.py of mowbite_bringup, xcore_driver): python3 -m pytest
 /ws/src/platform_nx60i/test/test_platform.py
 """
+import json
 import os
 import sys
 
@@ -73,3 +74,11 @@ def test_arguments_go_to_the_driver(drivers):
 def test_a_datum_that_is_no_number_ends_the_start(drivers, value):
     with pytest.raises(RuntimeError):
         drivers(datum_lat=value)
+
+
+def test_the_step_model_offers_the_nx60i_and_another_mower():
+    steps = json.loads(layers.setup("nx60i", os.path.join(HERE, ".."))["steps"])["steps"]
+    model = next(step for step in steps if step["id"] == "model")
+    assert model["params"]["values"] == ["nx60i", "own"]
+    # The NX60i keeps the values of its platform files.
+    assert model["value_params"] == {}

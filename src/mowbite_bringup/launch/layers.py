@@ -53,10 +53,69 @@ def images(home):
     return os.path.join(home, "setup", "images")
 
 
+# The value of a step from: profiles for a mower of none of the profiles.
+OWN = ("own", {
+    "de": {"name": "Anderer Mäher",
+           "help": "Die Maße im Schritt Maße eintragen. Alle anderen Werte sind die der Plattform, auch der Akku, den "
+                   "die Platine vorgibt, und gelten als Annahme, bis die Sicherheitsmessung sie prüft."},
+    "en": {"name": "Another mower",
+           "help": "Enter the dimensions in the step dimensions. Every other value is the one of the platform, the "
+                   "battery too, which the board sets, and counts as an assumption until the safety measurement "
+                   "checks it."},
+}, {})
+
+
+def profiles(home):
+    """[(value, texts, parameters)] of the files profiles/<name>.yaml in the share folder home of a platform: a
+    mower of the board of the platform with values of its own. A file has texts (de, en: name, help), parameters (a
+    parameter file: the values of this mower, the setup program writes them when it is chosen) and measured
+    (<node>.<key> of those measured on such a mower, every other one an assumption). ValueError for a file that is
+    not one."""
+    folder = os.path.join(home, "profiles")
+    names = sorted(name for name in os.listdir(folder) if name.endswith(".yaml")) if os.path.isdir(folder) else []
+    choices = []
+    for name in names:
+        path = os.path.join(folder, name)
+        try:
+            with open(path) as f:
+                content = yaml.safe_load(f)
+        except yaml.YAMLError as error:
+            raise ValueError(f"{path}: {error}")
+        if not isinstance(content, dict) or set(content) != {"texts", "measured", "parameters"}:
+            raise ValueError(f"{path}: texts, measured and parameters are needed, nothing else")
+        try:
+            parameters = {node: flat((section or {})["ros__parameters"] or {})
+                          for node, section in (content["parameters"] or {}).items()}
+        except (AttributeError, KeyError, TypeError):
+            raise ValueError(f"{path}: parameters is no parameter file")
+        given = {f"{node}.{key}" for node, values in parameters.items() for key in values}
+        measured = content["measured"] or []
+        if not isinstance(measured, list) or not set(measured) <= given:
+            raise ValueError(f"{path}: measured names a value that parameters does not have")
+        choices.append((name[:-len(".yaml")], content["texts"], {node: v for node, v in parameters.items() if v}))
+    return choices
+
+
+def expanded(steps, home):
+    """The step list with the values of a step with from: profiles (profiles() and OWN) in params.values,
+    value_texts and value_params."""
+    for step in steps.get("steps") or []:
+        source = step.pop("from", None) if isinstance(step, dict) else None
+        if source is None:
+            continue
+        if source != "profiles":
+            raise ValueError(f"{step.get('id')}: from {source!r} is not profiles")
+        choices = profiles(home) + [OWN]
+        step["params"] = {**(step.get("params") or {}), "values": [value for value, _, _ in choices]}
+        step["value_texts"] = {value: texts for value, texts, _ in choices}
+        step["value_params"] = {value: parameters for value, _, parameters in choices if parameters}
+    return steps
+
+
 def setup(platform, folder_of=None):
     """The parameters of mowbite_setup for this platform: the name its driver reports (geometry.platform of its
-    geometry.yaml), the step list of setup/setup.yaml as JSON and the folder of its images; an empty list for a
-    platform without one. OSError or ValueError when it cannot be read."""
+    geometry.yaml), the step list of setup/setup.yaml as JSON with the values of its steps from (expanded()) and the
+    folder of its images; an empty list for a platform without one. OSError or ValueError when it cannot be read."""
     home = folder_of or folder(platform)
     root = os.path.join(home, "setup")
     if not os.path.isfile(os.path.join(root, "setup.yaml")):
@@ -71,7 +130,7 @@ def setup(platform, folder_of=None):
     name = parameters([dimensions], "mowbite_logic").get("geometry.platform")
     if not name:
         raise ValueError(f"{dimensions}: geometry.platform is missing")
-    return {"platform": name, "steps": json.dumps(steps), "image_dir": images(home)}
+    return {"platform": name, "steps": json.dumps(expanded(steps, home)), "image_dir": images(home)}
 
 
 def driver_ports(paths):

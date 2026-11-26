@@ -49,6 +49,9 @@ struct Step {
   std::vector<Part> parts;
   // Texts of the values of a choice, in the order of its values.
   std::vector<Named> choices;
+  // A choice: what each value writes into the parameter file, {value: {node: {key: value}}}; see value_params of
+  // ParseSteps.
+  json value_params = json::object();
   std::string open;
   std::string image;
   std::string accent;
@@ -78,7 +81,8 @@ struct StepList {
 
 // The list as {"catalog": N, "restart": way, "steps": [...]}. Nothing with the first problem in why: a field the
 // catalog does not know, a value outside of the bounds of the code, a step that needs a later one, a text missing in
-// de or en.
+// de or en. A choice can give value_params: the parameters the answer writes into the parameter file, only those of
+// MayWrite, and the list then needs restart.
 std::optional<StepList> ParseSteps(const json& list, std::string* why);
 
 // What is wrong with an image of a step, empty for none: SVG of one colour without text, raster images, scripts,
@@ -86,6 +90,10 @@ std::optional<StepList> ParseSteps(const json& list, std::string* why);
 std::string CheckImage(const std::string& svg);
 // Reads the image of this name in the folder; what is wrong with it or with reading it, empty for none.
 std::string LoadImage(const std::string& folder, const std::string& name, std::string* bytes);
+
+// Whether value_params may write this value: a dimension of geometry within the bounds of the interface, a value of
+// the battery or the charge, or the height of the antenna. Never a bound of motion, of the blade or of the safety.
+bool MayWrite(const std::string& node, const std::string& key, const json& value);
 
 // The emergency bit of hw/status a name of SetupEmergencies() stands for, 0 for NONE.
 unsigned EmergencyBit(const std::string& name);

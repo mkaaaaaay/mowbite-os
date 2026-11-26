@@ -189,6 +189,49 @@ def test_a_file_that_cannot_be_read_halts(tmp_path, halt_file, content):
                                             "A parameter file cannot be read: ")
 
 
+PROFILE = """texts:
+  de: {name: Groß, help: Ein großer.}
+  en: {name: Big, help: A big one.}
+measured: [mowbite_logic.geometry.robot_width]
+parameters:
+  mowbite_logic:
+    ros__parameters:
+      geometry: {robot_width: 0.6, track: 0.4}
+"""
+
+
+def test_a_step_from_profiles_offers_every_profile_and_another_mower(tmp_path):
+    (tmp_path / "profiles").mkdir()
+    write(tmp_path / "profiles" / "big.yaml", PROFILE)
+    write(tmp_path / "profiles" / "plain.yaml", "texts: {de: {name: P}, en: {name: P}}\nmeasured: []\nparameters: {}\n")
+    steps = {"steps": [{"id": "model", "check": "choice", "from": "profiles", "params": {"name": "model"}},
+                       {"id": "board", "check": "board"}]}
+    step = layers.expanded(steps, str(tmp_path))["steps"][0]
+    assert "from" not in step
+    assert step["params"] == {"name": "model", "values": ["big", "plain", "own"]}
+    assert step["value_texts"]["big"]["en"]["name"] == "Big" and step["value_texts"]["own"] == layers.OWN[1]
+    # Only a profile with values writes some.
+    assert step["value_params"] == {"big": {"mowbite_logic": {"geometry.robot_width": 0.6, "geometry.track": 0.4}}}
+    assert layers.expanded({"steps": [{"id": "x", "from": "profiles"}]}, str(tmp_path / "none"))["steps"][0][
+        "params"]["values"] == ["own"]
+
+
+@pytest.mark.parametrize("content, problem", [
+    (PROFILE + "extra: 1\n", "nothing else"),
+    (PROFILE.replace("measured: [mowbite_logic.geometry.robot_width]", "measured: [mowbite_logic.geometry.x]"),
+     "measured names"),
+    (PROFILE.replace("    ros__parameters:\n", "    values:\n"), "no parameter file"),
+    ("texts: [", "big.yaml"),
+])
+def test_a_profile_that_is_none_is_refused(tmp_path, content, problem):
+    (tmp_path / "profiles").mkdir()
+    write(tmp_path / "profiles" / "big.yaml", content)
+    with pytest.raises(ValueError, match=problem):
+        layers.profiles(str(tmp_path))
+    with pytest.raises(ValueError, match="is not profiles"):
+        layers.expanded({"steps": [{"id": "x", "from": "battery"}]}, str(tmp_path))
+
+
 @pytest.mark.parametrize("platform", PLATFORMS)
 def test_a_platform_has_what_the_start_asks_for(platform):
     module = stack.platform_module(platform)
