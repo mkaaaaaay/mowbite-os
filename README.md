@@ -40,8 +40,8 @@ MQTT and JSON-RPC interface of OpenMower and adds methods of its own. The mower 
 so the app only shows what your mower really has.
 
 > [!WARNING]
-> **Beta.** MowBite OS runs on one mower so far, our own Airseekers Tron, and things still change. A robot mower has
-> a turning blade and drives by itself. Read [Safety](#safety) before you put it on a mower.
+> **Beta.** MowBite OS is at an early stage and things still change. A robot mower has a turning blade and drives by
+> itself. Read [Safety](#safety) before you put it on a mower.
 
 MowBite OS is a community project and not affiliated with Airseekers or YardForce. Questions, test reports and news:
 the [MowBite Discord](https://discord.gg/VpPFRx9Ce4).
@@ -98,7 +98,7 @@ The first drive of a mower: RTK fix, slow, someone at the stop button.
 
 | Mower | Board | Status |
 | --- | --- | --- |
-| Airseekers Tron | its MCU on a serial port, GNSS and IMU read directly | **Beta**, on our own Tron: recording, mowing, driving home and docking run there. Needs vendor software 1.3.32 or 1.3.33 before the installation. |
+| Airseekers Tron | its MCU on a serial port, GNSS and IMU read directly | **Beta**: recording, mowing, driving home and docking run. Needs vendor software 1.3.32 or 1.3.33 before the installation. |
 | YardForce NX60i with an xCore board | xCore on Ethernet | **In progress.** Driver, platform package and simulation are there. The safety measurement on the mower is still open, so it is not ready for use. |
 
 Every mower is reached through one neutral contract (`hw/*`). Nothing above the driver knows a mower by name, so a
