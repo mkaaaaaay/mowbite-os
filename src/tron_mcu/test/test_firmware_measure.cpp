@@ -354,7 +354,7 @@ TEST_F(MeasureTest, WhenTheSignalEndsStopBladeOffAndANewLatch) {
   const auto zeros = Times(IsZeroSpeed, last);
   ASSERT_GE(zeros.size(), 3u);
   EXPECT_LE(zeros.front(), last + kFirmwareMeasureFreshS + 0.02);
-  EXPECT_FALSE(Times(IsBladeOff, last).empty());
+  ASSERT_FALSE(Times(IsBladeOff, last).empty());
   EXPECT_LE(Times(IsBladeOff, last).front(), last + kFirmwareMeasureFreshS + 0.02);
   EXPECT_TRUE(Times(IsMovingSpeed, zeros.front()).empty());
   // The signal again: the latch stays until a new release.
@@ -418,18 +418,30 @@ TEST_F(MeasureTest, TheFirstSignalOnlySetsWhereTheCountStands) {
   EXPECT_EQ(control_.Status(now_).clear_seq, 0u);
 }
 
-TEST_F(MeasureTest, AClearWaitsForStandingWheelsAndBlade) {
+TEST_F(MeasureTest, AClearWaitsForStandingWheels) {
   Run(0.1);
   ASSERT_TRUE(DrivesOrMows(0.3));
-  control_.OnBladeRpm(3000, now_);
+  control_.SetBlade(BladeRequest{}, now_);
   wheel_linear_ = 0.1f;
   ++clear_seq_;
+  // The command ran out at 0.65, the wheels still report turning.
+  Run(0.8);
+  EXPECT_TRUE(Times(IsClear).empty());
+  wheel_linear_ = 0.0f;
+  Run(0.9);
+  EXPECT_EQ(Times(IsClear).size(), 1u);
+}
+
+TEST_F(MeasureTest, AClearWaitsForTheBladeOffAndStanding) {
+  Run(0.1);
+  ASSERT_TRUE(DrivesOrMows(0.3, 0.0f, 0.0f));
+  ++clear_seq_;
+  // The blade is on, its motor not reported yet.
   Run(0.6);
   EXPECT_TRUE(Times(IsClear).empty());
+  control_.OnBladeRpm(3000, now_);
   control_.SetBlade(BladeRequest{}, now_);
-  wheel_linear_ = 0.0f;
   Run(0.7);
-  // The blade was on: its motor has to report standing first.
   EXPECT_TRUE(Times(IsClear).empty());
   control_.OnBladeRpm(0, now_);
   Run(0.8);

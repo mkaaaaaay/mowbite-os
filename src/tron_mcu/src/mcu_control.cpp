@@ -831,13 +831,13 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
 void McuControl::UpdateMeasure(double now, std::vector<SubPacket>& out) {
   const bool open = MeasureOpen(now);
   if (measure_open_ && !open) {
-    // The measurement no longer holds: stop, blade off, and a new reason that a release asked for before does not end.
+    // The measurement no longer holds: a new reason that a release asked for before does not end; blocked, the tick
+    // below sends the stop and drops the blade.
     Latch(kReasonFirmwareIncompatible, true);
     release_until_s_.reset();
     if (moving_ || !DockContact()) StartStop(now);
     moving_ = false;
     pending_cmd_.reset();
-    DropBlade(BladeOffReason::kBlocked);
   }
   measure_open_ = open;
 
