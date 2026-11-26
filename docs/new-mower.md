@@ -472,6 +472,13 @@ every result goes back and the lock closes with a reset until the summary passed
 choice is fixed (`PLATFORM_FIXED`). Give a new platform an `ABOUT` with `name`, `text` and `board` (what the driver
 expects at which port) in de and en.
 
+The app can look at the serial ports of the mower, in the stage of the choice too: `setup.ports` lists them from
+`/sys/class/tty` without opening one (USB ids and texts, links of `/dev/serial/by-id`, who holds it, the node of the
+platform that uses it), and `setup.ports.listen` listens read-only on a free one at the usual rates and tells NMEA,
+WIT frames and RTCM apart (`mowbite_serial/ports.h`, `recognize.h`). It never listens on a port of a driver, only
+while the mower rests, and never sends. A port counts as used by a node when the parameter files give that node a
+parameter `port` with a device under `/dev`: name the port of your driver that way and it is left alone.
+
 Every node in the container runs in its own thread (`component_container_isolated`), so a node that waits stalls only
 itself. A node of your own (lights, sound, camera) follows the same rule as the others: nothing that blocks in a
 callback of the driving chain (pose, safety, follower, logic), no `fsync` or network there; files that must last go

@@ -1,7 +1,9 @@
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <filesystem>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <map>
@@ -32,6 +34,7 @@
 #include <sensor_msgs/msg/imu.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -45,7 +48,9 @@
 #include "mowbite_hold/restart.h"
 #include "mowbite_map/sha256.h"
 #include "mowbite_ntrip/ntrip_protocol.h"
+#include "mowbite_serial/ports.h"
 #include "mowbite_setup/layer.h"
+#include "mowbite_setup/ports.h"
 #include "mowbite_setup/program.h"
 #include "mowbite_setup/steps.h"
 #include "mowbite_watch/attach.h"
@@ -113,6 +118,11 @@ struct Image {
 // mowbite_safety caps, and hw/silence or hw/end of the driver.
 class SetupNode : public rclcpp::Node {
  public:
+  ~SetupNode() override {
+    listen_stop_ = true;
+    if (listen_thread_.joinable()) listen_thread_.join();
+  }
+
   explicit SetupNode(const rclcpp::NodeOptions& options)
       : rclcpp::Node("mowbite_setup", mowbite_component::StartupOnly(options)) {
     data_dir_ = declare_parameter("data_dir", std::string());
@@ -129,6 +139,19 @@ class SetupNode : public rclcpp::Node {
     LoadPlatformImages(&platforms);
     chosen_ = declare_parameter("chosen", std::string());
     const bool fixed = declare_parameter("fixed", std::string("false")) == "true";
+    // The ports the nodes of the platform use ({path: node}) and paths listed besides those of /sys (simulation).
+    const json drivers = json::parse(declare_parameter("driver_ports", std::string("{}")), nullptr, false);
+    if (drivers.is_object()) {
+      for (const auto& [path, node] : drivers.items()) {
+        if (node.is_string()) driver_ports_[Canonical(path)] = node.get<std::string>();
+      }
+    }
+    const json extra = json::parse(declare_parameter("ports_extra", std::string("[]")), nullptr, false);
+    if (extra.is_array()) {
+      for (const auto& path : extra) {
+        if (path.is_string()) ports_extra_.push_back(path.get<std::string>());
+      }
+    }
 
     response_pub_ = create_publisher<mowbite_msgs::msg::RpcResponse>("bridge/rpc/response", 100);
     error_pub_ = create_publisher<RpcError>("bridge/rpc/error", 100);
@@ -535,6 +558,7 @@ class SetupNode : public rclcpp::Node {
   void OnTick() {
     std::lock_guard<std::mutex> lock(mutex_);
     const double now = MonotonicSeconds();
+    if (!listening_.empty() && !Resting()) listen_stop_ = true;
     // Right after this node stood still, setup.keep and hw/status may still wait in the queue: the next tick judges.
     if (!tick_gap_.Judge(now)) return;
     TakeSaved();
@@ -725,6 +749,60 @@ class SetupNode : public rclcpp::Node {
                {"type", "image/svg+xml"}});
   }
 
+  static std::string Canonical(const std::string& path) {
+    std::error_code error;
+    const auto canonical = std::filesystem::weakly_canonical(path, error);
+    return error ? path : canonical.string();
+  }
+
+  // The mower rests: in the choice of the mower, or in SETUP or IDLE without a running step. Called with the mutex.
+  bool Resting() const {
+    return choice_ || (!program_->running() && (world_.state == "IDLE" || world_.state == "SETUP"));
+  }
+
+  // The ports as setup.ports shows them; reads /sys and /proc outside of the mutex.
+  PortsView Ports() {
+    PortsView view;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      view.resting = Resting();
+      view.listening = listening_;
+    }
+    view.driver_ports = driver_ports_;
+    view.holders = mowbite_serial::HoldersOf;
+    view.ports = mowbite_serial::ListPorts();
+    for (const auto& path : ports_extra_) view.ports.push_back({path, {}, "", std::nullopt});
+    return view;
+  }
+
+  // setup.ports.listen: one listen at a time in a thread of its own, answered when it ends.
+  void OnListen(const std::string& id, const json& params) {
+    const PortsView view = Ports();
+    ListenRequest request;
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::optional<Refusal> refusal = CheckListen(params, view, &request);
+    // Another listen may have begun since Ports() read it.
+    if (!refusal && !listening_.empty()) {
+      refusal = Refusal{"LISTENING", "Already listening", {{"port", listening_}}, ""};
+    }
+    if (refusal) return ReplyRefusal(id, *refusal);
+    if (listen_thread_.joinable()) listen_thread_.join();
+    listening_ = request.port;
+    listen_stop_ = false;
+    listen_thread_ = std::thread([this, id, request] {
+      const mowbite_serial::Listened listened =
+          mowbite_serial::Listen(request.port, request.bauds, request.seconds, listen_stop_);
+      json answer;
+      if (const auto refused = ListenAnswer(request.port, listened, &answer)) {
+        ReplyRefusal(id, *refused);
+      } else {
+        Reply(id, answer);
+      }
+      std::lock_guard<std::mutex> done(mutex_);
+      listening_.clear();
+    });
+  }
+
   void OnRequest(const mowbite_msgs::msg::RpcRequest& request) {
     if (request.method.rfind("setup.", 0) != 0) return;
     json params;
@@ -737,6 +815,14 @@ class SetupNode : public rclcpp::Node {
     }
     if (request.method == "setup.image") {
       OnImage(request.id, params);
+      return;
+    }
+    if (request.method == "setup.ports") {
+      Reply(request.id, PortsAnswer(Ports()));
+      return;
+    }
+    if (request.method == "setup.ports.listen") {
+      OnListen(request.id, params);
       return;
     }
     if (request.method == "setup.keep") {
@@ -794,6 +880,12 @@ class SetupNode : public rclcpp::Node {
   }
 
   std::mutex mutex_;
+  std::map<std::string, std::string> driver_ports_;
+  std::vector<std::string> ports_extra_;
+  // The port of the listen that runs, empty for none; its thread ends early once listen_stop_ is set.
+  std::string listening_;
+  std::atomic<bool> listen_stop_{false};
+  std::thread listen_thread_;
   std::string data_dir_;
   std::string layer_path_;
   std::optional<Program> program_;

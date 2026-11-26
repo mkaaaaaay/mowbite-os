@@ -8,8 +8,9 @@ add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
 find_package(mowbite_hold REQUIRED)
 
-# The port of a driver and the processes that hold a device, without ROS.
-add_library(mowbite_serial STATIC src/serial_port.cpp)
+# The port of a driver, the processes that hold a device, the serial devices of the machine and what a port sends,
+# without ROS.
+add_library(mowbite_serial STATIC src/serial_port.cpp src/ports.cpp src/recognize.cpp)
 target_include_directories(mowbite_serial PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -27,6 +28,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(mowbite_serial_test test/test_serial_port.cpp)
   target_link_libraries(mowbite_serial_test mowbite_serial util)
+  ament_add_gtest(mowbite_serial_ports_test test/test_ports.cpp test/test_recognize.cpp)
+  target_link_libraries(mowbite_serial_ports_test mowbite_serial util)
 endif()
 
 ament_export_targets(export_mowbite_serial HAS_LIBRARY_TARGET)

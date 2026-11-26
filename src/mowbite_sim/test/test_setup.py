@@ -49,7 +49,7 @@ SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
 METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.keep", "setup.reset",
-           "setup.platforms", "setup.platform.set", "setup.image"]
+           "setup.platforms", "setup.platform.set", "setup.ports", "setup.ports.listen", "setup.image"]
 G = 9.81
 FIRMWARE = "main 1.2.3"
 # The emergency a press of an input brings where the step names none.

@@ -22,6 +22,7 @@
   <depend>std_msgs</depend>
   <depend>nlohmann-json-dev</depend>
   <depend>mowbite_watch</depend>
+  <depend>mowbite_serial</depend>
   <test_depend>ament_cmake_gtest</test_depend>
 
   <export>

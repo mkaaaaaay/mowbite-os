@@ -55,7 +55,8 @@ DRIVER_RESTARTS = bringup.platform_module("nx60i").DRIVER_RESTARTS
 # max_duty 0.3 of nx60i.yaml in the speed model 0.58 x (duty - 0.019).
 REACHED = 0.58 * (0.3 - 0.019)
 SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.keep",
-                 "setup.reset", "setup.platforms", "setup.platform.set", "setup.image"]
+                 "setup.reset", "setup.platforms", "setup.platform.set", "setup.ports", "setup.ports.listen",
+                 "setup.image"]
 # Given as user and password of an NTRIP access: neither may reach the state or the record of the setup program.
 ACCESS_MARKERS = {"user": "marker-user-5b1f", "password": "marker-password-93ce"}
 

@@ -163,6 +163,9 @@ constexpr int kSetupMaxParts = 8;
 constexpr int kSetupMaxInputValues = 12;
 // An image of a step: SVG of one colour, at most this many bytes; setup.image gives it in pieces of at most as many.
 constexpr int kSetupImageBytes = 65536;
+// setup.ports.listen: seconds of one call at most and without seconds.
+constexpr int kSetupListenMaxS = 30;
+constexpr int kSetupListenDefaultS = 10;
 // Characters of the text of setup.skip with reason other.
 constexpr int kSetupMaxSkipText = 200;
 // ids of steps, parts, inputs and images of a step list.

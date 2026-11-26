@@ -12090,6 +12090,332 @@
       ],
       "type": "object"
     },
+    "setup.ports.listen.params": {
+      "additionalProperties": false,
+      "description": "The params of setup.ports.listen: What to listen to",
+      "properties": {
+        "baud": {
+          "description": "Only this rate, one of 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600",
+          "type": "integer"
+        },
+        "port": {
+          "description": "path of setup.ports",
+          "type": "string"
+        },
+        "seconds": {
+          "description": "How long at most, 10 without",
+          "maximum": 30.0,
+          "minimum": 1.0,
+          "type": "integer",
+          "x-unit": "s"
+        }
+      },
+      "required": [
+        "port"
+      ],
+      "type": "object"
+    },
+    "setup.ports.listen.result": {
+      "additionalProperties": false,
+      "description": "The result of setup.ports.listen: What came",
+      "properties": {
+        "baud": {
+          "description": "The rate it was recognized at, null for none",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "bytes_per_s": {
+          "description": "At that rate, else at the rate with the most bytes",
+          "type": "number",
+          "x-unit": "B/s"
+        },
+        "kind": {
+          "description": "What it sends",
+          "enum": [
+            "nmea",
+            "wit",
+            "rtcm",
+            "unknown",
+            "silent"
+          ],
+          "type": "string"
+        },
+        "nmea": {
+          "additionalProperties": false,
+          "description": "Lines of a GNSS receiver, null without",
+          "properties": {
+            "fix": {
+              "description": "Quality of the last GGA: 0 none, 1 GPS, 2 DGPS, 4 RTK fixed, 5 RTK float; null without GGA",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "gga_hz": {
+              "description": "GGA lines per second",
+              "type": "number",
+              "x-unit": "Hz"
+            },
+            "lines": {
+              "description": "Lines with a valid checksum",
+              "type": "integer"
+            },
+            "sentences": {
+              "description": "e.g. GGA, RMC",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "talkers": {
+              "description": "e.g. GN, GP; P for proprietary",
+              "items": {
+                "description": "One item",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "lines",
+            "talkers",
+            "sentences",
+            "gga_hz",
+            "fix"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "port": {
+          "description": "The port",
+          "type": "string"
+        },
+        "rtcm": {
+          "additionalProperties": false,
+          "description": "RTCM 3 frames, null without",
+          "properties": {
+            "frames": {
+              "description": "Frames with a valid CRC",
+              "type": "integer"
+            },
+            "types": {
+              "description": "Message numbers",
+              "items": {
+                "description": "One item",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "frames",
+            "types"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "stopped": {
+          "description": "It ended early because the mower left rest",
+          "type": "boolean"
+        },
+        "tried": {
+          "description": "Each rate tried, in order",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "baud": {
+                "description": "The rate",
+                "type": "integer"
+              },
+              "bytes": {
+                "description": "Bytes",
+                "type": "integer"
+              },
+              "kind": {
+                "description": "What came at it",
+                "type": "string"
+              }
+            },
+            "required": [
+              "baud",
+              "kind",
+              "bytes"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "wit": {
+          "additionalProperties": false,
+          "description": "Frames of a WIT IMU, null without",
+          "properties": {
+            "frames": {
+              "description": "Frames with a valid checksum",
+              "type": "integer"
+            },
+            "types": {
+              "description": "Frame types, 80 to 95",
+              "items": {
+                "description": "One item",
+                "type": "integer"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "frames",
+            "types"
+          ],
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "port",
+        "baud",
+        "kind",
+        "bytes_per_s",
+        "stopped",
+        "nmea",
+        "wit",
+        "rtcm",
+        "tried"
+      ],
+      "type": "object"
+    },
+    "setup.ports.params": {
+      "description": "The params of setup.ports: None",
+      "type": "object"
+    },
+    "setup.ports.result": {
+      "additionalProperties": false,
+      "description": "The result of setup.ports: The ports",
+      "properties": {
+        "listening": {
+          "description": "A setup.ports.listen runs",
+          "type": "boolean"
+        },
+        "ports": {
+          "description": "Sorted by path",
+          "items": {
+            "additionalProperties": false,
+            "description": "One item",
+            "properties": {
+              "by_id": {
+                "description": "Links of /dev/serial/by-id to it",
+                "items": {
+                  "description": "One item",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "driver": {
+                "description": "Kernel driver of the device behind it, empty without one",
+                "type": "string"
+              },
+              "free": {
+                "description": "No node uses it and nobody holds it: setup.ports.listen takes it",
+                "type": "boolean"
+              },
+              "held_by": {
+                "description": "Other processes that have it open",
+                "items": {
+                  "additionalProperties": false,
+                  "description": "One item",
+                  "properties": {
+                    "name": {
+                      "description": "Its name",
+                      "type": "string"
+                    },
+                    "pid": {
+                      "description": "Process id",
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "pid",
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "node": {
+                "description": "The node of the platform that uses it, empty for none",
+                "type": "string"
+              },
+              "path": {
+                "description": "Device, e.g. /dev/ttyUSB0",
+                "type": "string"
+              },
+              "usb": {
+                "additionalProperties": false,
+                "description": "The USB device, null for a port on the board",
+                "properties": {
+                  "manufacturer": {
+                    "description": "Text of the device, may be empty",
+                    "type": "string"
+                  },
+                  "product": {
+                    "description": "Text of the device, may be empty",
+                    "type": "string"
+                  },
+                  "product_id": {
+                    "description": "4 hex digits",
+                    "type": "string"
+                  },
+                  "vendor_id": {
+                    "description": "4 hex digits",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "vendor_id",
+                  "product_id",
+                  "manufacturer",
+                  "product"
+                ],
+                "type": [
+                  "object",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "by_id",
+              "driver",
+              "usb",
+              "held_by",
+              "node",
+              "free"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "resting": {
+          "description": "The mower rests (choice of the mower, or SETUP or IDLE without a running step): only then setup.ports.listen listens",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ports",
+        "resting",
+        "listening"
+      ],
+      "type": "object"
+    },
     "setup.reset.params": {
       "additionalProperties": false,
       "description": "The params of setup.reset: The version",
@@ -17537,11 +17863,11 @@
       "type": "object"
     }
   },
-  "$id": "urn:mowbite-os:api:70",
+  "$id": "urn:mowbite-os:api:71",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "robot_state, actions, events and RPC methods of MowBite OS over MQTT, as system.api gives them; made from the code, objects sorted by key. x-reasons has severity, resume and class (cause: it explains the event, symptom: it only names the outcome) of every reason by event (COMMAND_REFUSED and REQUEST_REFUSED only in refusals; when: another rating for these field values; texts: name, help and fix by language; an enum field may carry the same by value as x-texts), x-emergency-bits the bits of emergency with their class, x-commands the commands with params, result, the event of their refusal and the actions that do the same (id: the own id, in actions/json and on action without openmower_names; action: the id with openmower_names; action takes both in either mode), x-methods every RPC method of the OS with its node (planner.* are the planner's, sim.* only in the simulation), x-sensors the sensors by id and key (an id with openmower_names has the key of its own id), x-settings the settings of params.set with the ranges of the OS (in params/json and the answer of params.set under /mower_logic with openmower_names, else under /logic), x-geometry the keys of robot.geometry, x-schedule-log the words of schedule.log with what detail and more hold (null: always null), x-setup the setup program. x-api counts every change, x-api-break only the breaks: a method, field, event, reason or topic gone or renamed, a type or meaning changed, a parameter newly required, fewer values taken in a request, an event a client waits for no longer sent. All else only adds; a client goes with every x-api of its x-api-break from the one it needs on.",
   "title": "MowBite OS app interface",
-  "x-api": 70,
+  "x-api": 71,
   "x-api-break": 1,
   "x-commands": {
     "docking.abort": {
@@ -18818,6 +19144,20 @@
       "offered": "",
       "params": "#/$defs/setup.platforms.params",
       "result": "#/$defs/setup.platforms.result"
+    },
+    "setup.ports": {
+      "description": "The serial ports of the mower, read from the system without opening one: for each its USB data, who holds it and whether a driver of the platform uses it",
+      "node": "mowbite_setup",
+      "offered": "",
+      "params": "#/$defs/setup.ports.params",
+      "result": "#/$defs/setup.ports.result"
+    },
+    "setup.ports.listen": {
+      "description": "Listens on a free port without sending a byte, at the usual rates one after the other, and tells what comes: NMEA of a GNSS receiver, frames of a WIT IMU, RTCM or none of these. Only while the mower rests and no other listen runs; it ends early when the mower leaves rest. Opening a port may switch its DTR line, which restarts some devices: the app says so before. The answer comes when it ends",
+      "node": "mowbite_setup",
+      "offered": "",
+      "params": "#/$defs/setup.ports.listen.params",
+      "result": "#/$defs/setup.ports.listen.result"
     },
     "setup.reset": {
       "description": "Takes every result back: all steps are open again, the record starts anew. It takes the date, the stand time and allow_blade out of the parameter file of the program; a lock the program opened (safety.source program) closes with a reset until a summary passes again, a date from the file kept by hand stays as it is. The causes of failed safety steps stay",
@@ -22223,6 +22563,27 @@
           }
         }
       },
+      "LISTENING": {
+        "class": "cause",
+        "description": "Another setup.ports.listen runs",
+        "fields": {
+          "port": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Warten, bis das Ergebnis da ist.",
+            "help": "Gerade wird schon an einem Anschluss mitgehört.",
+            "name": "Hört schon mit"
+          },
+          "en": {
+            "fix": "Wait for its result.",
+            "help": "Another port is being listened to right now.",
+            "name": "Already listening"
+          }
+        }
+      },
       "LOCKED": {
         "class": "cause",
         "description": "A step this one needs is not ok",
@@ -22336,6 +22697,72 @@
             "fix": "Install MowBite OS again for the other mower.",
             "help": "The installation sets which mower this is.",
             "name": "Mower set by the installation"
+          }
+        }
+      },
+      "PORT_IN_USE": {
+        "class": "cause",
+        "description": "A node of the platform uses the port or another process holds it",
+        "fields": {
+          "by": "",
+          "node": "",
+          "port": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Einen freien Anschluss wählen.",
+            "help": "Ein Treiber oder ein anderes Programm nutzt diesen Anschluss.",
+            "name": "Anschluss belegt"
+          },
+          "en": {
+            "fix": "Pick a free port.",
+            "help": "A driver or another program uses this port.",
+            "name": "Port in use"
+          }
+        }
+      },
+      "PORT_NOT_OPENED": {
+        "class": "cause",
+        "description": "The port could not be opened for listening",
+        "fields": {
+          "error": "",
+          "port": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Das Gerät neu einstecken und es noch einmal versuchen.",
+            "help": "Der Anschluss ließ sich zum Mithören nicht öffnen.",
+            "name": "Anschluss nicht lesbar"
+          },
+          "en": {
+            "fix": "Plug the device in again and try again.",
+            "help": "The port could not be opened for listening.",
+            "name": "Port not readable"
+          }
+        }
+      },
+      "PORT_UNKNOWN": {
+        "class": "cause",
+        "description": "setup.ports does not list this port",
+        "fields": {
+          "port": ""
+        },
+        "resume": "user",
+        "severity": "info",
+        "texts": {
+          "de": {
+            "fix": "Die Liste der Anschlüsse neu laden.",
+            "help": "Diesen Anschluss gibt es am Mäher nicht.",
+            "name": "Anschluss unbekannt"
+          },
+          "en": {
+            "fix": "Reload the list of ports.",
+            "help": "The mower has no such port.",
+            "name": "Unknown port"
           }
         }
       },

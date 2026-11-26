@@ -474,6 +474,19 @@ if args.target == "mowbite-os":
     # The setup program, offered where the platform has a step list. Nothing here starts, skips or resets a step.
     check("setup.* only together", len(setup_offered) in (0, len(SETUP_METHODS)), ",".join(setup_offered),
           point="B1 setup methods")
+if methods is not None and "setup.ports" in methods:
+    # Read from the system without opening a port; setup.ports.listen opens one and is not called here.
+    r = rpc("setup.ports", None, "setup_ports")
+    listed = (r or {}).get("result") or {}
+    ports = listed.get("ports")
+    port_keys = {"path", "by_id", "driver", "usb", "held_by", "node", "free"}
+    check("setup.ports lists the ports with their use, and setup.ports.listen is offered with it",
+          isinstance(ports, list) and all(port_keys <= set(p) for p in ports)
+          and isinstance(listed.get("resting"), bool) and listed.get("listening") is False
+          and "setup.ports.listen" in methods, json.dumps(r)[:300], point="FP27 setup.ports")
+    used = [p for p in ports or [] if p.get("node")]
+    check("a port a node of the platform uses is not free", all(p.get("free") is False for p in used),
+          json.dumps(used)[:300], point="FP27 setup.ports")
 if "setup.get" in setup_offered:
     r = rpc("setup.get", None, "setup_get")
     setup_state = (r or {}).get("result") or {}

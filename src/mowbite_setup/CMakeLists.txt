@@ -22,15 +22,16 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(mowbite_msgs REQUIRED)
 find_package(mowbite_watch REQUIRED)
+find_package(mowbite_serial REQUIRED)
 
 # The step list of a platform, the program over it and the parameter file it writes, without ROS.
 add_library(mowbite_setup_core STATIC src/steps.cpp src/program.cpp src/motion.cpp src/ground.cpp src/blade.cpp
-            src/summary.cpp src/layer.cpp src/platform_choice.cpp)
+            src/summary.cpp src/layer.cpp src/platform_choice.cpp src/ports.cpp)
 target_include_directories(mowbite_setup_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_link_libraries(mowbite_setup_core mowbite_api::mowbite_api_core mowbite_hold::mowbite_hold_core
-  nlohmann_json::nlohmann_json)
+  mowbite_serial::mowbite_serial nlohmann_json::nlohmann_json)
 set_target_properties(mowbite_setup_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # Checks a step list (JSON on stdin) and its images (folder as argument) by the rules of the node.
@@ -59,10 +60,11 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   # Under ASan the tests of the steps that move take more than a minute.
   ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_motion.cpp
-                  test/test_layer.cpp test/test_summary.cpp test/test_platform_choice.cpp TIMEOUT 300)
+                  test/test_layer.cpp test/test_summary.cpp test/test_platform_choice.cpp test/test_ports.cpp
+                  TIMEOUT 300)
   target_link_libraries(mowbite_setup_test mowbite_setup_core)
 endif()
 
 ament_export_targets(export_mowbite_setup HAS_LIBRARY_TARGET)
-ament_export_dependencies(mowbite_api mowbite_hold nlohmann_json)
+ament_export_dependencies(mowbite_api mowbite_hold mowbite_serial nlohmann_json)
 ament_package()

@@ -112,6 +112,23 @@ def test_a_later_file_and_a_later_section_win(tmp_path):
     assert layers.parameters([first, second], "other") == {"x": 1, "y": 4}
 
 
+def test_the_ports_of_the_nodes_by_the_last_file(tmp_path):
+    platform = write(tmp_path / "platform.yaml", "mcu:\n  ros__parameters:\n    port: /dev/ttyS9\ngnss:\n"
+                                                 "  ros__parameters:\n    port: /dev/ttyS4\ncamera:\n"
+                                                 "  ros__parameters:\n    rtsp_port: 8554\n/**:\n"
+                                                 "  ros__parameters:\n    port: /dev/ttyS0\n")
+    device = write(tmp_path / "mower.yaml", "gnss:\n  ros__parameters:\n    port: /dev/ttyUSB0\n")
+    assert layers.driver_ports([platform]) == {"/dev/ttyS9": "mcu", "/dev/ttyS4": "gnss"}
+    assert layers.driver_ports([platform, device]) == {"/dev/ttyS9": "mcu", "/dev/ttyUSB0": "gnss"}
+
+
+def test_the_tron_names_its_three_ports():
+    if "tron" not in PLATFORMS:
+        pytest.skip("no tron in the workspace")
+    ports = layers.driver_ports([layers.platform_file("tron")])
+    assert ports == {"/dev/ttyS9": "tron_mcu", "/dev/ttyS4": "tron_gnss", "/dev/ttyS1": "tron_imu"}
+
+
 def test_the_file_kept_by_hand_overrules_the_setup_program(tmp_path):
     found = write(tmp_path / "mower.setup.yaml", "driver:\n  ros__parameters:\n    inputs.lines: [\"A\"]\n"
                                                  "    inputs.learn: false\nlogic:\n  ros__parameters:\n    x: 1\n")

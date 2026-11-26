@@ -74,6 +74,18 @@ def setup(platform, folder_of=None):
     return {"platform": name, "steps": json.dumps(steps), "image_dir": images(home)}
 
 
+def driver_ports(paths):
+    """{port: node} of the nodes the files give a parameter port with a device under /dev, a later file winning: the
+    ports setup.ports names as used and setup.ports.listen leaves alone."""
+    by_node = {}
+    for path in paths:
+        for section, values in sections(path):
+            port = values.get("port")
+            if "*" not in section and isinstance(port, str) and port.startswith("/dev/"):
+                by_node[section.strip("/")] = port
+    return {port: node for node, port in by_node.items()}
+
+
 def setup_file(data_dir, platform):
     """What the setup program found for one mower of this platform, in data_dir: read after the files above and before
     device_file. mowbite_setup alone writes it."""
