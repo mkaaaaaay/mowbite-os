@@ -1,10 +1,11 @@
 #!/bin/bash
 # Boot probe of a probe image (make-image.sh with "-" for the vendor rootfs) in QEMU: virt board, the generic Ubuntu
 # kernel, no vendor parts, so it says nothing about the vendor kernel. Checks that systemd and sshd come up and that
-# the trial period counts boots, falls back after three boots and without a login, and ends on request; the panic
-# settings, that logind ignores every key and cannot suspend, and mowbite-crash on dummy dmesg and console records,
-# by hand and in a real boot, and that a second start job in the same boot runs neither oneshot again. Off the
-# Rockchip board the fallback only logs. Each boot ends with a power-off; QEMU runs with -no-reboot.
+# the trial period counts boots, falls back after three boots and without a login, holds and falls back again as the
+# host asks, and ends on request; the panic settings, that logind ignores every key and cannot suspend, and
+# mowbite-crash on dummy dmesg and console records, by hand and in a real boot, and that a second start job in the
+# same boot runs neither oneshot again. Off the Rockchip board the fallback only logs. Each boot ends with a
+# power-off; QEMU runs with -no-reboot.
 #   [PROBE_QUICK=1] qemu-probe.sh <probe .img> <private test key> <new log dir> <test password of the hash make-image.sh
 #   put in>
 # PROBE_QUICK=1 skips boots 1 to 3 and the 10 minutes without a login (fallbacks of the trial period), about 8
@@ -142,6 +143,22 @@ check "login reset the counter" test "$(vm cat /var/lib/mowbite/bootcount)" = 0
 # On the Tron a second transaction starts the sysinit oneshots again (alsa-utils).
 check "second start of mowbite-probezeit does not count" \
     vm 'systemctl start mowbite-probezeit.service && test "$(cat /var/lib/mowbite/bootcount)" = 0'
+# hold and again as the host calls them, without the login mark of this session; the timers are fired by hand.
+check "hold keeps the counter, its timer turns into again, again falls back" \
+    vm 'P=/usr/lib/mowbite/probezeit; active() { systemctl is-active --quiet "$1"; }
+        rm -f /run/mowbite/ssh-login /run/mowbite/ssh-seen; echo 2 > /var/lib/mowbite/bootcount
+        $P hold && test -e /run/mowbite/ssh-seen && test "$(cat /var/lib/mowbite/bootcount)" = 2 \
+            && active mowbite-probezeit-hold.timer || exit 1
+        systemctl start mowbite-probezeit-hold.service; sleep 3
+        ! active mowbite-probezeit-hold.timer && active mowbite-probezeit-again.timer \
+            && test ! -e /run/mowbite/ssh-seen || exit 1
+        systemctl start mowbite-probezeit-again.service; sleep 3
+        journalctl -o cat -u mowbite-probezeit-again.service --no-pager \
+            | grep -q "no SSH login since the boot, reboot into the loader"'
+check "a login stops the pending fallback and resets the counter" \
+    vm '! systemctl is-active --quiet mowbite-probezeit-again.timer && test "$(cat /var/lib/mowbite/bootcount)" = 0'
+check "after a login hold does nothing" \
+    vm '/usr/lib/mowbite/probezeit hold && ! systemctl is-active --quiet mowbite-probezeit-hold.timer'
 check "second start of mowbite-crash is no second run" \
     vm 'a=$(systemctl show -P ExecMainStartTimestampMonotonic mowbite-crash.service)
         systemctl start mowbite-crash.service

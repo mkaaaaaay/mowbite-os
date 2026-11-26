@@ -3,13 +3,20 @@
 # TIMEOUT without an SSH login the mower reboots into the loader mode of U-Boot, where the PC writes the old rootfs back.
 #   probezeit boot      early in every boot: count the boot
 #   probezeit ssh       from /etc/ssh/sshrc: confirm this boot
+#   probezeit hold      while the first installation runs: no fallback, the boot counter stays; turns into "again"
+#                       unless called again within HOLD, so a dead caller cannot hold the boot for good
+#   probezeit again     the first installation ended without a running OS: fall back after AGAIN without a login
+# After an SSH login in this boot, hold and again do nothing.
 #   probezeit timeout   from mowbite-probezeit-check.timer: no login since the boot
 #   probezeit end       the owner ends the trial period (mowbite-probezeit-ende)
 set -eu
 MARK=/etc/mowbite/probezeit
 COUNT=/var/lib/mowbite/bootcount
 SEEN=/run/mowbite/ssh-seen
+LOGIN=/run/mowbite/ssh-login
 MAX_BOOTS=3
+HOLD=30min
+AGAIN=10min
 
 write_count() {
     mkdir -p "${COUNT%/*}"
@@ -17,6 +24,19 @@ write_count() {
     sync "$COUNT.new"
     mv "$COUNT.new" "$COUNT"
     sync "${COUNT%/*}"
+}
+
+# Stops a pending transient timer; with "all" also its service. The hold service runs "again" and must not stop itself.
+stop_unit() {
+    set -- "$1.timer" ${2:+"$1.service"}
+    systemctl stop "$@" 2>/dev/null || true
+    systemctl reset-failed "$@" 2>/dev/null || true
+}
+
+# One transient timer per name: a new call replaces the pending one.
+later() {
+    stop_unit "$1" all
+    systemd-run --quiet --unit="$1" --on-active="$2" --timer-property=AccuracySec=10s /usr/lib/mowbite/probezeit "$3"
 }
 
 to_loader() {
@@ -48,8 +68,23 @@ boot)
     ;;
 ssh)
     mkdir -p "${SEEN%/*}"
-    touch "$SEEN"
+    touch "$SEEN" "$LOGIN"
     write_count 0
+    stop_unit mowbite-probezeit-hold all
+    stop_unit mowbite-probezeit-again all
+    ;;
+hold)
+    [ ! -e "$LOGIN" ] || exit 0
+    mkdir -p "${SEEN%/*}"
+    touch "$SEEN"
+    later mowbite-probezeit-hold "$HOLD" again
+    ;;
+again)
+    [ ! -e "$LOGIN" ] || exit 0
+    stop_unit mowbite-probezeit-hold
+    rm -f "$SEEN"
+    later mowbite-probezeit-again "$AGAIN" timeout
+    echo "probezeit: no confirmed start, back to the loader in $AGAIN without a login"
     ;;
 timeout)
     if [ ! -e "$SEEN" ]; then
@@ -57,12 +92,14 @@ timeout)
     fi
     ;;
 end)
-    rm -f "$MARK" "$COUNT" "$SEEN"
+    stop_unit mowbite-probezeit-hold all
+    stop_unit mowbite-probezeit-again all
+    rm -f "$MARK" "$COUNT" "$SEEN" "$LOGIN"
     sync
     echo "trial period ended, the mower no longer reboots into the loader on its own"
     ;;
 *)
-    echo "usage: probezeit boot|ssh|timeout|end" >&2
+    echo "usage: probezeit boot|ssh|hold|again|timeout|end" >&2
     exit 2
     ;;
 esac

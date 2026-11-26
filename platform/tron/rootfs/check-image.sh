@@ -170,6 +170,8 @@ test "$(grep -rlE '^[[:space:]]*kernel\.panic' "$TREE/etc/sysctl.conf" "$TREE/et
     2>/dev/null)" = "$TREE/etc/sysctl.d/60-mowbite-panic.conf"
 result "kernel.panic only in 60-mowbite-panic.conf" $?
 ! grep -q sysctl "$TREE/usr/lib/mowbite/probezeit"; result "probezeit sets no sysctl" $?
+sh -n "$TREE/usr/lib/mowbite/probezeit" && test -x "$TREE/usr/bin/systemd-run"
+result "probezeit parses, systemd-run for hold and again there" $?
 # A second start job in the same boot must not count again.
 for u in mowbite-crash mowbite-probezeit; do
     grep -qx 'RemainAfterExit=yes' "$TREE/etc/systemd/system/$u.service"; result "$u stays active after its run" $?
