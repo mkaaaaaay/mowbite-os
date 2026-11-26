@@ -87,10 +87,11 @@ tron_mcu:
     # Firmware of the cutter and chassis boards the driver was measured with (since 07.11., vendor stand 1.3.32).
     # Firmware outside a list blocks motion and blade (FIRMWARE_INCOMPATIBLE); add one only after the measurements.
     # Newer firmware an owner measured on this device drives as well: measured_firmware in tron.setup.yaml, entries
-    # "<cutter>/<chassis>/<sha256 of the content of device_id_file>", read at the start.
+    # "<cutter>/<chassis>/<sha256 of the content of device_id_file>", read at the start. The id is the CID of the eMMC:
+    # set in the chip, the same through every system on it.
     cutter_firmware: ["0.6.36"]
     chassis_firmware: ["0.6.34"]
-    device_id_file: ""
+    device_id_file: /sys/block/mmcblk0/device/cid
     # Set after the safety measurement in phase 6 (hw/capabilities): the time the MCU keeps the last setpoint without
     # a heartbeat in s (-1 unknown), and the date of the measurement. Without the date only remote control.
     failsafe_without_host: -1.0
