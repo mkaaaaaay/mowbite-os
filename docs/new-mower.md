@@ -30,6 +30,8 @@ no parameter services. A driver on a serial port takes it from `mowbite_serial` 
 | publishes, latched, optional | `hw/inputs` | `mowbite_msgs/HardwareInputs` |
 | service, optional | `hw/silence` | `mowbite_msgs/SilenceDriver` |
 | service, optional | `hw/end` | `mowbite_msgs/EndDriver` |
+| publishes, optional | `hw/link_stats` | `mowbite_msgs/LinkStats` |
+| subscribes, optional | `setup/firmware_measure` | `mowbite_msgs/FirmwareMeasure` |
 | publishes | `imu/data` | `sensor_msgs/Imu` |
 | publishes | `gps/absolute_pose` | `mowbite_msgs/GnssFix` |
 | publishes, latched | `gps/datum` | `sensor_msgs/NavSatFix` |
@@ -81,6 +83,9 @@ Duties:
   measures that the board stops it alone); after it no lease runs on. Offer them with `silence_max_s` (a parameter
   `silence_max` well past the time the board stops without its host; 0 without) and `driver_end` in
   `hw/capabilities`. The steps `silence` and `driver_end` measure with them how the board stops without its host.
+  A board that keeps a setpoint by a limit of its own when the setpoint is the last frame (the Tron, T9) may offer
+  hw/silence with `last_setpoint` up to `silence_last_setpoint_max_s`: it waits up to 1 s for a motion setpoint, sends
+  it as the last frame, and after the silence the stops wait 0.5 s while heartbeats go; otherwise `LAST_SETPOINT`.
 - Blade allowed: `blade_allowed` of `hw/capabilities` is true when hw/blade would take an on (`allow_blade` of the
   driver, false in read_only). The step `blade` writes `allow_blade` into the file of the setup program when it is
   false.
@@ -120,7 +125,15 @@ Duties:
 - Firmware: the platform file lists the firmware of each board the driver was measured with (`tron_mcu`:
   `cutter_firmware`, `chassis_firmware`); firmware outside a list blocks drive and blade (`FIRMWARE_INCOMPATIBLE`), so
   a mower on a newer vendor stand stays still until that stand is measured. The safety measurement narrows the list in
-  the file of the mower to the firmware it ran with.
+  the file of the mower to the firmware it ran with. `firmware_source` of `hw/capabilities` says why: empty until
+  every board reported, `listed`, `older` (older than its list: update first), `measured` or `none`. An owner may
+  measure a newer stand on their own mower (FP55): the driver reads an id of the device (`tron_mcu`: the file
+  `device_id_file`, its sha256 as `device_hash`) and drives a pair of `measured_firmware` (written by the setup program,
+  read only at the start) only with that hash. While `setup/firmware_measure` is active, at most 0.5 s old and names
+  exactly the reported firmware and the own hash, a `none` stand may drive within a limit of the driver
+  (`tron_mcu`: 0.1 m/s per wheel); once that no longer holds: stop, blade off, `FIRMWARE_INCOMPATIBLE` latched anew.
+  Meanwhile the driver clears its board's latches only on a change of `clear_seq` (wheels and blade standing) and
+  counts the link in `hw/link_stats`.
 - Hear first: after opening its port a driver sends nothing there, no heartbeat either, until a valid frame of its
   board came. Past its telemetry timeout without one it reports `BOARD_NOT_HEARD` (not latched, the first frame ends
   it); a reopened port starts it anew. The contract test checks it with the fake board started quiet
@@ -925,6 +938,9 @@ stop holds the mower (see the last points). The sensor stays an extra: the bumpe
 - [ ] `hw/silence` and `hw/end` in the driver with `silence_max`, the steps of stage `wheels` in the list with
       `stop_max` and `emergency` of this board, `test_setup_motion_<name>` passes
 - [ ] `blade_allowed` in `hw/capabilities`, hw/silence with `blade`, the step `blade` with the bounds of this board
+- [ ] Owner measurement of new firmware (optional): `firmware_source`, `device_hash`, `measured_firmware`,
+      `setup/firmware_measure` with a speed limit and a latch when it ends, `hw/link_stats`, a fake board with variants
+      that each fail the measurement
 - [ ] `mowbite.launch.py platform:=<name>` starts the stack, driver restarts latched
 - [ ] Every node of your own in the container attached to the watch (`test_stack.py`)
 - [ ] Simulation: mowing, going home, docking; `app_interface_check`
