@@ -241,6 +241,10 @@ struct McuControlStatus {
   bool stop_clear_mark_wanted = false;
   // hw/silence runs, or hw/end was taken: nothing goes to the MCU.
   bool silent = false;
+  // A hw/silence waits for its tick.
+  bool silence_armed = false;
+  // Tick time of the last frame before the latest silence began; empty from its request until it begins.
+  std::optional<double> silent_from_s;
   bool ended = false;
 };
 
@@ -493,6 +497,9 @@ class McuControl {
 
   // End of the running hw/silence; empty while none runs.
   std::optional<double> silent_until_s_;
+  // Tick time of the last tick that sent a frame, and of the last frame before the latest silence.
+  std::optional<double> last_out_s_;
+  std::optional<double> silent_from_s_;
   // hw/silence waiting for its tick (silence_after): its length and until when it waits.
   struct ArmedSilence {
     double seconds;

@@ -535,11 +535,16 @@ TEST_F(LastSetpointTest, TheSetpointIsTheLastFrameAndTheStopsWait) {
   Run(0.3);
   Drive(0.85);
   ASSERT_EQ(control_.SilenceLastSetpoint(4.0, now_), HostTestRefusal::kNone);
+  EXPECT_TRUE(control_.Status(now_).silence_armed);
+  EXPECT_FALSE(control_.Status(now_).silent_from_s);
   Drive(1.2);
   ASSERT_TRUE(control_.Status(now_).silent);
+  EXPECT_FALSE(control_.Status(now_).silence_armed);
   const auto moving = Times(IsMovingSpeed, 0.85);
   ASSERT_FALSE(moving.empty());
   const double start = moving.back();
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, start);
   const auto tick = TickAt(start);
   ASSERT_GE(tick.size(), 2u);
   EXPECT_TRUE(IsMovingSpeed(tick.back()));

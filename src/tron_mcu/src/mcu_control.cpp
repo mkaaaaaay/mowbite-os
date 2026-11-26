@@ -405,10 +405,12 @@ HostTestRefusal McuControl::StartSilence(double seconds, double now, bool blade,
   if (refusal != HostTestRefusal::kNone) return refusal;
   silence_stop_delay_s_ =
       last_setpoint ? std::max(config_.silence_stop_delay_s, kLastSetpointStopDelayS) : config_.silence_stop_delay_s;
+  silent_from_s_.reset();
   if (last_setpoint || config_.silence_after != McuControlConfig::SilenceAfter::kNone) {
     armed_silence_ = ArmedSilence{seconds, now + kSilenceArmS, last_setpoint};
   } else {
     silent_until_s_ = now + seconds;
+    silent_from_s_ = last_out_s_;
   }
   return HostTestRefusal::kNone;
 }
@@ -445,6 +447,7 @@ bool McuControl::SilenceAfterSetpoint(double now, std::vector<SubPacket>& out) {
   std::rotate(last, last + 1, out.end());
   late_heartbeat_s_.reset();
   silent_until_s_ = now + armed_silence_->seconds;
+  silent_from_s_ = now;
   armed_silence_.reset();
   return true;
 }
@@ -483,6 +486,7 @@ void McuControl::TieHeartbeats(double now, const WallClock& wall, std::vector<Su
   const bool speed_tick = config_.speed_heartbeat == Mode::kLater ? late : motion;
   if ((config_.silence_after == After::kSpeed && speed_tick) || (config_.silence_after == After::kCutter && blade_on)) {
     silent_until_s_ = now + armed_silence_->seconds;
+    silent_from_s_ = now;
     armed_silence_.reset();
   } else if (now > armed_silence_->until_s) {
     armed_silence_.reset();
@@ -825,6 +829,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (out.size() > before_stop) next_speed_s_ = now + config_.speed_period_s;
   EmitRepeat(blade_off_repeat_, now, out);
   TieHeartbeats(now, wall, out);
+  if (!out.empty()) last_out_s_ = now;
   return out;
 }
 
@@ -896,6 +901,8 @@ McuControlStatus McuControl::Status(double now) const {
   status.stop_clear_mark_wanted =
       !stop_clear_mark_ && Stop(now) && (StopClearReady(now) || MeasureClearPending(now));
   status.silent = silent_until_s_.has_value();
+  status.silence_armed = armed_silence_.has_value();
+  status.silent_from_s = silent_from_s_;
   status.ended = ended_;
   return status;
 }

@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -39,10 +40,11 @@ def generate_test_description():
 class Driver:
     """tron_mcu as a process of its own, with the silence of the Tron."""
 
-    def __init__(self, read_only=False):
+    def __init__(self, read_only=False, last_setpoint_max=0.0):
         exe = package_program("tron_mcu", "tron_mcu_node")
         self.proc = subprocess.Popen([exe, "--ros-args", "-p", f"port:={LINKS['mcu']}", "-p", "send_imu:=false",
                                       "-p", f"silence_max:={SILENCE_MAX}",
+                                      "-p", f"silence_last_setpoint_max:={last_setpoint_max}",
                                       "-p", f"allow_blade:={str(not read_only).lower()}",
                                       "-p", f"read_only:={str(read_only).lower()}"], start_new_session=True)
 
@@ -95,7 +97,8 @@ class TestDriverSilence(unittest.TestCase):
         shutil.rmtree(WORK, ignore_errors=True)
 
     def restart(self, **kwargs):
-        self.driver.stop()
+        if self.driver:
+            self.driver.stop()
         with self.probe.lock:
             self.probe.status = None
             self.probe.capabilities = None
@@ -114,8 +117,14 @@ class TestDriverSilence(unittest.TestCase):
         self.assertTrue(s, "no free status")
         count = s.latch_count
         self.probe.drive(0.5)
+        asked = time.time()
         answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=1.0))
+        answered = time.time()
         self.assertTrue(answer.success, answer)
+        # Its begin is the last frame before it, on the clock of hw/wheel_odom (the system clock here).
+        silent_from = answer.silent_from.sec + answer.silent_from.nanosec * 1e-9
+        self.assertGreaterEqual(silent_from, asked - 0.15, (asked, silent_from))
+        self.assertLessEqual(silent_from, answered, (answered, silent_from))
         time.sleep(0.1)
         since = last_time(LOG)
         # Commands meanwhile are dropped.
@@ -188,6 +197,7 @@ class TestDriverSilence(unittest.TestCase):
 
     def test_c_refusals(self):
         answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=0.1))
+        self.assertEqual((answer.silent_from.sec, answer.silent_from.nanosec), (0, 0))
         self.assertEqual((answer.success, answer.code), (False, "OUT_OF_RANGE"))
         answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=SILENCE_MAX + 0.5))
         self.assertEqual((answer.success, answer.code), (False, "OUT_OF_RANGE"))
@@ -218,6 +228,29 @@ class TestDriverSilence(unittest.TestCase):
         time.sleep(0.3)
         self.assertEqual(host_packets(LOG, since + 0.001), [])
         type(self).driver = None
+
+    def test_f_after_a_setpoint_the_answer_waits_for_the_begin(self):
+        self.assertTrue(self.restart(last_setpoint_max=5.0), "no telemetry after the restart")
+        self.assertTrue(self.probe.latest(lambda s: not s.emergency, 15), "no free status")
+        # The new process hears setup/motion only once discovery found it.
+        time.sleep(1.5)
+        # Without a setpoint within a second the silence does not begin.
+        asked = time.time()
+        answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=1.0, last_setpoint=True), 5.0)
+        self.assertEqual((answer.success, answer.code), (False, "NOT_STARTED"))
+        self.assertGreaterEqual(time.time() - asked, 0.9)
+        self.assertEqual((answer.silent_from.sec, answer.silent_from.nanosec), (0, 0))
+        drive = threading.Thread(target=self.probe.drive, args=(1.5,))
+        drive.start()
+        time.sleep(0.3)
+        asked = time.time()
+        answer = self.probe.call(self.probe.silence, SilenceDriver.Request(seconds=1.0, last_setpoint=True), 5.0)
+        answered = time.time()
+        drive.join()
+        self.assertTrue(answer.success, answer)
+        silent_from = answer.silent_from.sec + answer.silent_from.nanosec * 1e-9
+        self.assertGreaterEqual(silent_from, asked, (asked, silent_from))
+        self.assertLessEqual(silent_from, answered, (answered, silent_from))
 
 
 if __name__ == "__main__":

@@ -2292,6 +2292,19 @@ TEST_F(SilenceTest, NothingGoesOutUntilTheEndThenLatchBladeOffAndThreeStops) {
   EXPECT_EQ(status.latch_count, count + 1);
 }
 
+TEST_F(SilenceTest, ItBeginsAtTheTickOfTheLastFrameBeforeIt) {
+  EXPECT_FALSE(control_.Status(now_).silent_from_s);
+  const double start = DriveThenSilence(1.0);
+  const auto sent = Times([](const SubPacket&) { return true; }, 0.0, start + 1e-9);
+  ASSERT_FALSE(sent.empty());
+  const auto from = control_.Status(now_).silent_from_s;
+  ASSERT_TRUE(from);
+  EXPECT_DOUBLE_EQ(*from, sent.back());
+  Run(start + 1.5);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, sent.back());
+}
+
 TEST_F(SilenceTest, CommandsBladeAndReleasesMeanwhileAreDropped) {
   const double start = DriveThenSilence(0.5);
   control_.LatchEmergency(kReasonHighLevel);
@@ -2567,10 +2580,13 @@ TEST_F(HoldDefaultTest, TheSilenceWaitsForTheNextSetpointAndStartsRightAfterIt) 
   Drive(0.85);
   ASSERT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kNone);
   EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_FALSE(control_.Status(now_).silent_from_s);
   Drive(1.2);
   const double start = SilentFrom(0.85, 0.5);
   EXPECT_TRUE(IsMovingSpeed(TickAt(start).back()));
   EXPECT_TRUE(control_.Status(now_).silent);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, start);
   Run(start + 2.9);
   EXPECT_TRUE(Times([](const SubPacket&) { return true; }, start + 0.001, start + 2.9).empty());
 }
@@ -2579,8 +2595,11 @@ TEST_F(HoldDefaultTest, WithoutSuchATickTheArmedSilenceIsDropped) {
   Run(0.3);
   ASSERT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kNone);
   EXPECT_EQ(control_.Silence(3.0, now_), HostTestRefusal::kBusy);
+  EXPECT_TRUE(control_.Status(now_).silence_armed);
   Run(0.3 + kSilenceArmS + 0.05);
   EXPECT_FALSE(control_.Status(now_).silent);
+  EXPECT_FALSE(control_.Status(now_).silence_armed);
+  EXPECT_FALSE(control_.Status(now_).silent_from_s);
   Drive(now_ + 0.5);
   EXPECT_FALSE(control_.Status(now_).silent);
   EXPECT_FALSE(Times(IsMovingSpeed, now_ - 0.5).empty());
@@ -2639,6 +2658,8 @@ TEST_F(HoldLaterTest, AHeartbeatFollowsTheLastSetpointLaterAndTheSilenceStartsAf
   const auto last = Times(IsMovingSpeed, 0.85, start);
   ASSERT_FALSE(last.empty());
   EXPECT_NEAR(start - last.back(), 0.03, 0.006);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, start);
 }
 
 TEST_F(HoldCutterTest, TheSilenceStartsRightAfterTheBladeOnFrame) {
@@ -2651,6 +2672,8 @@ TEST_F(HoldCutterTest, TheSilenceStartsRightAfterTheBladeOnFrame) {
   EXPECT_TRUE(IsBladeOn(TickAt(on[0]).back()));
   EXPECT_TRUE(Times([](const SubPacket&) { return true; }, on[0] + 0.001).empty());
   EXPECT_TRUE(control_.Status(now_).silent);
+  ASSERT_TRUE(control_.Status(now_).silent_from_s);
+  EXPECT_DOUBLE_EQ(*control_.Status(now_).silent_from_s, on[0]);
 }
 
 // F5: a stop is not confirmed by the MCU; the wheel speeds it reports are.

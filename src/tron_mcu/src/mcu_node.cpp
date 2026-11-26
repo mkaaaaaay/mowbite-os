@@ -315,10 +315,11 @@ class McuNode : public rclcpp::Node {
     charge_srv_ = create_service<mowbite_msgs::srv::SetCharge>(
         "hw/charge", [this](const mowbite_msgs::srv::SetCharge::Request::SharedPtr& req,
                             const mowbite_msgs::srv::SetCharge::Response::SharedPtr& res) { OnCharge(*req, *res); });
+    // The answer waits for the begin of the silence: with last_setpoint it begins at the next setpoint.
     silence_srv_ = create_service<mowbite_msgs::srv::SilenceDriver>(
-        "hw/silence", [this](const mowbite_msgs::srv::SilenceDriver::Request::SharedPtr& req,
-                             const mowbite_msgs::srv::SilenceDriver::Response::SharedPtr& res) {
-          OnSilence(*req, *res);
+        "hw/silence", [this](const std::shared_ptr<rmw_request_id_t>& header,
+                             const mowbite_msgs::srv::SilenceDriver::Request::SharedPtr& req) {
+          OnSilence(header, *req);
         });
     end_srv_ = create_service<mowbite_msgs::srv::EndDriver>(
         "hw/end", [this](const mowbite_msgs::srv::EndDriver::Request::SharedPtr&,
@@ -1268,11 +1269,13 @@ class McuNode : public rclcpp::Node {
     res.success = true;
   }
 
-  void OnSilence(const mowbite_msgs::srv::SilenceDriver::Request& req,
-                 mowbite_msgs::srv::SilenceDriver::Response& res) {
+  void OnSilence(const std::shared_ptr<rmw_request_id_t>& header,
+                 const mowbite_msgs::srv::SilenceDriver::Request& req) {
+    mowbite_msgs::srv::SilenceDriver::Response res;
     if (read_only_) {
       res.message = "read only: nothing goes to the MCU";
       res.code = "READ_ONLY";
+      silence_srv_->send_response(*header, res);
       return;
     }
     tron::HostTestRefusal refusal;
@@ -1294,12 +1297,49 @@ class McuNode : public rclcpp::Node {
       res.code = tron::HostTestRefusalCode(refusal);
       res.message = "silence refused: " + res.code;
       RCLCPP_WARN(get_logger(), "hw/silence %.2f s refused: %s", req.seconds, res.code.c_str());
+      silence_srv_->send_response(*header, res);
       return;
     }
     RCLCPP_WARN(get_logger(), "hw/silence%s: no frame to the MCU for %.2f s, then latched with blade off and stop",
                 req.last_setpoint ? " after a setpoint" : req.blade ? " with the blade" : "", req.seconds);
-    res.success = true;
-    res.message = "silent";
+    silence_answer_ = header;
+    if (!AnswerSilence()) {
+      silence_answer_timer_ = create_wall_timer(std::chrono::milliseconds(10), [this] {
+        if (AnswerSilence()) silence_answer_timer_->cancel();
+      });
+    }
+  }
+
+  // Sends the waiting hw/silence answer once its silence began or its arming ran out; false while it waits.
+  bool AnswerSilence() {
+    if (!silence_answer_) return true;
+    tron::McuControlStatus state;
+    double mono;
+    rclcpp::Time stamp;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      mono = MonotonicSeconds();
+      stamp = now();
+      state = control_.View().Status(mono);
+    }
+    mowbite_msgs::srv::SilenceDriver::Response res;
+    if (state.silent_from_s) {
+      res.success = true;
+      res.message = "silent";
+      res.silent_from = stamp - rclcpp::Duration::from_seconds(mono - *state.silent_from_s);
+    } else if (state.silent) {
+      res.success = true;
+      res.message = "silent";
+    } else if (state.silence_armed) {
+      return false;
+    } else {
+      res.code = "NOT_STARTED";
+      res.message = "silence refused: no setpoint to go silent after";
+      RCLCPP_WARN(get_logger(), "hw/silence did not start: no setpoint within the arming time");
+    }
+    silence_srv_->send_response(*silence_answer_, res);
+    silence_answer_.reset();
+    return true;
   }
 
   void OnEnd(mowbite_msgs::srv::EndDriver::Response& res) {
@@ -1444,6 +1484,9 @@ class McuNode : public rclcpp::Node {
   rclcpp::Service<mowbite_msgs::srv::SetBlade>::SharedPtr blade_srv_;
   rclcpp::Service<mowbite_msgs::srv::SetCharge>::SharedPtr charge_srv_;
   rclcpp::Service<mowbite_msgs::srv::SilenceDriver>::SharedPtr silence_srv_;
+  // The request whose answer waits for the begin of its silence; only the executor touches it.
+  std::shared_ptr<rmw_request_id_t> silence_answer_;
+  rclcpp::TimerBase::SharedPtr silence_answer_timer_;
   rclcpp::Subscription<mowbite_msgs::msg::SetupMotion>::SharedPtr setup_motion_sub_;
   rclcpp::Service<mowbite_msgs::srv::EndDriver>::SharedPtr end_srv_;
   rclcpp::TimerBase::SharedPtr status_timer_;
