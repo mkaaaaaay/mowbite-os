@@ -58,11 +58,11 @@ install(TARGETS mowbite_setup_core mowbite_setup_component
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
-  # Under ASan the tests of the steps that move take more than a minute.
+  # Under ASan single firmware tests take up to nine minutes, the whole binary about 22.
   ament_add_gtest(mowbite_setup_test test/test_steps.cpp test/test_program.cpp test/test_motion.cpp
                   test/test_layer.cpp test/test_summary.cpp test/test_hardware.cpp test/test_platform_choice.cpp
                   test/test_ports.cpp
-                  TIMEOUT 300)
+                  TIMEOUT 3600)
   target_link_libraries(mowbite_setup_test mowbite_setup_core)
 endif()
 
