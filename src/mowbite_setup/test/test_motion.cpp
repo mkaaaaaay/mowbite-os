@@ -408,12 +408,23 @@ struct Mower {
     } else if (signal->clear_seq != *fw_seen && std::abs(wheel_left) < 0.025 && std::abs(wheel_right) < 0.025 &&
                rpm < 100) {
       fw_seen = signal->clear_seq;
-      link.clear_seq = signal->clear_seq;
       ++fw_clears;
       Clear();
+      // hw/link_stats may tell the clear after hw/status showed what it did.
+      if (link_late > 0) {
+        late_clear = signal->clear_seq;
+        late_at = now + link_late;
+      } else {
+        link.clear_seq = signal->clear_seq;
+        SendLink();
+      }
+    }
+    if (late_at >= 0 && now >= late_at) {
+      late_at = -1;
+      link.clear_seq = late_clear;
       SendLink();
     }
-    if (link_at < 0 || now - link_at >= 1.0) SendLink();
+    if (late_at < 0 && (link_at < 0 || now - link_at >= 1.0)) SendLink();
   }
 
   void Clear() {
@@ -513,6 +524,10 @@ struct Mower {
   bool fw_open = false;
   std::optional<uint32_t> fw_seen;
   int fw_clears = 0;
+  // Seconds hw/link_stats tells a clear after the board did it.
+  double link_late = 0;
+  double late_at = -1;
+  uint32_t late_clear = 0;
   int release_clears = 0;
   double wheel_left = 0;
   double wheel_right = 0;
@@ -1414,31 +1429,34 @@ struct FwMower : Mower {
   json PassLatch(double bumper = 0.3) {
     const size_t before = ends.size();
     if (const auto code = Start("fw_latch", nullptr); code != "") return {{"start", code}, {"step", "fw_latch"}};
-    const auto wait = [this](int n) {
+    const auto ended = [this, before] { return ends.size() > before && ends.back()["step"] == "fw_latch"; };
+    const auto wait = [this, &ended](int n) {
       for (const double end = now + 15; now < end;) {
         const json step = StepState("fw_latch");
         if (step["progress"].is_object() && step["progress"]["n"] == n && step["blocked"].empty()) return true;
-        if (!ends.empty() && ends.back()["step"] == "fw_latch") return false;
+        if (ended()) return false;
         Step();
       }
       return false;
     };
-    if (!wait(1)) return ends.empty() ? json() : ends.back();
+    // The end of the step, or what it waits for.
+    const auto result = [this, &ended] { return ended() ? ends.back() : json{{"waiting", StepState("fw_latch")}}; };
+    if (!wait(1)) return result();
     Run(0.3);
     Press(&Mower::press_stop);
-    if (!wait(2)) return ends.back();
+    if (!wait(2)) return result();
     Run(0.3);
     press_stop = true;
-    if (!wait(3)) return ends.back();
+    if (!wait(3)) return result();
     Run(0.2);
     press_stop = false;
-    if (!wait(4)) return ends.back();
+    if (!wait(4)) return result();
     Run(0.3);
     Press(&Mower::press_left, bumper);
-    if (!wait(5)) return ends.back();
+    if (!wait(5)) return result();
     Run(0.3);
     press_lift = true;
-    if (!wait(6)) return ends.back();
+    if (!wait(6)) return result();
     Run(0.2);
     press_lift = false;
     return EndSince(before, 15);
@@ -1714,22 +1732,28 @@ TEST(Firmware, ABoardThatHoldsOtherwiseFails) {
       {"a clear lets a held stop go", [](FwMower& m) { m.clear_releases_held = true; }, "stop_hold"},
       {"lift does not latch", [](FwMower& m) { m.lift_latches = false; }, "lift_free"},
   };
-  for (const auto& variant : variants) {
+  // hw/link_stats may tell a clear only after hw/status showed what it did.
+  for (const auto& [variant, late] : {std::pair{variants[0], 0.0}, {variants[0], 0.8}, {variants[1], 0.0},
+                                      {variants[1], 0.8}, {variants[2], 0.0}, {variants[2], 0.8}}) {
+    SCOPED_TRACE(std::string(variant.name) + (late > 0 ? ", hw/link_stats late" : ""));
     FwMower mower;
     variant.set(mower);
+    mower.link_late = late;
     ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
     ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
     const json stop = mower.PassInput("fw_stop", {&Mower::press_stop, &Mower::press_stop});
-    ASSERT_EQ(stop["state"], "ok") << variant.name << " " << stop.dump();
+    ASSERT_EQ(stop["state"], "ok") << stop.dump();
     const json lift = mower.PassInput("fw_lift", {&Mower::press_lift});
-    ASSERT_EQ(lift["state"], "ok") << variant.name << " " << lift.dump();
+    ASSERT_EQ(lift["state"], "ok") << lift.dump();
     const json bumper = mower.PassInput("fw_bumper", {&Mower::press_left, &Mower::press_right});
-    ASSERT_EQ(bumper["state"], "ok") << variant.name << " " << bumper.dump();
+    ASSERT_EQ(bumper["state"], "ok") << bumper.dump();
     const json end = mower.PassLatch();
-    EXPECT_EQ(end["state"], "failed") << variant.name << " " << end.dump();
-    EXPECT_EQ(end.value("part", json()), variant.part) << variant.name << " " << end.dump();
-    EXPECT_EQ(mower.program.Export()["runs"][0]["result"], "failed") << variant.name;
-    EXPECT_EQ(mower.release_clears, 0) << variant.name;
+    EXPECT_EQ(end.value("state", ""), "failed") << end.dump();
+    EXPECT_EQ(end.value("part", json()), variant.part) << end.dump();
+    const json runs = mower.program.Export()["runs"];
+    ASSERT_FALSE(runs.empty());
+    EXPECT_EQ(runs[0]["result"], "failed");
+    EXPECT_EQ(mower.release_clears, 0);
   }
 
   // Swapped bumper sides: the input step sees the other side.
@@ -1836,6 +1860,20 @@ TEST(Firmware, OnlyAMeasurementWithTheBladeRemovedAsksForTheHold) {
   EXPECT_TRUE(Program::BladeRemoved(step));
   step.confirm = {Named{"raised", {}}, Named{"hand_at_stop", {}}};
   EXPECT_FALSE(Program::BladeRemoved(step));
+}
+
+// hw/status shows the fall of the clear before hw/link_stats tells that the clear went out: the part still passes.
+TEST(Firmware, AClearToldAfterItsFallCounts) {
+  FwMower mower;
+  mower.link_late = 0.8;
+  ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
+  ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_stop", {&Mower::press_stop, &Mower::press_stop})["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_lift", {&Mower::press_lift})["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_bumper", {&Mower::press_left, &Mower::press_right})["state"], "ok");
+  const json end = mower.PassLatch();
+  EXPECT_EQ(end.value("step", ""), "fw_latch") << end.dump();
+  EXPECT_EQ(end.value("state", ""), "ok") << end.dump();
 }
 
 // The other bumper latches the collision as well: the part fails at once, not after its time.

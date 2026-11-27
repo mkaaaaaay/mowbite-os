@@ -519,7 +519,11 @@ void Program::TickLatch(double now, double wall) {
   };
   // The clear of the part went out: since when, below 0 not yet.
   const double out = clear_sent_ >= run.clear && run.clear != 0 ? std::max(clear_sent_at_, run.drive_began) : -1;
-  const bool cleared = out >= 0 && run.released >= out;
+  // In kClear: the input stood when the clear was asked and fell since. hw/status may show the fall before
+  // hw/link_stats tells the clear went out; then the time counts from the asking, longer than the board took.
+  const bool fell = !signal || run.released >= run.drive_began;
+  const double fall = run.released >= run.drive_began ? run.released : now;
+  const double took = std::max(0.0, fall - (out >= 0 && fall >= out ? out : run.drive_began));
   switch (run.latch) {
     case Latch::kRest:
       if (part.mode == "release") {
@@ -567,6 +571,7 @@ void Program::TickLatch(double now, double wall) {
       AskClear(now);
       run.clear = clear_seq_;
       run.drive_began = now;
+      run.released = -1;
       run.clears = 1;
       run.latch = Latch::kClear;
       return;
@@ -590,8 +595,8 @@ void Program::TickLatch(double now, double wall) {
       }
       if (part.mode == "press") {
         // Held: every clear leaves it switched.
-        if (!signal || cleared) {
-          limit("A clear ended the held input " + part.role, std::max(0.0, run.released - out), 0);
+        if (fell) {
+          limit("A clear ended the held input " + part.role, took, 0);
           return;
         }
         if (now - out < step.Number("clear_every")) return;
@@ -606,8 +611,7 @@ void Program::TickLatch(double now, double wall) {
         ++run.clears;
         return;
       }
-      if (cleared) {
-        const double took = run.released - out;
+      if (fell) {
         if (took > step.Number("clear_max")) {
           limit("The clear ended " + part.role + " only after " + std::to_string(took) + " s", took,
                 step.Number("clear_max"));
