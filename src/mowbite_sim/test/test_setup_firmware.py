@@ -14,7 +14,6 @@ import random
 import shutil
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -24,8 +23,8 @@ from geometry_msgs.msg import TwistStamped
 from mowbite_msgs.msg import HardwareStatus, MqttPublish, RobotState, RpcError, RpcMethods, RpcRequest, RpcResponse
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (EXIT_CODES, HISTORY, SimProbe, journal_dir, layers, sim_description, sim_files,  # noqa: E402
-                        wait_until, write_json)
+from sim_common import (EXIT_CODES, HISTORY, Keeper, SimProbe, journal_dir, layers, sim_description,  # noqa: E402
+                        sim_files, wait_until, write_json)
 
 VARIANT = os.environ.get("MOWBITE_FW_VARIANT", "")
 WORK = tempfile.mkdtemp(prefix=f"mowbite_setup_firmware_{VARIANT or 'tron'}_")
@@ -92,23 +91,14 @@ class Probe(SimProbe):
         self.node.create_subscription(RpcError, "bridge/rpc/error", self._error, 10)
         self.node.create_subscription(RpcMethods, "bridge/rpc/methods", self._methods, HISTORY)
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
-        self.keeping = None
-        self.keeper = threading.Thread(target=self._keep, daemon=True)
+        self.keeper = Keeper()
         self.start()
-        self.keeper.start()
 
     def _publish(self, msg):
         if msg.topic == "rpc/request":
             with self.lock:
                 self.host_requests.append(json.loads(msg.payload).get("method"))
         super()._publish(msg)
-
-    def _keep(self):
-        while rclpy.ok():
-            step = self.keeping
-            if step:
-                self._send("setup.keep", {"step": step}, None, None)
-            time.sleep(0.4)
 
     def turning(self):
         return self.wheels is not None and abs(self.wheels.twist.linear.x) > 0.02
@@ -141,7 +131,7 @@ class TestSetupFirmware(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.probe.keeping = None
+        cls.probe.keeper.stop()
         cls.probe.stop()
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
@@ -150,7 +140,7 @@ class TestSetupFirmware(unittest.TestCase):
         p = self.probe
         entry = wait_until(lambda: (lambda e: e if not e["blocked"] else None)(p.step(step)), 20)
         self.assertIsNotNone(entry, f"{step} stays blocked: {p.step(step)['blocked']}")
-        p.keeping = step if STEPS[step].get("confirm") else None
+        p.keeper.step = step if STEPS[step].get("confirm") else None
         answer = p.change("setup.start", step, confirm=STEPS[step].get("confirm", []))
         self.assertIn("result", answer, answer)
 
@@ -169,7 +159,7 @@ class TestSetupFirmware(unittest.TestCase):
     def ended(self, step, timeout):
         p = self.probe
         entry = wait_until(lambda: (lambda e: e if e["state"] != "running" else None)(p.step(step)), timeout)
-        p.keeping = None
+        p.keeper.step = None
         self.assertIsNotNone(entry, f"{step} still runs: {p.step(step)}")
         return entry
 

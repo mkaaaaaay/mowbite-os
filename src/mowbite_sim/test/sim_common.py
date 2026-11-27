@@ -260,6 +260,52 @@ def xcore_driver(bind_ip, group_port, config=None, node=None, **params):
                             {"interface": "lo", "bind_ip": bind_ip, "announcement_port": group_port, **params}])
 
 
+KEEPER = r"""
+import json, sys, threading, time
+import rclpy
+from mowbite_msgs.msg import RpcRequest
+every = float(sys.argv[1])
+rclpy.init()
+pub = rclpy.create_node("setup_keeper").create_publisher(RpcRequest, "bridge/rpc/request", 10)
+step = None
+def read():
+    global step
+    for line in sys.stdin:
+        step = line.strip() or None
+    rclpy.shutdown()
+threading.Thread(target=read, daemon=True).start()
+n = 0
+while rclpy.ok():
+    if step and pub.get_subscription_count() > 0:
+        n += 1
+        pub.publish(RpcRequest(method="setup.keep", params=json.dumps({"step": step}), id=f"keeper-{n}"))
+    time.sleep(every)
+"""
+
+
+class Keeper:
+    """setup.keep for step (None: none) every every s, as the app sends it while a step that moves runs; from a
+    process of its own, since a busy test process delays its own threads by up to a second."""
+
+    def __init__(self, every=0.25):
+        self.proc = subprocess.Popen([sys.executable, "-c", KEEPER, str(every)], stdin=subprocess.PIPE, text=True)
+        self._step = None
+
+    @property
+    def step(self):
+        return self._step
+
+    @step.setter
+    def step(self, step):
+        self._step = step
+        self.proc.stdin.write(f"{step or ''}\n")
+        self.proc.stdin.flush()
+
+    def stop(self):
+        self.proc.stdin.close()
+        stop_process(self.proc)
+
+
 def stop_process(proc, sig=signal.SIGTERM, group=False):
     """Stops a process (with group its whole process group) by sig, after 10 s by SIGKILL; its exit code."""
     def send(s):

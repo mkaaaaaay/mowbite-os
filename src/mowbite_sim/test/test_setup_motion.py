@@ -23,7 +23,6 @@ import random
 import shutil
 import sys
 import tempfile
-import threading
 import time
 import unittest
 
@@ -38,7 +37,7 @@ from mowbite_msgs.msg import (HardwareStatus, MqttPublish, ReasonChange, RobotSt
 from mowbite_msgs.srv import SetEmergency
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from sim_common import (EXIT_CODES, HISTORY, SimProbe, fake_xcore, journal_dir, layers,  # noqa: E402,F401
+from sim_common import (EXIT_CODES, HISTORY, Keeper, SimProbe, fake_xcore, journal_dir, layers,  # noqa: E402,F401
                         loopback_group, sim_description, sim_files, stall_thread, station_frame, thread_owner,
                         wait_until, write_json)
 
@@ -138,14 +137,12 @@ class Probe(SimProbe):
         self.rpc_pub = self.node.create_publisher(RpcRequest, "bridge/rpc/request", 10)
         self.emergency = self.node.create_client(SetEmergency, "hw/emergency")
         # setup.keep as the app sends it while a step that moves runs.
-        self.keeping = None
-        self.keeper = threading.Thread(target=self._keep, daemon=True)
+        self.keeper = Keeper()
         if PLATFORM == "nx60i":
             # Corrections once a second, as a caster sends them: the xCore counts RTK fixed only with them (ground).
             self.rtcm_pub = self.node.create_publisher(Rtcm, "gnss/rtcm", 10)
             self.node.create_timer(1.0, lambda: self.rtcm_pub.publish(Rtcm(data=list(station_frame()))))
         self.start()
-        self.keeper.start()
 
     def _robot(self, msg):
         with self.lock:
@@ -157,13 +154,6 @@ class Probe(SimProbe):
             with self.lock:
                 self.host_requests.append(json.loads(msg.payload).get("method"))
         super()._publish(msg)
-
-    def _keep(self):
-        while rclpy.ok():
-            step = self.keeping
-            if step:
-                self._send("setup.keep", {"step": step}, None, None)
-            time.sleep(0.4)
 
     def turning(self):
         return self.wheels is not None and abs(self.wheels.twist.linear.x) > 0.02
@@ -203,7 +193,7 @@ class TestSetupMotion(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.probe.keeping = None
+        cls.probe.keeper.stop()
         cls.probe.stop()
         rclpy.shutdown()
         shutil.rmtree(WORK, ignore_errors=True)
@@ -212,7 +202,7 @@ class TestSetupMotion(unittest.TestCase):
         p = self.probe
         entry = wait_until(lambda: (lambda e: e if not e["blocked"] else None)(p.step(step)), 15)
         self.assertIsNotNone(entry, f"{step} stays blocked: {p.step(step)['blocked']}")
-        p.keeping = step if keep else None
+        p.keeper.step = step if keep else None
         answer = p.change("setup.start", step, confirm=confirm)
         self.assertIn("result", answer, answer)
 
@@ -220,7 +210,7 @@ class TestSetupMotion(unittest.TestCase):
         """The entry of the step once it no longer runs; the mower stands in IDLE again."""
         p = self.probe
         entry = wait_until(lambda: (lambda e: e if e["state"] != "running" else None)(p.step(step)), timeout)
-        p.keeping = None
+        p.keeper.step = None
         self.assertIsNotNone(entry, f"{step} still runs: {p.step(step)}")
         self.assertTrue(p.wait(lambda: p.robot.current_state == "IDLE" and p.robot.current_sub_state == "", 5),
                         p.robot)
@@ -317,7 +307,7 @@ class TestSetupMotion(unittest.TestCase):
             self.start(step)
             entry = wait_until(lambda: (lambda e: e if e["state"] != "running" else None)(p.step(step)), 30)
         finally:
-            p.keeping = None
+            p.keeper.step = None
             set_flags()
         self.assertIsNotNone(entry, p.step(step))
         self.assertEqual((entry["result"]["reason"], entry["result"]["part"]), ("LIMIT", part), entry["result"])
@@ -366,15 +356,15 @@ class TestSetupMotion(unittest.TestCase):
         ready = wait_until(lambda: (lambda e: e if e["state"] != "running" or (
             e["progress"]["n"] == 1 and p.turning()) else None)(p.step("stop_moving")), 15)
         self.assertEqual((ready or {}).get("state"), "running", p.step("stop_moving"))
-        p.keeping = None
+        p.keeper.step = None
         time.sleep(0.5)
         p._send("setup.keep", {"step": "stop_moving"}, None, None)
         time.sleep(0.5)
-        p.keeping = "stop_moving"
+        p.keeper.step = "stop_moving"
         stall_thread(thread_owner("setup"), "setup", 0.6)
         time.sleep(0.5)
         self.assertEqual(p.step("stop_moving")["state"], "running", p.step("stop_moving"))
-        p.keeping = None
+        p.keeper.step = None
         self.assertEqual(self.ended("stop_moving", 10)["result"]["reason"], "RELEASED")
 
     def test_09_an_emergency_of_the_app_ends_the_step(self):
