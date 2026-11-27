@@ -42,14 +42,17 @@ SETUP = layers.setup(PLATFORM)
 LIST = json.loads(SETUP["steps"]) if SETUP["steps"] else {"catalog": 0, "steps": []}
 DRIVE = ("wheels", "stop_moving", "no_command", "silence", "driver_end", "ground", "blade")
 # inputs_assign and summary restart the OS; summary needs the step silence before it as well. The steps platform
-# (test_platform_choice.py) and hardware (the drivers run here) are ok by themselves.
+# (test_platform_choice.py) and hardware (the drivers run here) are ok by themselves. Steps with firmware are hidden
+# while the driver lists the firmware (test_setup_firmware.py).
 LIST["steps"] = [step for step in LIST["steps"]
-                 if step["check"] not in ("inputs_assign", "summary", "platform", "hardware") + DRIVE]
+                 if step["check"] not in ("inputs_assign", "summary", "platform", "hardware") + DRIVE
+                 and not step.get("firmware")]
 SETUP["steps"] = json.dumps(LIST) if LIST["steps"] else ""
 STEPS = {step["id"]: step for step in LIST["steps"]}
 BOARD = next((step["id"] for step in LIST["steps"] if step["check"] == "board"), None)
 METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setup.abort", "setup.keep", "setup.reset",
-           "setup.platforms", "setup.platform.set", "setup.ports", "setup.ports.listen", "setup.image"]
+           "setup.firmware.export", "setup.platforms", "setup.platform.set", "setup.ports", "setup.ports.listen",
+           "setup.image"]
 G = 9.81
 FIRMWARE = "main 1.2.3"
 # The emergency a press of an input brings where the step names none.
