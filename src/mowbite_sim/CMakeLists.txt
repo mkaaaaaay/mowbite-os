@@ -59,7 +59,8 @@ if(BUILD_TESTING)
   endforeach()
   # The measurement of unlisted firmware on the Tron, then each board that has to fail it (VARIANTS there).
   add_journaled_launch_test(test/test_setup_firmware.py TIMEOUT 900)
-  foreach(variant stop_delay no_stop_latches clear_releases_held setpoint_hold no_real_rates swap_bumpers)
+  foreach(variant stop_delay no_stop_latches clear_releases_held setpoint_hold no_real_rates swap_bumpers
+                  cutter_ignores_stop)
     add_journaled_launch_test(test/test_setup_firmware.py TARGET test_setup_firmware_${variant} TIMEOUT 600
       ENV MOWBITE_FW_VARIANT=${variant})
   endforeach()

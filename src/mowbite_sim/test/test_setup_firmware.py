@@ -44,6 +44,7 @@ VARIANTS = {
     "setpoint_hold": ({"setpoint_hold": 6.0}, "fw_setpoint", "LIMIT"),
     "no_real_rates": ({"real_rates": 0}, "fw_link", "LIMIT"),
     "swap_bumpers": ({"swap_bumpers": 1}, "fw_bumper", "WRONG_INPUT"),
+    "cutter_ignores_stop": ({"cutter_ignores_stop": 1}, "fw_blade", "LIMIT"),
 }
 CHANGE, FAILS, REASON = VARIANTS[VARIANT] if VARIANT else ({}, None, None)
 FLAGGED = {**BOARD, **CHANGE}
