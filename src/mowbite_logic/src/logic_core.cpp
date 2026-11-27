@@ -272,6 +272,14 @@ void LogicCore::UpdateEmergency(bool report) {
   const bool emergency = hw_.emergency || !hw_.telemetry_ok || restart_hold_;
   // The driver sends no reason without an emergency; one that does not block is not shown either.
   reason_ = emergency ? EmergencyReason() : 0;
+  constexpr int kBoardInputs = kEmergencyLatch | kEmergencyStop | kEmergencyLift | kEmergencyCollision;
+  if (!emergency) {
+    input_emergency_since_ = -1;
+  } else if ((reason_ & ~kBoardInputs) != 0) {
+    input_emergency_since_ = -2;
+  } else if (input_emergency_since_ == -1) {
+    input_emergency_since_ = hw_.time_s;
+  }
   if (reason_ != logged_reason_) {
     effects_.push_back(ReasonChange{logged_reason_, reason_});
     logged_reason_ = reason_;

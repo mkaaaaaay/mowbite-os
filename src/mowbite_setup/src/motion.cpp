@@ -806,7 +806,8 @@ std::optional<Motion> Program::MotionNow() const {
                   run_->blade,
                   static_cast<int>(std::lround(step.Number("percent"))),
                   static_cast<int>(std::lround(step.Number("height"))),
-                  BladeLease(step)};
+                  BladeLease(step),
+                  step.firmware && BladeRemoved(step) ? kBladeInputHold : 0};
   }
   if (IsGround(step)) {
     return Motion{step.id, false, std::max(Speed(step), step.Number("bumper_speed")), step.Number("turn_rate")};

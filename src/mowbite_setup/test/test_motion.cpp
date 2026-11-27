@@ -1828,6 +1828,16 @@ TEST(Firmware, TheSignalSaysWhetherTheBladeIsRemoved) {
   EXPECT_FALSE(mower.program.MeasureNow()->blade_removed);
 }
 
+// Only a step with firmware that confirmed the blade off the mower lets the logic keep the blade after an input.
+TEST(Firmware, OnlyAMeasurementWithTheBladeRemovedAsksForTheHold) {
+  Step step;
+  step.firmware = true;
+  step.confirm = {Named{"raised", {}}, Named{"blade_removed", {}}};
+  EXPECT_TRUE(Program::BladeRemoved(step));
+  step.confirm = {Named{"raised", {}}, Named{"hand_at_stop", {}}};
+  EXPECT_FALSE(Program::BladeRemoved(step));
+}
+
 // The other bumper latches the collision as well: the part fails at once, not after its time.
 TEST(Firmware, TheOtherBumperFailsAtOnce) {
   FwMower mower;

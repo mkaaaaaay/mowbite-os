@@ -14,7 +14,7 @@ class SetupPart {
  public:
   Reason OnSetupMotion(CoreAccess core, bool active, const std::string& step, double now_s);
   bool TickSetup(CoreAccess core, double now_s);
-  void OnSetupBlade(CoreFacts core, const std::string& step, int blade);
+  void OnSetupBlade(CoreFacts core, const std::string& step, int blade, double input_hold_s);
   bool SetupBladeOnce(CoreFacts core) const;
   // Leaves SETUP; why goes out as a notice unless the program ended it.
   void EndSetup(CoreAccess core, const std::optional<std::string>& why);
@@ -31,6 +31,9 @@ class SetupPart {
   bool setup_blade_refused() const {
     return setup_blade_refused_;
   }
+  double setup_blade_hold_s() const {
+    return setup_blade_hold_s_;
+  }
 
  private:
   std::string setup_step_;
@@ -38,6 +41,8 @@ class SetupPart {
   // SetupMotion BLADE_* the step asks for and whether hw/blade refused it.
   int setup_blade_ = 0;
   bool setup_blade_refused_ = false;
+  // How long the blade order stays after an emergency of only inputs of the board (LogicCore::SetupBladeHeld).
+  double setup_blade_hold_s_ = 0;
 };
 
 }  // namespace mowbite_logic

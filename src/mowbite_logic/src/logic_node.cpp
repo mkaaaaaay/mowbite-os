@@ -185,7 +185,8 @@ LogicNode::LogicNode(const rclcpp::NodeOptions& options)
             setup_blade_percent_ = msg->blade_percent;
             setup_blade_height_mm_ = msg->blade_height_mm;
             setup_blade_lease_s_ = msg->blade_lease_s;
-            core_.Call<&LogicCore::OnSetupBlade>(msg->step, static_cast<int>(msg->blade));
+            core_.Call<&LogicCore::OnSetupBlade>(msg->step, static_cast<int>(msg->blade),
+                                                 static_cast<double>(msg->blade_input_hold_s));
           }
           // An end of the step or an off of the blade at once; an on only from Step(), once the session is written.
           if (!core_.View().BladeWanted()) UpdateBladeLocked();

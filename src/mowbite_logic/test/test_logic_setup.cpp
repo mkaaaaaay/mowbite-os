@@ -196,6 +196,73 @@ TEST(LogicSetup, TheBladeTurnsAsTheStepAsksWithoutASafetyMeasurement) {
   EXPECT_TRUE(core.BladeWanted());
 }
 
+// A step that measures the board with the blade off the mower: after an emergency of the inputs of the board alone
+// the blade order stays for the hold of the step, so that the board has to stop the blade; anything else switches it
+// off at once, and once off it stays off until the step asks anew.
+TEST(LogicSetup, AnInputEmergencyKeepsTheBladeOrderForItsHoldOnly) {
+  const auto input = [](int reason, double t) {
+    HardwareSnapshot hw = Healthy();
+    hw.emergency = reason != 0;
+    hw.emergency_reason = reason;
+    hw.time_s = t;
+    return hw;
+  };
+  const int stop = 1 << 2 | 1 << 0;
+  TestCore core = Ready();
+  ASSERT_TRUE(core.OnSetupMotion(true, "fw_blade", 10.0).empty());
+  core.OnSetupBlade("fw_blade", 1, 1.0);
+  ASSERT_TRUE(core.BladeWanted());
+  core.OnHardwareStatus(input(stop, 20.0));
+  EXPECT_FALSE(core.BladeWanted());
+  EXPECT_TRUE(core.SetupBladeHeld(20.5));
+  EXPECT_TRUE(core.SetupBladeHeld(21.0));
+  EXPECT_FALSE(core.SetupBladeHeld(21.01));
+  // Released: off, and not again until the step asks anew.
+  core.OnHardwareStatus(input(0, 20.6));
+  EXPECT_FALSE(core.SetupBladeHeld(20.6));
+  EXPECT_FALSE(core.BladeWanted());
+  core.OnSetupBlade("fw_blade", 0, 1.0);
+  core.OnSetupBlade("fw_blade", 1, 1.0);
+  ASSERT_TRUE(core.BladeWanted());
+  // Lift and the bumpers too, but another reason beside them ends the hold at once.
+  core.OnHardwareStatus(input(1 << 3 | 1 << 5 | 1 << 0, 30.0));
+  EXPECT_TRUE(core.SetupBladeHeld(30.2));
+  core.OnHardwareStatus(input(1 << 3 | 1 << 5 | 1 << 0 | 1 << 1, 30.3));
+  EXPECT_FALSE(core.SetupBladeHeld(30.4));
+  core.OnHardwareStatus(input(0, 31.0));
+  core.OnSetupBlade("fw_blade", 0, 1.0);
+  core.OnSetupBlade("fw_blade", 1, 1.0);
+  // No telemetry and the station end it at once as well.
+  core.OnHardwareStatus(input(stop, 40.0));
+  ASSERT_TRUE(core.SetupBladeHeld(40.1));
+  core.OnHardwareTimeout();
+  EXPECT_FALSE(core.SetupBladeHeld(40.2));
+  core.OnHardwareStatus(input(0, 41.0));
+  core.OnSetupBlade("fw_blade", 0, 1.0);
+  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnHardwareStatus(input(stop, 50.0));
+  HardwareSnapshot docked = input(stop, 50.1);
+  docked.dock_contact = true;
+  core.OnHardwareStatus(docked);
+  EXPECT_FALSE(core.SetupBladeHeld(50.2));
+  core.OnHardwareStatus(input(0, 51.0));
+  // Without a hold of the step, or with the blade off, nothing is held.
+  core.OnSetupBlade("fw_blade", 0, 0);
+  core.OnSetupBlade("fw_blade", 1, 0);
+  core.OnHardwareStatus(input(stop, 60.0));
+  EXPECT_FALSE(core.SetupBladeHeld(60.1));
+  core.OnHardwareStatus(input(0, 61.0));
+  core.OnSetupBlade("fw_blade", 0, 1.0);
+  core.OnHardwareStatus(input(stop, 70.0));
+  EXPECT_FALSE(core.SetupBladeHeld(70.1));
+  // Nor after SETUP ended.
+  core.OnHardwareStatus(input(0, 71.0));
+  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupMotion(false, "fw_blade", 72.0);
+  core.OnHardwareStatus(input(stop, 73.0));
+  EXPECT_FALSE(core.SetupBladeHeld(73.1));
+}
+
 TEST(LogicSetup, TheBladeGoesOffWithTheEndOfSetup) {
   for (int end = 0; end < 3; ++end) {
     TestCore core = Ready();

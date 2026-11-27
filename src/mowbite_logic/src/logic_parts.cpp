@@ -190,8 +190,14 @@ Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now
   return setup_.OnSetupMotion(CoreAccess(*this), active, step, now_s);
 }
 
-void LogicCore::OnSetupBlade(const std::string& step, int blade) {
-  setup_.OnSetupBlade(CoreFacts(*this), step, blade);
+void LogicCore::OnSetupBlade(const std::string& step, int blade, double input_hold_s) {
+  setup_.OnSetupBlade(CoreFacts(*this), step, blade, input_hold_s);
+}
+
+bool LogicCore::SetupBladeHeld(double now_s) const {
+  const double hold = setup_.setup_blade_hold_s();
+  return state_ == State::kSetup && setup_.setup_blade() != 0 && hold > 0 && input_emergency_since_ >= 0 &&
+         now_s - input_emergency_since_ <= hold && hw_.telemetry_ok && !hw_.dock_contact;
 }
 
 bool LogicCore::SetupBladeOnce() const {

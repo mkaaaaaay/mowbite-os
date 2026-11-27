@@ -264,14 +264,17 @@ bool Program::Revoke(const json& entry) {
   return true;
 }
 
+// A step starts only with all its points confirmed: one that lists blade_removed had it confirmed.
+bool Program::BladeRemoved(const Step& step) {
+  return std::any_of(step.confirm.begin(), step.confirm.end(),
+                     [](const Named& point) { return point.id == "blade_removed"; });
+}
+
 std::optional<MeasureSignal> Program::MeasureNow() const {
   if (!run_) return std::nullopt;
   const Step& step = StepOf(*run_);
   if (!step.firmware || step.check == "firmware") return std::nullopt;
-  // A step starts only with all its points confirmed: one that lists blade_removed had it confirmed.
-  const bool removed = std::any_of(step.confirm.begin(), step.confirm.end(),
-                                   [](const Named& point) { return point.id == "blade_removed"; });
-  return MeasureSignal{step.id, capabilities_.firmware, capabilities_.device_hash, clear_seq_, removed};
+  return MeasureSignal{step.id, capabilities_.firmware, capabilities_.device_hash, clear_seq_, BladeRemoved(step)};
 }
 
 std::optional<std::string> Program::TakeMeasureEnd() {

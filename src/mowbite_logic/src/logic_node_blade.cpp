@@ -59,10 +59,11 @@ bool LogicNode::TellSafetyLocked() {
 
 void LogicNode::UpdateBladeLocked() {
   const auto& view = core_.View();
-  const bool wanted = view.BladeWanted();
+  const double t = MonotonicSeconds();
+  // A hold of a setup step only keeps an order already sent, it never switches the blade on.
+  const bool wanted = view.BladeWanted() || (blade_on_requested_ && view.SetupBladeHeld(t));
   const bool setup = view.InSetup();
   const bool once = view.SetupBladeOnce();
-  const double t = MonotonicSeconds();
   if (!wanted) {
     blade_once_sent_ = false;
     if (!blade_on_requested_) return;

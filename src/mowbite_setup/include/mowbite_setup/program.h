@@ -115,6 +115,8 @@ struct Motion {
   int blade_percent = 0;
   int blade_height_mm = 0;
   double blade_lease_s = 0;
+  // SetupMotion blade_input_hold_s: only for a step with firmware that confirmed blade_removed.
+  double blade_input_hold_s = 0;
 };
 
 // A command on setup/cmd_vel: m/s and rad/s.
@@ -285,6 +287,8 @@ class Program {
   void SetDrivers(bool on);
   // The restart asked for is the one of the step hardware: host.hardware on instead of host.restart_os.
   bool HardwareRestart() const;
+  // The step confirmed blade_removed (a start needs all its points): the measurement may keep the blade after an input.
+  static bool BladeRemoved(const Step& step);
 
  private:
   // What a step holds between restarts.

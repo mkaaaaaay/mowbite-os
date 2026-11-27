@@ -671,6 +671,7 @@ class SetupNode : public rclcpp::Node {
         msg.blade_percent = static_cast<uint8_t>(motion->blade_percent);
         msg.blade_height_mm = static_cast<uint16_t>(motion->blade_height_mm);
         msg.blade_lease_s = static_cast<float>(motion->blade_lease_s);
+        msg.blade_input_hold_s = static_cast<float>(motion->blade_input_hold_s);
         motion_pub_->publish(msg);
       }
       if (const auto command = program_->CommandNow()) {

@@ -137,7 +137,8 @@ class LogicCore {
   bool SetupActive() const;
   // The blade the step of setup/motion asks for (SetupMotion BLADE_*): it turns in SETUP without a safety measurement,
   // otherwise under the conditions of BladeWanted; a refusal holds it off until the step asks for another blade.
-  void OnSetupBlade(const std::string& step, int blade);
+  // input_hold_s (SetupMotion blade_input_hold_s): see SetupBladeHeld.
+  void OnSetupBlade(const std::string& step, int blade, double input_hold_s = 0);
   // The blade in SETUP on one lease that is not renewed (BLADE_ONCE).
   bool SetupBladeOnce() const;
 
@@ -386,6 +387,11 @@ class LogicCore {
   // safety measurement, telemetry and not on the dock; or in SETUP as the setup program asks, without emergency, with
   // telemetry and not on the dock. The node keeps the lease of hw/blade alive only while it is.
   bool BladeWanted() const;
+  // In SETUP, for a step with a hold (a measurement with the blade off the mower): within input_hold_s of the start of
+  // an emergency of only the inputs of the board (STOP, LIFT, COLLISION, the latch), with telemetry and off the
+  // station, the blade order already sent stays, so that the board alone has to stop the blade. It never switches the
+  // blade on; once another reason came the emergency holds nothing until it is gone.
+  bool SetupBladeHeld(double now_s) const;
   // hw/blade refused while the blade was wanted: mowing pauses, with reason bits of the answer as for that emergency;
   // in SETUP the blade stays off for the step, which sees it.
   void OnBladeRefused(const std::string& message, int emergency_reason = 0);
@@ -578,6 +584,8 @@ class LogicCore {
   int reason_ = kEmergencyTimeoutInputs;
   // OpenMower logs the first reason as a change from none.
   int logged_reason_ = 0;
+  // Start (hw time) of an emergency of only inputs of the board, -1 without emergency, -2 once another reason came.
+  double input_emergency_since_ = -1;
   std::optional<PoseSnapshot> pose_;
   double last_x_ = 0;
   double last_y_ = 0;

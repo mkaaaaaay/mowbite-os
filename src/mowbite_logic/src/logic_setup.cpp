@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -36,12 +37,14 @@ Reason SetupPart::OnSetupMotion(CoreAccess core, bool active, const std::string&
   setup_sign_s_ = now_s;
   setup_blade_ = 0;
   setup_blade_refused_ = false;
+  setup_blade_hold_s_ = 0;
   core.SetState(State::kSetup);
   return {};
 }
 
-void SetupPart::OnSetupBlade(CoreFacts core, const std::string& step, int blade) {
+void SetupPart::OnSetupBlade(CoreFacts core, const std::string& step, int blade, double input_hold_s) {
   if (core.state() != State::kSetup || step != setup_step_) return;
+  setup_blade_hold_s_ = std::isfinite(input_hold_s) && input_hold_s > 0 ? input_hold_s : 0;
   const int asked = blade == 1 || blade == 2 ? blade : 0;
   if (asked == setup_blade_) return;
   setup_blade_ = asked;
@@ -76,6 +79,7 @@ void SetupPart::EndSetup(CoreAccess core, const std::optional<std::string>& why)
   // The blade goes off with the state: BladeWanted holds outside SETUP only while mowing.
   setup_blade_ = 0;
   setup_blade_refused_ = false;
+  setup_blade_hold_s_ = 0;
   // One zero follows from leaving the state; the wheels stand.
   core.SetState(State::kIdle);
 }

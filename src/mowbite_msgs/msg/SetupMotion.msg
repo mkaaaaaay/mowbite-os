@@ -22,3 +22,7 @@ uint8 blade
 uint8 blade_percent
 uint16 blade_height_mm
 float32 blade_lease_s
+# After an emergency of only the inputs of the board (STOP, LIFT, COLLISION) the logic keeps the blade order this long
+# (s), so that the board alone has to stop the blade; 0: off at once. Only a step that measures firmware with the blade
+# off the mower (confirmed blade_removed) sets it.
+float32 blade_input_hold_s

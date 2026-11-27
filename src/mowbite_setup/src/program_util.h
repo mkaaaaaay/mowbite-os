@@ -25,6 +25,10 @@ constexpr double kServiceWait = 2.0;
 constexpr double kLatchWait = 2.0;
 // The release of the program ends that emergency within this time (s).
 constexpr double kReleaseWithin = 10.0;
+// A blade step of the firmware measurement with the blade off the mower: the logic keeps the blade order this long
+// after an emergency of the inputs of the board alone, so that the board has to stop the blade (s, decision of the
+// owner 27.11.; the driver holds no longer either).
+constexpr double kBladeInputHold = 1.0;
 // Wheels or a blade that stood this long already at the trigger did not stop by it: the pass measured nothing (s).
 constexpr double kStoodBefore = 0.3;
 
