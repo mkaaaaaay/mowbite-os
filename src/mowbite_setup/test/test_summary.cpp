@@ -467,3 +467,34 @@ TEST(Summary, TheDimensionsComeFirst) {
   EXPECT_TRUE(bench.Blocked().empty());
   EXPECT_EQ(bench.Start(), "");
 }
+
+TEST(Summary, ASilenceWithoutStandTimeNamesTheOwnerStepsOnly) {
+  json list = json::parse(kList);
+  list["catalog"] = 3;
+  list["restart"] = "self";
+  const json firmware = json::parse(R"([
+    {"id": "fw_link", "stage": "firmware", "firmware": true, "check": "link",
+     "params": {"time": 10, "fast": ["sensor_info", "speed"], "fast_min": 80, "fast_max": 120, "medium": ["motors"],
+                "medium_min": 2, "slow": ["version", "battery", "bms"], "slow_min": 1},
+     "confirm": ["raised", "blade_removed", "hand_at_stop"]},
+    {"id": "fw_stop", "stage": "firmware", "firmware": true, "check": "input", "params": {"role": "stop"}},
+    {"id": "fw_lift", "stage": "firmware", "firmware": true, "check": "input", "params": {"role": "lift"}},
+    {"id": "fw_bumper", "stage": "firmware", "firmware": true, "check": "input", "params": {"role": "bumper"}},
+    {"id": "fw_setpoint", "stage": "firmware", "firmware": true, "check": "silence",
+     "params": {"rounds": 2, "stop_max": 4.0, "emergency": ["HIGH_LEVEL"], "last_setpoint": "yes"},
+     "confirm": ["raised", "hand_at_stop"]},
+    {"id": "fw_release", "stage": "firmware", "firmware": true, "check": "firmware",
+     "params": {"node": "tron_mcu", "boards": ["cutter", "chassis"], "restart_time": 30}}])");
+  list["steps"].insert(list["steps"].begin(), firmware.begin(), firmware.end());
+  std::string why;
+  ASSERT_TRUE(ParseSteps(list, &why)) << why;
+  Bench bench(R"({"schema": 1, "platform": "tron", "steps": {
+    "stop": {"state": "ok"}, "lift": {"state": "ok"}, "bumper": {"state": "ok"}, "blade": {"state": "ok"},
+    "silence": {"state": "ok", "values": [{"id": "spread", "value": 0.06}]}}})");
+  bench.list = list.dump();
+  bench.Boot();
+  const json blocked = bench.Step("summary")["blocked"];
+  ASSERT_FALSE(blocked.empty());
+  EXPECT_EQ(blocked[0]["reason"], "SAFETY_STEPS") << blocked.dump();
+  EXPECT_EQ(blocked[0]["steps"], json::array({"silence"})) << blocked.dump();
+}

@@ -54,10 +54,10 @@ std::vector<Refusal> Program::GroundProblems(double now) const {
   }
   if (LockOpen()) return problems;
   // Second rule of the program: with the lock closed the mower drives on the ground only after every step jacked up
-  // passed; skipped does not count.
+  // passed; skipped does not count. The steps of the firmware measurement decide on the firmware, not on the lock.
   json missing = json::array();
   for (const Step& other : list_.steps) {
-    const bool raised = IsDrive(other) && !IsGround(other) && !IsBlade(other);
+    const bool raised = IsDrive(other) && !IsGround(other) && !IsBlade(other) && !other.firmware;
     if (raised && records_.at(other.id).state != "ok") missing.push_back(other.id);
   }
   if (!missing.empty()) {

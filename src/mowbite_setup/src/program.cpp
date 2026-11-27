@@ -2074,6 +2074,23 @@ json Program::ImageOf(const std::map<std::string, std::pair<std::string, int>>& 
   return out;
 }
 
+bool Program::RestartsOS(const Step& step) const {
+  if (IsAssign(step) || IsSummary(step) || IsHardware(step)) return true;
+  const bool blade_locked = capabilities_known_ && !capabilities_.blade_allowed;
+  if (IsBlade(step)) return blade_locked;
+  if (!step.firmware) return false;
+  const json& measure = MeasureRecord();
+  if (step.check == "firmware") {
+    return capabilities_.firmware_source == "none" && measure.value("passed", 0) + 1 >= measure.value("needed", 1);
+  }
+  // The first step of a run allows the blade of the stage first (StartMeasure).
+  const json& runs = measure.value("runs", json::array());
+  const bool running = !runs.empty() && runs.back().value("result", "") == "running";
+  const bool blade = std::any_of(list_.steps.begin(), list_.steps.end(),
+                                 [](const Step& other) { return other.firmware && IsBlade(other); });
+  return !running && blade && blade_locked;
+}
+
 json Program::State(double now, const std::map<std::string, std::pair<std::string, int>>& images) const {
   const auto named = [](const std::vector<Named>& list) {
     json out = json::array();
@@ -2260,8 +2277,7 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
                      {"mark", step.mark},
                      {"texts", step.texts},
                      {"result", record.result},
-                     {"restart", IsAssign(step) || IsSummary(step) || IsHardware(step) ||
-                                     (IsBlade(step) && capabilities_known_ && !capabilities_.blade_allowed)}});
+                     {"restart", RestartsOS(step)}});
     if (stages.empty() || stages.back()["id"] != step.stage) {
       const mowbite_api::SetupName* stage = mowbite_api::FindSetupName(mowbite_api::SetupStages(), step.stage);
       stages.push_back({{"id", step.stage}, {"state", ""}, {"texts", mowbite_api::Texts(stage->texts)}});
@@ -2298,7 +2314,8 @@ json Program::State(double now, const std::map<std::string, std::pair<std::strin
             {"written", MeasureRecord().value("written", json())}}},
           {"restart_pending",
            restart_wanted_ || (run_ && IsAssign(StepOf(*run_)) && run_->assign == Assign::kRestart) ||
-               (run_ && (IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_))) && !run_->restarted)},
+               (run_ && (IsSummary(StepOf(*run_)) || IsHardware(StepOf(*run_)) || StepOf(*run_).check == "firmware") &&
+                !run_->restarted)},
           {"stages", std::move(stages)},
           {"steps", std::move(steps)}};
 }

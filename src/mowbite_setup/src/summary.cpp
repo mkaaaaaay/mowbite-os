@@ -101,7 +101,7 @@ std::vector<Refusal> Program::SummaryProblems(double now) const {
   // A passed silence without a stand time leaves the stand time to write unknown.
   if (steps.empty() && !LongestSilence()) {
     for (const Step& step : list_.steps) {
-      if (step.check == "silence") steps.push_back(step.id);
+      if (step.check == "silence" && !step.firmware) steps.push_back(step.id);
     }
   }
   if (!steps.empty()) {

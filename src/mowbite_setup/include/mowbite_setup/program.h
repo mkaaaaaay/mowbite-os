@@ -616,6 +616,8 @@ class Program {
   // Its steps are shown: firmware_source none or older, or forced; and offered to start (not older).
   bool MeasureShown() const;
   bool MeasureOffered() const;
+  // The program restarts the OS when this step starts or ends now (state steps[].restart).
+  bool RestartsOS(const Step& step) const;
   bool Shows(const Step& step) const {
     return !step.firmware || MeasureShown();
   }

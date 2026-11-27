@@ -1519,6 +1519,37 @@ struct FwMower : Mower {
 
 }  // namespace
 
+TEST(Ground, TheStepsOfTheFirmwareMeasurementAreNotAskedFor) {
+  json list = json::parse(GroundList());
+  list["catalog"] = 3;
+  list["restart"] = "self";
+  const json firmware = json::parse(FwList())["steps"];
+  list["steps"].insert(list["steps"].begin(), firmware.begin(), firmware.end());
+  std::string why;
+  ASSERT_TRUE(ParseSteps(list, &why)) << why;
+  const std::string text = list.dump();
+  // Listed firmware hides the steps of the measurement; with the lock closed ground asks only for the owner's.
+  const auto mower_with = [&text](const std::vector<const char*>& passed) {
+    auto mower = std::make_unique<Mower>(false, text.c_str());
+    json record = json::parse(kInputsPassed);
+    for (const char* step : passed) record["steps"][step] = {{"state", "ok"}};
+    EXPECT_TRUE(mower->program.Load(record.dump(), kWall, nullptr));
+    mower->capabilities.firmware = {{"cutter", "0.6.38"}, {"chassis", "0.6.34"}, {"bms", "1.0.0"}};
+    mower->capabilities.firmware_source = "listed";
+    mower->capabilities.device_hash = "d3v1ce";
+    mower->PutOnGround(false);
+    return mower;
+  };
+  const auto passed = mower_with({"wheels", "stop_moving", "no_command", "silence", "driver_end"});
+  EXPECT_EQ(passed->StepState("ground")["blocked"], json::array());
+  EXPECT_EQ(passed->Start("ground", json::array({"area_clear"})), "");
+  const auto missing = mower_with({"wheels", "stop_moving", "no_command", "silence"});
+  const json blocked = missing->StepState("ground")["blocked"];
+  ASSERT_EQ(blocked.size(), 1u) << blocked.dump();
+  EXPECT_EQ(blocked[0]["reason"], "SAFETY_AIR");
+  EXPECT_EQ(blocked[0]["steps"], json::array({"driver_end"})) << blocked.dump();
+}
+
 TEST(Firmware, TheStageHoldsItsRules) {
   std::string why;
   ASSERT_TRUE(ParseSteps(json::parse(FwList()), &why)) << why;
@@ -1592,6 +1623,9 @@ TEST(Firmware, ShownOnlyForFirmwareTheDriverDoesNotLet) {
 
 TEST(Firmware, ARunThatPassesWritesTheEntryAndRestarts) {
   FwMower mower;
+  // Only the release of a run that is enough restarts; nothing in the stage allows a blade.
+  EXPECT_EQ(mower.StepState("fw_release")["restart"], true);
+  EXPECT_EQ(mower.StepState("fw_link")["restart"], false);
   const json end = mower.PassRun();
   ASSERT_TRUE(end.is_null()) << end.dump();
   // The program asked no clear but through the signal while an input showed.
@@ -1605,6 +1639,8 @@ TEST(Firmware, ARunThatPassesWritesTheEntryAndRestarts) {
   ASSERT_EQ(mower.Start("fw_release", nullptr), "");
   mower.Run(1.0);
   EXPECT_EQ(mower.restarts, 1);
+  // Sent and not yet back: the step still waits for the restart.
+  EXPECT_EQ(mower.program.State(mower.now, {})["restart_pending"], true);
   EXPECT_NE(mower.layer_text.find(kEntry), std::string::npos) << mower.layer_text;
   EXPECT_EQ(mower.Fw()["written"], kEntry);
   EXPECT_EQ(mower.Fw()["passed"], 1);
@@ -1614,6 +1650,7 @@ TEST(Firmware, ARunThatPassesWritesTheEntryAndRestarts) {
   auto after = mower.Restarted("measured");
   const json done = after->RunToEnd(5);
   EXPECT_EQ(done["state"], "ok") << done.dump();
+  EXPECT_EQ(after->program.State(after->now, {})["restart_pending"], false);
   bool measured = false;
   for (const json& event : after->setup_events) measured = measured || event["what"] == "firmware_measured";
   EXPECT_TRUE(measured);
@@ -1629,6 +1666,28 @@ TEST(Firmware, ARunThatPassesWritesTheEntryAndRestarts) {
   // Back without the entry: the driver did not take it.
   auto refused = mower.Restarted("none");
   EXPECT_EQ(refused->RunToEnd(5)["reason"], "NOT_APPLIED");
+}
+
+TEST(Firmware, TheFirstStepOfARunShowsTheRestartForTheBlade) {
+  json list = json::parse(FwList());
+  list["steps"].insert(list["steps"].end() - 1, json::parse(R"(
+    {"id": "fw_blade", "stage": "firmware", "firmware": true, "check": "blade",
+     "params": {"node": "tron_mcu", "rpm": 2500, "emergency": ["HIGH_LEVEL"]},
+     "confirm": ["blade_removed", "hand_at_stop"]})"));
+  std::string why;
+  ASSERT_TRUE(ParseSteps(list, &why)) << why;
+  FwMower mower("none", list.dump());
+  EXPECT_EQ(mower.StepState("fw_link")["restart"], true);
+  EXPECT_EQ(mower.StepState("fw_blade")["restart"], true);
+  ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
+  mower.Run(0.5);
+  EXPECT_EQ(mower.restarts, 1);
+  // The driver allows the blade after the restart: the run starts without one.
+  mower.capabilities.blade_allowed = true;
+  mower.program.OnCapabilities(mower.capabilities);
+  mower.Run(0.2);
+  EXPECT_EQ(mower.StepState("fw_link")["restart"], false);
+  EXPECT_EQ(mower.StepState("fw_blade")["restart"], false);
 }
 
 TEST(Firmware, ARealFailureNeedsTwoRunsAndTakesTheEntryBack) {
