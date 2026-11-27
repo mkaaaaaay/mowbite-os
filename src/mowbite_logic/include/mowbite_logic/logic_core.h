@@ -137,8 +137,9 @@ class LogicCore {
   bool SetupActive() const;
   // The blade the step of setup/motion asks for (SetupMotion BLADE_*): it turns in SETUP without a safety measurement,
   // otherwise under the conditions of BladeWanted; a refusal holds it off until the step asks for another blade.
-  // input_hold_s (SetupMotion blade_input_hold_s): see SetupBladeHeld.
-  void OnSetupBlade(const std::string& step, int blade, double input_hold_s = 0);
+  void OnSetupBlade(const std::string& step, int blade);
+  // As OnSetupBlade, with input_hold_s (SetupMotion blade_input_hold_s): see SetupBladeHeld.
+  void OnSetupBladeWithHold(const std::string& step, int blade, double input_hold_s);
   // The blade in SETUP on one lease that is not renewed (BLADE_ONCE).
   bool SetupBladeOnce() const;
 

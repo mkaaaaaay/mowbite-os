@@ -210,7 +210,7 @@ TEST(LogicSetup, AnInputEmergencyKeepsTheBladeOrderForItsHoldOnly) {
   const int stop = 1 << 2 | 1 << 0;
   TestCore core = Ready();
   ASSERT_TRUE(core.OnSetupMotion(true, "fw_blade", 10.0).empty());
-  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 1.0);
   ASSERT_TRUE(core.BladeWanted());
   core.OnHardwareStatus(input(stop, 20.0));
   EXPECT_FALSE(core.BladeWanted());
@@ -221,8 +221,8 @@ TEST(LogicSetup, AnInputEmergencyKeepsTheBladeOrderForItsHoldOnly) {
   core.OnHardwareStatus(input(0, 20.6));
   EXPECT_FALSE(core.SetupBladeHeld(20.6));
   EXPECT_FALSE(core.BladeWanted());
-  core.OnSetupBlade("fw_blade", 0, 1.0);
-  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 0, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 1.0);
   ASSERT_TRUE(core.BladeWanted());
   // Lift and the bumpers too, but another reason beside them ends the hold at once.
   core.OnHardwareStatus(input(1 << 3 | 1 << 5 | 1 << 0, 30.0));
@@ -230,16 +230,16 @@ TEST(LogicSetup, AnInputEmergencyKeepsTheBladeOrderForItsHoldOnly) {
   core.OnHardwareStatus(input(1 << 3 | 1 << 5 | 1 << 0 | 1 << 1, 30.3));
   EXPECT_FALSE(core.SetupBladeHeld(30.4));
   core.OnHardwareStatus(input(0, 31.0));
-  core.OnSetupBlade("fw_blade", 0, 1.0);
-  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 0, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 1.0);
   // No telemetry and the station end it at once as well.
   core.OnHardwareStatus(input(stop, 40.0));
   ASSERT_TRUE(core.SetupBladeHeld(40.1));
   core.OnHardwareTimeout();
   EXPECT_FALSE(core.SetupBladeHeld(40.2));
   core.OnHardwareStatus(input(0, 41.0));
-  core.OnSetupBlade("fw_blade", 0, 1.0);
-  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 0, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 1.0);
   core.OnHardwareStatus(input(stop, 50.0));
   HardwareSnapshot docked = input(stop, 50.1);
   docked.dock_contact = true;
@@ -247,17 +247,17 @@ TEST(LogicSetup, AnInputEmergencyKeepsTheBladeOrderForItsHoldOnly) {
   EXPECT_FALSE(core.SetupBladeHeld(50.2));
   core.OnHardwareStatus(input(0, 51.0));
   // Without a hold of the step, or with the blade off, nothing is held.
-  core.OnSetupBlade("fw_blade", 0, 0);
-  core.OnSetupBlade("fw_blade", 1, 0);
+  core.OnSetupBladeWithHold("fw_blade", 0, 0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 0);
   core.OnHardwareStatus(input(stop, 60.0));
   EXPECT_FALSE(core.SetupBladeHeld(60.1));
   core.OnHardwareStatus(input(0, 61.0));
-  core.OnSetupBlade("fw_blade", 0, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 0, 1.0);
   core.OnHardwareStatus(input(stop, 70.0));
   EXPECT_FALSE(core.SetupBladeHeld(70.1));
   // Nor after SETUP ended.
   core.OnHardwareStatus(input(0, 71.0));
-  core.OnSetupBlade("fw_blade", 1, 1.0);
+  core.OnSetupBladeWithHold("fw_blade", 1, 1.0);
   core.OnSetupMotion(false, "fw_blade", 72.0);
   core.OnHardwareStatus(input(stop, 73.0));
   EXPECT_FALSE(core.SetupBladeHeld(73.1));

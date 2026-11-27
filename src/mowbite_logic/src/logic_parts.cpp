@@ -190,7 +190,9 @@ Reason LogicCore::OnSetupMotion(bool active, const std::string& step, double now
   return setup_.OnSetupMotion(CoreAccess(*this), active, step, now_s);
 }
 
-void LogicCore::OnSetupBlade(const std::string& step, int blade, double input_hold_s) {
+void LogicCore::OnSetupBlade(const std::string& step, int blade) { OnSetupBladeWithHold(step, blade, 0); }
+
+void LogicCore::OnSetupBladeWithHold(const std::string& step, int blade, double input_hold_s) {
   setup_.OnSetupBlade(CoreFacts(*this), step, blade, input_hold_s);
 }
 
