@@ -382,13 +382,17 @@ class InputHoldTest : public MeasureTest {
     sensor_.*input = true;
     return now_;
   }
-  // Commands on as the setup step does, up to `until`.
+  // Commands on as the setup step does, up to `until`; with renew_blade_ it also renews the blade request.
   void Command(double until) {
     while (now_ < until - 1e-9) {
       control_.OnCmdVel(0.3f, 0.0f, now_);
+      if (renew_blade_) renewals_.push_back(control_.SetBlade(renew_request_, now_));
       Run(std::min(until, now_ + 0.1));
     }
   }
+  bool renew_blade_ = false;
+  BladeRequest renew_request_ = BladeOn();
+  std::vector<BladeResult> renewals_;
 };
 
 TEST_F(InputHoldTest, AfterAStopOfTheBoardTheWheelsKeepTheSetpointForTheHoldTheBladeWithoutRemovalGoesOff) {
@@ -425,6 +429,60 @@ TEST_F(InputHoldTest, WithTheBladeRemovedTheBladeRequestOutlastsAStopForTheHold)
   ASSERT_FALSE(off.empty());
   EXPECT_GE(off.front(), t0 + kMeasureBladeHoldS - 1e-6);
   EXPECT_LE(off.front(), t0 + kMeasureBladeHoldS + 0.02);
+}
+
+TEST_F(InputHoldTest, ARenewalInTheBladeHoldKeepsTheRequestUntilTheEndOfTheHold) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  renew_blade_ = true;
+  Command(t0 + kMeasureBladeHoldS + 0.3);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GE(off.front(), t0 + kMeasureBladeHoldS - 1e-6);
+  EXPECT_LE(off.front(), t0 + kMeasureBladeHoldS + 0.02);
+  EXPECT_TRUE(Times(IsBladeOn, t0 + 0.005).empty());
+  ASSERT_GE(renewals_.size(), 11u);
+  for (size_t i = 0; i < 10; ++i) EXPECT_EQ(renewals_[i], BladeResult::kOk) << i;
+  EXPECT_NE(renewals_.back(), BladeResult::kOk);
+}
+
+TEST_F(InputHoldTest, ARenewalInTheBladeHoldAfterABumperKeepsTheRequest) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::bumper_left);
+  renew_blade_ = true;
+  Command(t0 + kMeasureBladeHoldS + 0.3);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GE(off.front(), t0 + kMeasureBladeHoldS - 1e-6);
+  EXPECT_LE(off.front(), t0 + kMeasureBladeHoldS + 0.02);
+}
+
+TEST_F(InputHoldTest, ARenewalWithOtherValuesEndsTheBladeHoldAtOnce) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Command(t0 + 0.2);
+  renew_blade_ = true;
+  renew_request_.speed_percent = 50;
+  const double t1 = now_;
+  Command(t0 + 1.0);
+  ASSERT_FALSE(renewals_.empty());
+  EXPECT_EQ(renewals_.front(), BladeResult::kBlocked);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_LE(off.front(), t1 + 0.011);
+  EXPECT_TRUE(Times(IsBladeOn, t0 + 0.005).empty());
+}
+
+TEST_F(InputHoldTest, WithoutBladeRemovedARenewalAfterAStopIsRefused) {
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Run(t0 + 0.05);
+  renew_blade_ = true;
+  Command(t0 + 0.5);
+  ASSERT_FALSE(renewals_.empty());
+  EXPECT_EQ(renewals_.front(), BladeResult::kBlocked);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_LE(off.front(), t0 + 0.011);
 }
 
 TEST_F(InputHoldTest, AnEmergencyOfTheLogicEndsTheBladeHoldAtOnce) {

@@ -397,6 +397,8 @@ class McuControl {
   // Since `since` only reasons of `inputs` are latched, for less than hold_s, in an open measurement of a running setup
   // step and with nothing else that blocks.
   bool InputLatchHolds(const std::optional<double>& since, uint32_t inputs, double hold_s, double now) const;
+  // The blade request of a measurement outlasts an input latch of the board (kMeasureBladeHoldS).
+  bool BladeHeld(double now) const;
   // A clear asked for by setup/firmware_measure may go out: wheels and blade stand, and the mark is there for STOP.
   bool MeasureClearPending(double now) const;
   bool MeasureClearReady(double now) const;

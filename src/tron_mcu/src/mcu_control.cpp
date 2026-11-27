@@ -305,8 +305,15 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32
       (request.height_mm < kMinCutterHeightMm || request.height_mm > kMaxCutterHeightMm)) {
     return BladeResult::kInvalidHeight;
   }
-  // A refused renewal also ends a running lease, so the blade never outlives a refusal.
+  BladeSetting setting;
+  setting.speed_percent = request.speed_percent ? request.speed_percent : config_.blade_speed_percent;
+  setting.height_mm = request.height_mm ? request.height_mm : config_.mow_height_mm;
   if (Blocked(now)) {
+    // In the hold of a firmware measurement the running request stays as it is: the renewal changes nothing.
+    if (blade_request_ && blade_request_->setting == setting && !blade_fault_ && !DockContact() && BladeHeld(now)) {
+      return BladeResult::kOk;
+    }
+    // A refused renewal also ends a running lease, so the blade never outlives a refusal.
     DropBlade(BladeOffReason::kBlocked);
     // An emergency says more than the hold.
     if (held_ && !Reported(now)) return BladeResult::kHeld;
@@ -322,9 +329,6 @@ BladeResult McuControl::SetBlade(const BladeRequest& request, double now, uint32
     DropBlade(BladeOffReason::kMotorFault);
     return BladeResult::kMotorFault;
   }
-  BladeSetting setting;
-  setting.speed_percent = request.speed_percent ? request.speed_percent : config_.blade_speed_percent;
-  setting.height_mm = request.height_mm ? request.height_mm : config_.mow_height_mm;
   blade_request_ = BladeLease{setting, now + request.lease_s};
   return BladeResult::kOk;
 }
@@ -520,6 +524,11 @@ bool McuControl::MeasureOpen(double now) const {
          MeasureSignalFresh(now) && measure_->device_hash == config_.device_hash &&
          measure_->cutter == VersionString(versions_->cutter_board) &&
          measure_->chassis == VersionString(versions_->chassis_board);
+}
+
+bool McuControl::BladeHeld(double now) const {
+  return Blocked(now) && InputLatchHolds(blade_hold_since_s_, kBoardBladeStopReasons, kMeasureBladeHoldS, now) &&
+         measure_->blade_removed;
 }
 
 bool McuControl::InputLatchHolds(const std::optional<double>& since, uint32_t inputs, double hold_s,
@@ -764,9 +773,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   const bool blocked = Blocked(now);
   const bool wheels_held = blocked && InputLatchHolds(input_hold_since_s_, kBoardWheelStopReasons, kMeasureInputHoldS, now);
   if (!wheels_held) input_hold_since_s_.reset();
-  const bool blade_held = blocked &&
-                          InputLatchHolds(blade_hold_since_s_, kBoardBladeStopReasons, kMeasureBladeHoldS, now) &&
-                          measure_->blade_removed;
+  const bool blade_held = BladeHeld(now);
   if (!blade_held) blade_hold_since_s_.reset();
   const bool dock_contact = DockContact();
 
@@ -829,7 +836,7 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   if (blocked && !blade_held) DropBlade(BladeOffReason::kBlocked);
   if (dock_contact) DropBlade(BladeOffReason::kDock);
   // Blade watchdog: a lease that was not renewed in time switches the blade off; during the hold after an input latch
-  // the renewal is refused, the hold ends it.
+  // a renewal does not extend it, the hold ends it.
   if (blade_request_ && !blade_held && now + kDeadlineSlackS >= blade_request_->until_s) {
     DropBlade(BladeOffReason::kLeaseExpired);
   }
