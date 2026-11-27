@@ -1816,6 +1816,18 @@ TEST(Firmware, AnInputThatBringsAnotherFails) {
   EXPECT_EQ(mower.program.Export()["runs"][0]["result"], "failed");
 }
 
+// The signal tells the driver whether the running step confirmed the blade off the mower.
+TEST(Firmware, TheSignalSaysWhetherTheBladeIsRemoved) {
+  FwMower mower;
+  ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
+  ASSERT_TRUE(mower.program.MeasureNow());
+  EXPECT_TRUE(mower.program.MeasureNow()->blade_removed);
+  ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
+  ASSERT_EQ(mower.Start("fw_stop", nullptr), "");
+  ASSERT_TRUE(mower.program.MeasureNow());
+  EXPECT_FALSE(mower.program.MeasureNow()->blade_removed);
+}
+
 // The other bumper latches the collision as well: the part fails at once, not after its time.
 TEST(Firmware, TheOtherBumperFailsAtOnce) {
   FwMower mower;

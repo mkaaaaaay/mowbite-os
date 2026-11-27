@@ -738,6 +738,7 @@ class SetupNode : public rclcpp::Node {
     }
     msg.device_hash = signal->device_hash;
     msg.clear_seq = signal->clear_seq;
+    msg.blade_removed = signal->blade_removed;
     measure_pub_->publish(msg);
   }
 

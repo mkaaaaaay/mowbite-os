@@ -100,6 +100,8 @@ struct MeasureSignal {
   std::vector<std::pair<std::string, std::string>> firmware;
   std::string device_hash;
   uint32_t clear_seq = 0;
+  // The running step confirmed blade_removed at its start.
+  bool blade_removed = false;
 };
 
 // setup/motion while a step that moves the wheels or the blade runs: the bounds mowbite_safety holds its commands to,

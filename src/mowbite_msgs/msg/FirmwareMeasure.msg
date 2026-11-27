@@ -13,3 +13,6 @@ string device_hash
 # Raised by one for each clear the step asks for: the driver sends one clear of the latches to the board while the
 # wheels and the blade stand, and names it in clear_seq of hw/link_stats.
 uint32 clear_seq
+# The step confirmed that the blade is off the mower: only then the driver may keep the blade order of the step for a
+# while after a latch of an input, so that the board alone has to stop the blade.
+bool blade_removed
