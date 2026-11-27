@@ -171,6 +171,13 @@ constexpr double kLastSetpointStopDelayS = 0.5;
 constexpr double kFirmwareMeasureFreshS = 0.5;
 // Each wheel while a measurement drives unlisted firmware (m/s).
 constexpr float kMeasureMaxWheelSpeed = 0.1f;
+// In an open measurement the wheels keep the last setpoint, and with the blade removed the blade its request, this long
+// after the board latched one of its inputs, so that the step measures the stop of the board alone.
+constexpr double kMeasureInputHoldS = 0.6;
+constexpr double kMeasureBladeHoldS = 1.0;
+// The inputs whose own stop of the board is known: the wheels on stop and lift, the blade also on a bumper (T6.3).
+constexpr uint32_t kBoardWheelStopReasons = kReasonStop | kReasonLift;
+constexpr uint32_t kBoardBladeStopReasons = kReasonStop | kReasonLift | kReasonCollision;
 // The MCU sends its version frame on its own at about 1.7 Hz. Until the first one after the port opened, motion and
 // blade are blocked; past this time without one the block is reported as FIRMWARE_INCOMPATIBLE.
 constexpr double kVersionStartS = 3.0;
@@ -282,8 +289,9 @@ class McuControl {
   // kMeasureMaxWheelSpeed. Once it no longer holds: stop, blade off, latched (FIRMWARE_INCOMPATIBLE). While it is
   // active and fresh, whatever the firmware, STOP is not cleared on its own; a change of clear_seq asks for one clear,
   // sent once the wheels and the blade stand. The first after a gap only sets where clear_seq stands.
+  // blade_removed: the step confirmed that the blade is off, only then the blade request outlasts an input latch.
   void OnFirmwareMeasure(bool active, const std::string& cutter, const std::string& chassis,
-                         const std::string& device_hash, uint32_t clear_seq, double now);
+                         const std::string& device_hash, uint32_t clear_seq, bool blade_removed, double now);
 
   // Lift, stop and bumper latch the emergency as well; all of it stays until released, with its reason bits.
   void LatchEmergency(uint32_t reason);
@@ -386,6 +394,9 @@ class McuControl {
   bool FirmwareUnconfirmed(double now) const;
   bool MeasureSignalFresh(double now) const;
   bool MeasureOpen(double now) const;
+  // Since `since` only reasons of `inputs` are latched, for less than hold_s, in an open measurement of a running setup
+  // step and with nothing else that blocks.
+  bool InputLatchHolds(const std::optional<double>& since, uint32_t inputs, double hold_s, double now) const;
   // A clear asked for by setup/firmware_measure may go out: wheels and blade stand, and the mark is there for STOP.
   bool MeasureClearPending(double now) const;
   bool MeasureClearReady(double now) const;
@@ -479,11 +490,16 @@ class McuControl {
     std::string chassis;
     std::string device_hash;
     uint32_t clear_seq;
+    bool blade_removed;
     double s;
   };
   std::optional<MeasureSignal> measure_;
   // The window was open at the last tick.
   bool measure_open_ = false;
+  // When the board latched an input while the wheels drove in an open measurement; empty once the hold ended.
+  std::optional<double> input_hold_since_s_;
+  // The same for the blade request, only with the blade removed.
+  std::optional<double> blade_hold_since_s_;
   // clear_seq of the signal already taken; empty while it is not fresh and active.
   std::optional<uint32_t> measure_clear_seen_;
   uint32_t measure_clear_sent_ = 0;

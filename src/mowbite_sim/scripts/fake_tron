@@ -18,7 +18,8 @@ imu_off, cutter_ignores_off,
 cutter_holds, gnss_rtcm, dock_shift_x,
 dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, lift_tilt, lift_front_only, gyro_bias_dps,
 charge_current, battery_percentage, battery_voltage, battery_temperature, blade_temperature, standstill_noise,
-stop_latches, mcu_quiet, setpoint_hold, stop_delay, lift_latches, clear_releases_held, real_rates, swap_bumpers,
+stop_latches, mcu_quiet, setpoint_hold, stop_delay, cutter_ignores_stop, lift_latches, clear_releases_held, real_rates,
+swap_bumpers,
 firmware) is read every 10 ms, every received sub packet goes to a JSON lines log, and --state writes the true
 pose as JSON with the time.monotonic() it was taken (clock); a thread of its own does all of this file work, so a
 slow disk never holds the ptys (Files). The GNSS pty also plays the RTK board in front of the receiver (Board).
@@ -48,7 +49,8 @@ from the host was its SpeedData this long, and ends it host_timeout after the fi
 (T9 on the Tron: 3.6 s, 0.23 s after a lone heartbeat); lift_latches keeps lift like stop_latches; real_rates sends
 sensor and speed at 100 Hz and battery, version and the BMS version every 0.6 s as the Tron does; firmware
 [cutter, chassis] the versions of the boards ("0.6.36", "0.6.34"). Boards that fail it: stop_delay (s) lets lift and
-stop hold the wheels and the blade only this much later, clear_releases_held lets a clear drop stop although it is
+stop hold the wheels and the blade only this much later, cutter_ignores_stop keeps the blade turning through lift,
+stop and the bumpers (only an off frame or no host stops it), clear_releases_held lets a clear drop stop although it is
 still pressed (until it is let go), swap_bumpers reports each bumper as the other; without stop_latches nothing
 latches, without real_rates sensor and speed come at 50 Hz and no BMS version.
 --dock places a charging station (Dock): the mower stops at it, gets contact there (dock_ok in the battery report) and a
@@ -867,7 +869,7 @@ def main():
     parser.add_argument("--flags", help="JSON file with lift, stop, bumper, bumper_left, bumper_right, rain, dock, "
                         "host_timeout, gnss_quality, gnss_noise, gnss_drift, "
                         "gnss_noise_tau, gnss_period, gnss_course_error, gnss_age, gnss_delay, yaw_drift, wheel_deadband, odom_scale, "
-                        "track, imu_off, cutter_ignores_off, "
+                        "track, imu_off, cutter_ignores_off, cutter_ignores_stop, "
                         "cutter_holds, "
                         "gnss_rtcm, dock_shift_x, dock_shift_y, dock_hollow_speed, place, tilt_roll, tilt_pitch, "
                         "lift_tilt, lift_front_only, gyro_bias_dps, charge_current, battery_percentage, "
@@ -931,7 +933,7 @@ def main():
     drive = Drive(args.mcu_track, args.track or args.mcu_track)
     antenna_history = History()
     course = None
-    # Cutter: on with a speed in percent from the last cutter frame; it stops with the wheels (lift, stop, no host).
+    # Cutter: on with a speed in percent from the last cutter frame; it stops on lift, stop, a bumper and without host.
     cutter_percent = 0
     dock = Dock(args.dock[0], args.dock[1], math.radians(args.dock[2]), args.dock_contact_x) if args.dock else None
     if dock and dock.settle(pose):
@@ -1044,7 +1046,9 @@ def main():
                 left_rpm, right_rpm = drive.rpm()
                 motors = b"".join(struct.pack("<hhhbb", rpm, 0, 2450, 30, 0)
                                   for rpm in (-right_rpm, -left_rpm, 0))
-                if blocked or (host.silent(now) and not flags.get("cutter_holds", 0)):
+                bumped = flags.get("bumper", 0) or flags.get("bumper_left", 0) or flags.get("bumper_right", 0)
+                if ((blocked or bumped) and not flags.get("cutter_ignores_stop", 0)) or (
+                        host.silent(now) and not flags.get("cutter_holds", 0)):
                     cutter_percent = 0
                 # 0.8 A while turning (10 mA steps).
                 cutter = struct.pack("<hhhbb", BLADE_RPM if cutter_percent else 0, 80 if cutter_percent else 0, 2450,

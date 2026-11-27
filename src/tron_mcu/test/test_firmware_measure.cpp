@@ -97,7 +97,7 @@ class MeasureTest : public ::testing::Test {
       if (feed_imu_) control_.OnImu(ImuCounts{}, now_);
       if (step_ % 60 == 1) control_.OnVersions(versions_);
       if (measure_ && step_ % 25 == 1) {
-        control_.OnFirmwareMeasure(true, cutter_, chassis_, hash_, clear_seq_, now_);
+        control_.OnFirmwareMeasure(true, cutter_, chassis_, hash_, clear_seq_, blade_removed_, now_);
         last_signal_s_ = now_;
       }
       for (auto& packet : control_.Tick(now_, kWall)) sent_.push_back({now_, packet});
@@ -148,6 +148,7 @@ class MeasureTest : public ::testing::Test {
   std::string chassis_ = "0.6.34";
   std::string hash_ = kHash;
   uint32_t clear_seq_ = 0;
+  bool blade_removed_ = false;
   bool feed_setup_ = false;
   // An IMU sample every step: its frame would follow a setpoint in the same tick.
   bool feed_imu_ = false;
@@ -296,7 +297,7 @@ TEST_F(MeasureTest, AStaleSignalDoesNotOpen) {
 TEST_F(MeasureTest, AnInactiveSignalDoesNotOpen) {
   measure_ = false;
   Run(0.05);
-  control_.OnFirmwareMeasure(false, cutter_, chassis_, hash_, 0, now_);
+  control_.OnFirmwareMeasure(false, cutter_, chassis_, hash_, 0, false, now_);
   Run(0.06);
   EXPECT_FALSE(control_.Status(now_).measuring);
   EXPECT_FALSE(DrivesOrMows(0.5));
@@ -363,6 +364,160 @@ TEST_F(MeasureTest, WhenTheSignalEndsStopBladeOffAndANewLatch) {
   Run(1.5);
   EXPECT_TRUE(control_.Status(now_).measuring);
   EXPECT_TRUE(Times(IsMovingSpeed, zeros.front()).empty());
+}
+
+// The board latches an input while the wheels drive in the open measurement of a setup step.
+class InputHoldTest : public MeasureTest {
+ protected:
+  explicit InputHoldTest(McuControlConfig config = MeasureConfig()) : MeasureTest(config) {
+    feed_setup_ = true;
+  }
+  // Drives with the blade on, then the board reports the input; returns when.
+  double DriveThenInput(bool SensorInfo::*input) {
+    Run(0.1);
+    EXPECT_TRUE(DrivesOrMows(0.4));
+    control_.OnCmdVel(0.3f, 0.0f, now_);
+    Run(0.5);
+    EXPECT_FALSE(control_.Status(now_).latched);
+    sensor_.*input = true;
+    return now_;
+  }
+  // Commands on as the setup step does, up to `until`.
+  void Command(double until) {
+    while (now_ < until - 1e-9) {
+      control_.OnCmdVel(0.3f, 0.0f, now_);
+      Run(std::min(until, now_ + 0.1));
+    }
+  }
+};
+
+TEST_F(InputHoldTest, AfterAStopOfTheBoardTheWheelsKeepTheSetpointForTheHoldTheBladeWithoutRemovalGoesOff) {
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Command(t0 + 1.2);
+  EXPECT_TRUE(control_.Status(now_).latched);
+  const auto moving = Times(IsMovingSpeed, t0 + 0.005, t0 + 1.2);
+  ASSERT_FALSE(moving.empty());
+  EXPECT_GE(moving.back(), t0 + kMeasureInputHoldS - 0.15);
+  EXPECT_LT(moving.back(), t0 + kMeasureInputHoldS);
+  for (double t : moving) {
+    for (const auto& packet : TickAt(t)) {
+      if (IsMovingSpeed(packet)) {
+        EXPECT_LE(FastestWheel(packet), kMeasureMaxWheelSpeed + 1e-6);
+      }
+    }
+  }
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_GE(zeros.size(), 3u);
+  EXPECT_GE(zeros.front(), t0 + kMeasureInputHoldS - 1e-6);
+  EXPECT_LE(zeros.front(), t0 + kMeasureInputHoldS + 0.02);
+  EXPECT_TRUE(Times(IsMovingSpeed, zeros.front()).empty());
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_LE(off.front(), t0 + 0.011);
+}
+
+TEST_F(InputHoldTest, WithTheBladeRemovedTheBladeRequestOutlastsAStopForTheHold) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  // Its lease would have run out before the end of the hold.
+  Command(t0 + kMeasureBladeHoldS + 0.3);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GE(off.front(), t0 + kMeasureBladeHoldS - 1e-6);
+  EXPECT_LE(off.front(), t0 + kMeasureBladeHoldS + 0.02);
+}
+
+TEST_F(InputHoldTest, AnEmergencyOfTheLogicEndsTheBladeHoldAtOnce) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Command(t0 + 0.2);
+  control_.LatchEmergency(kReasonHighLevel);
+  const double t1 = now_;
+  Command(t0 + 1.0);
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GT(off.front(), t0 + 0.1);
+  EXPECT_LE(off.front(), t1 + 0.011);
+}
+
+TEST_F(InputHoldTest, ALiftOfTheBoardHoldsAsAStop) {
+  const double t0 = DriveThenInput(&SensorInfo::lift);
+  Command(t0 + 1.0);
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_GE(zeros.front(), t0 + kMeasureInputHoldS - 1e-6);
+  EXPECT_FALSE(Times(IsMovingSpeed, t0 + 0.3, t0 + kMeasureInputHoldS).empty());
+}
+
+TEST_F(InputHoldTest, OnABumperTheWheelsStopAtOnceTheBladeRequestHolds) {
+  blade_removed_ = true;
+  const double t0 = DriveThenInput(&SensorInfo::bumper_left);
+  Command(t0 + kMeasureBladeHoldS + 0.3);
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_LE(zeros.front(), t0 + 0.011);
+  EXPECT_TRUE(Times(IsMovingSpeed, t0 + 0.005).empty());
+  const auto off = Times(IsBladeOff, t0 + 0.005);
+  ASSERT_FALSE(off.empty());
+  EXPECT_GE(off.front(), t0 + kMeasureBladeHoldS - 1e-6);
+}
+
+TEST_F(InputHoldTest, AnEmergencyOfTheLogicEndsTheHoldAtOnce) {
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Command(t0 + 0.2);
+  control_.LatchEmergency(kReasonHighLevel);
+  const double t1 = now_;
+  Command(t0 + 1.0);
+  const auto zeros = Times(IsZeroSpeed, t1);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_LE(zeros.front(), t1 + 0.011);
+  EXPECT_TRUE(Times(IsMovingSpeed, t1 + 0.005).empty());
+}
+
+class InputHoldImuTest : public InputHoldTest {
+ protected:
+  static McuControlConfig Config() {
+    McuControlConfig config = MeasureConfig();
+    config.imu_timeout_s = 0.2;
+    return config;
+  }
+  InputHoldImuTest() : InputHoldTest(Config()) {
+    feed_imu_ = true;
+  }
+};
+
+TEST_F(InputHoldImuTest, AnImuGapEndsTheHoldAtOnce) {
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  Command(t0 + 0.1);
+  feed_imu_ = false;
+  Command(t0 + 1.0);
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_LT(zeros.front(), t0 + kMeasureInputHoldS - 0.05);
+  EXPECT_TRUE(Times(IsMovingSpeed, zeros.front()).empty());
+}
+
+TEST_F(InputHoldTest, WithoutARunningSetupStepTheWheelsStopAtOnce) {
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  feed_setup_ = false;
+  control_.OnSetupMotion(false, now_);
+  Command(t0 + 1.0);
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_LE(zeros.front(), t0 + 0.011);
+  EXPECT_TRUE(Times(IsMovingSpeed, t0 + 0.005).empty());
+}
+
+TEST_F(InputHoldTest, OutsideAMeasurementTheWheelsStopAtOnce) {
+  versions_ = Versions("0.6.36", "0.6.34");
+  cutter_ = "0.6.36";
+  const double t0 = DriveThenInput(&SensorInfo::stop);
+  EXPECT_FALSE(control_.Status(now_).measuring);
+  Command(t0 + 1.0);
+  const auto zeros = Times(IsZeroSpeed, t0 + 0.005);
+  ASSERT_FALSE(zeros.empty());
+  EXPECT_LE(zeros.front(), t0 + 0.011);
+  EXPECT_TRUE(Times(IsMovingSpeed, t0 + 0.005).empty());
 }
 
 TEST_F(MeasureTest, AnotherVersionFrameClosesTheWindow) {

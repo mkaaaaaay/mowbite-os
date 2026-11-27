@@ -1130,7 +1130,7 @@ class McuNode : public rclcpp::Node {
     }
     std::lock_guard<std::mutex> lock(mutex_);
     control_.Call<&C::OnFirmwareMeasure>(msg.active, cutter, chassis, msg.device_hash, msg.clear_seq,
-                                         MonotonicSeconds());
+                                         msg.blade_removed, MonotonicSeconds());
   }
 
   bool ClearSeqChanged() {

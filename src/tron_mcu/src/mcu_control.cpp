@@ -257,8 +257,9 @@ bool McuControl::OnVersions(const VersionInfo& versions) {
 }
 
 void McuControl::OnFirmwareMeasure(bool active, const std::string& cutter, const std::string& chassis,
-                                   const std::string& device_hash, uint32_t clear_seq, double now) {
-  measure_ = MeasureSignal{active, cutter, chassis, device_hash, clear_seq, now};
+                                   const std::string& device_hash, uint32_t clear_seq, bool blade_removed,
+                                   double now) {
+  measure_ = MeasureSignal{active, cutter, chassis, device_hash, clear_seq, blade_removed, now};
 }
 
 void McuControl::LatchEmergency(uint32_t reason) {
@@ -521,6 +522,14 @@ bool McuControl::MeasureOpen(double now) const {
          measure_->chassis == VersionString(versions_->chassis_board);
 }
 
+bool McuControl::InputLatchHolds(const std::optional<double>& since, uint32_t inputs, double hold_s,
+                                 double now) const {
+  return since && now - *since < hold_s && MeasureOpen(now) &&
+         setup_motion_s_ && now - *setup_motion_s_ <= kSetupMotionFreshS + kDeadlineSlackS && latched_ &&
+         (latch_reason_ & ~inputs) == 0 && heard_ && !silent_until_s_ && !ended_ && !held_ &&
+         !TelemetryStale(now) && !NoImuYet();
+}
+
 bool McuControl::MeasureClearPending(double now) const {
   return MeasureSignalFresh(now) && measure_clear_seen_ && measure_->clear_seq != *measure_clear_seen_;
 }
@@ -704,6 +713,10 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   // Unlike a request, active flags keep a pending release open: the clear frame below is what drops them.
   const uint32_t flags = (lift ? kReasonLift : 0) | (stop ? kReasonStop : 0) | (bumper ? kReasonCollision : 0);
   if (flags) Latch(flags, rising);
+  if (flags && !latched_before && MeasureOpen(now)) {
+    if (moving_ && (flags & ~kBoardWheelStopReasons) == 0) input_hold_since_s_ = now;
+    if (blade_request_ && measure_->blade_removed) blade_hold_since_s_ = now;
+  }
   // A gap in the IMU latches like the flags; before the first sample it only blocks.
   if (last_imu_sample_s_ && ImuStale(now)) Latch(kReasonImuTimeout);
   UpdateStopRelease(stop, lift, latched_before, now);
@@ -749,13 +762,26 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
   UpdateMeasure(now, out);
 
   const bool blocked = Blocked(now);
+  const bool wheels_held = blocked && InputLatchHolds(input_hold_since_s_, kBoardWheelStopReasons, kMeasureInputHoldS, now);
+  if (!wheels_held) input_hold_since_s_.reset();
+  const bool blade_held = blocked &&
+                          InputLatchHolds(blade_hold_since_s_, kBoardBladeStopReasons, kMeasureBladeHoldS, now) &&
+                          measure_->blade_removed;
+  if (!blade_held) blade_hold_since_s_.reset();
   const bool dock_contact = DockContact();
 
   // Charging stopped on request stays off while this contact lasts; its off frames go out before any motion.
   if (!dock_contact) charge_stopped_ = false;
   EmitRepeat(charge_off_repeat_, now, out);
 
-  if (blocked) {
+  if (wheels_held) {
+    // The setpoint from before the latch, new commands wait for the end of the hold.
+    pending_cmd_.reset();
+    if (moving_ && last_speed_ && now + kDeadlineSlackS >= next_speed_s_) {
+      out.push_back(*last_speed_);
+      next_speed_s_ = now + config_.speed_period_s;
+    }
+  } else if (blocked) {
     pending_cmd_.reset();
     if (moving_) {
       moving_ = false;
@@ -789,20 +815,24 @@ std::vector<SubPacket> McuControl::Tick(double now, const WallClock& wall) {
     }
   }
 
-  if (moving_ && now - last_cmd_s_ > StopAfter()) {
+  if (!wheels_held && moving_ && now - last_cmd_s_ > StopAfter()) {
     moving_ = false;
     StartStop(now);
   }
-  if (moving_ && last_speed_ && config_.speed_repeat_window_s > 0 && now + kDeadlineSlackS >= next_speed_s_) {
+  if (!wheels_held && moving_ && last_speed_ && config_.speed_repeat_window_s > 0 &&
+      now + kDeadlineSlackS >= next_speed_s_) {
     out.push_back(*last_speed_);
     next_speed_s_ = now + config_.speed_period_s;
   }
 
   // A blocked or docked mower drops the blade request, it has to be made again afterwards.
-  if (blocked) DropBlade(BladeOffReason::kBlocked);
+  if (blocked && !blade_held) DropBlade(BladeOffReason::kBlocked);
   if (dock_contact) DropBlade(BladeOffReason::kDock);
-  // Blade watchdog: a lease that was not renewed in time switches the blade off.
-  if (blade_request_ && now + kDeadlineSlackS >= blade_request_->until_s) DropBlade(BladeOffReason::kLeaseExpired);
+  // Blade watchdog: a lease that was not renewed in time switches the blade off; during the hold after an input latch
+  // the renewal is refused, the hold ends it.
+  if (blade_request_ && !blade_held && now + kDeadlineSlackS >= blade_request_->until_s) {
+    DropBlade(BladeOffReason::kLeaseExpired);
+  }
   if (blade_request_ && blade_on_ != blade_request_->setting) {
     CutterCommand command;
     command.blade_on = true;
