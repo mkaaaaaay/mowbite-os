@@ -92,6 +92,8 @@ struct LinkCounts {
   std::map<std::string, uint64_t> frames;
   std::map<uint16_t, uint64_t> unknown;
   uint32_t clear_seq = 0;
+  // When clear_seq went to the board, s of the clock of stamp; 0 unknown.
+  double clear_stamp = 0;
 };
 
 // setup/firmware_measure while a step with firmware runs.
@@ -174,8 +176,9 @@ class Program {
 
   // What the node hears; now is a monotonic clock (s), wall unix s.
   void OnHardware(const Hardware& hardware, double now);
-  // hw/inputs: the lines of the platform, and whether the driver learns them (then active is the level of a line).
-  void OnInputs(const std::vector<Line>& lines, bool learning = false);
+  // hw/inputs: the lines of the platform, whether the driver learns them (then active is the level of a line), and its
+  // stamp in s of the clock of hw/link_stats (0 without).
+  void OnInputs(const std::vector<Line>& lines, bool learning = false, double stamp = 0);
   // The parameter file of the program as it is on disk, and <node>.<parameter> of what the file kept by hand
   // overrules of it. Without this call the program has no place for the file.
   void SetLayer(Layer layer, std::set<std::string> shadowed);
@@ -460,10 +463,11 @@ class Program {
     double open_release = -1;
     // The values of the rounds before this one.
     json rounds = json::array();
-    // latch: where the part is, the clear asked for and when it went out, how many clears of press went out.
+    // latch: where the part is, the clear asked for, the stamp of hw/inputs that showed the input of the part fall
+    // since (below 0: none), how many clears of press went out.
     Latch latch = Latch::kRest;
     uint32_t clear = 0;
-    double cleared_at = -1;
+    double fall_stamp = -1;
     int clears = 0;
     // link: the counts of the step.
     LinkSum link;
@@ -534,6 +538,7 @@ class Program {
   bool Signal(const std::string& role) const;
   // The assigned lines a part of this role can switch.
   std::vector<const Line*> LinesOf(const std::string& role) const;
+  bool LinesActive(const std::string& role) const;
   void NoteLines();
   void WatchOwnLatch();
   void TickRelease(double now);
@@ -741,6 +746,7 @@ class Program {
   Hardware hardware_;
   double hardware_at_ = -1;
   std::vector<Line> lines_;
+  double inputs_stamp_ = 0;
   std::optional<OwnLatch> own_;
   std::optional<ReleaseRequest> release_;
   bool inputs_known_ = false;
@@ -806,12 +812,13 @@ class Program {
   // The step blade whose allow_blade waits for the parameter file to be written.
   std::string allow_step_;
   // The owner measurement: firmware_measure_force, the last clear asked for and the last one the driver sent with
-  // when it came, when the program last asked one by itself, the link counts of the run, the last hw/link_stats, and
-  // the step to send the end of setup/firmware_measure for.
+  // when it came and its clear_stamp, when the program last asked one by itself, the link counts of the run, the last
+  // hw/link_stats, and the step to send the end of setup/firmware_measure for.
   bool force_ = false;
   uint32_t clear_seq_ = 0;
   uint32_t clear_sent_ = 0;
   double clear_sent_at_ = -1;
+  double clear_sent_stamp_ = 0;
   double clear_auto_at_ = -1;
   LinkSum run_link_;
   // Ids of unknown modules the step link of the run saw; later ones fail the step firmware.

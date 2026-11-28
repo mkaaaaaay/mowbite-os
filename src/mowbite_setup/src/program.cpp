@@ -263,6 +263,13 @@ std::vector<const Line*> Program::LinesOf(const std::string& role) const {
   return lines;
 }
 
+bool Program::LinesActive(const std::string& role) const {
+  for (const Line* line : LinesOf(role)) {
+    if (line->active) return true;
+  }
+  return false;
+}
+
 // The lines of its role that are active count for the running part from the moment it waits for its press.
 void Program::NoteLines() {
   if (!run_ || StepOf(*run_).check != "input" || run_->phase == Phase::kRest) return;
@@ -305,8 +312,14 @@ void Program::OnHardware(const Hardware& hardware, double now) {
   for (const auto& motor : hardware.motors_down) run_->motors_down.insert(motor);
 }
 
-void Program::OnInputs(const std::vector<Line>& lines, bool learning) {
+void Program::OnInputs(const std::vector<Line>& lines, bool learning, double stamp) {
+  // latch: when the input of the part fell, by the clock of the driver.
+  const bool latch = run_ && !run_->opening && StepOf(*run_).check == "latch";
+  const std::string role = latch ? StepOf(*run_).parts[run_->part].role : "";
+  const bool before = latch && LinesActive(role);
   lines_ = lines;
+  inputs_stamp_ = stamp;
+  if (before && !LinesActive(role) && stamp > 0) run_->fall_stamp = stamp;
   learning_ = learning;
   inputs_known_ = true;
   NoteLines();
@@ -1293,6 +1306,7 @@ void Program::BeginPart(double now, double wall) {
   run.phase = Phase::kRest;
   run.edge = 0;
   run.released = 0;
+  run.fall_stamp = -1;
   run.latched_since = -1;
   run.other.clear();
   run.part_lines.clear();

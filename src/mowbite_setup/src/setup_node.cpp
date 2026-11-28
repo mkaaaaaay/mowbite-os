@@ -254,7 +254,7 @@ class SetupNode : public rclcpp::Node {
             lines.push_back(std::move(line));
           }
           std::lock_guard<std::mutex> lock(mutex_);
-          program_->OnInputs(lines, msg->learning);
+          program_->OnInputs(lines, msg->learning, rclcpp::Time(msg->stamp).seconds());
         });
     release_client_ = create_client<SetEmergency>("safety/release_emergency");
     caps_sub_ = create_subscription<mowbite_msgs::msg::HardwareCapabilities>(
@@ -303,6 +303,7 @@ class SetupNode : public rclcpp::Node {
             counts.unknown[msg->unknown_ids[i]] = msg->unknown_counts[i];
           }
           counts.clear_seq = msg->clear_seq;
+          counts.clear_stamp = rclcpp::Time(msg->clear_stamp).seconds();
           std::lock_guard<std::mutex> lock(mutex_);
           program_->OnLinkStats(counts, MonotonicSeconds());
         });

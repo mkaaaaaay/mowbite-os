@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <tuple>
 #include <string>
 #include <vector>
 
@@ -409,15 +410,29 @@ struct Mower {
                rpm < 100) {
       fw_seen = signal->clear_seq;
       ++fw_clears;
-      Clear();
+      clear_due = signal->clear_seq;
+      clear_at = now + clear_delay;
+    }
+    if (clear_at >= 0 && now >= clear_at - 1e-9) {
+      clear_at = -1;
+      link.clear_stamp = now;
+      if (fall_late > 0) {
+        board_clear_at = now + fall_late;
+      } else {
+        Clear();
+      }
       // hw/link_stats may tell the clear after hw/status showed what it did.
       if (link_late > 0) {
-        late_clear = signal->clear_seq;
+        late_clear = clear_due;
         late_at = now + link_late;
       } else {
-        link.clear_seq = signal->clear_seq;
+        link.clear_seq = clear_due;
         SendLink();
       }
+    }
+    if (board_clear_at >= 0 && now >= board_clear_at - 1e-9) {
+      board_clear_at = -1;
+      Clear();
     }
     if (late_at >= 0 && now >= late_at) {
       late_at = -1;
@@ -425,6 +440,32 @@ struct Mower {
       SendLink();
     }
     if (late_at < 0 && (link_at < 0 || now - link_at >= 1.0)) SendLink();
+    if (inputs) SendInputs();
+  }
+
+  // hw/inputs as tron_mcu sends it: with every change, stamped on the clock of hw/link_stats.
+  void SendInputs() {
+    const std::vector<std::tuple<const char*, const char*, bool, bool>> table = {
+        {"stop", "stop", true, hardware.stop},
+        {"lift", "lift", true, hardware.lift},
+        {"bumper_left", "collision", false, hardware.bumper_left},
+        {"bumper_right", "collision", false, hardware.bumper_right}};
+    std::vector<Line> lines;
+    for (const auto& [name, reason, held, active] : table) {
+      Line line;
+      line.name = name;
+      line.role = name;
+      line.reason = reason;
+      line.held = held;
+      line.active = active;
+      line.assigned = true;
+      lines.push_back(line);
+    }
+    std::vector<bool> levels;
+    for (const Line& line : lines) levels.push_back(line.active);
+    if (inputs_stuck || levels == inputs_sent) return;
+    inputs_sent = levels;
+    program.OnInputs(lines, false, now);
   }
 
   void Clear() {
@@ -528,6 +569,17 @@ struct Mower {
   double link_late = 0;
   double late_at = -1;
   uint32_t late_clear = 0;
+  // The driver sends a clear this long after the signal asked it (what it writes before), and the board ends a held
+  // input this long after the clear came.
+  double clear_delay = 0;
+  double fall_late = 0;
+  uint32_t clear_due = 0;
+  double clear_at = -1;
+  double board_clear_at = -1;
+  // hw/inputs from the board, and a driver that stops sending it.
+  bool inputs = false;
+  bool inputs_stuck = false;
+  std::vector<bool> inputs_sent;
   int release_clears = 0;
   double wheel_left = 0;
   double wheel_right = 0;
@@ -1791,28 +1843,33 @@ TEST(Firmware, ABoardThatHoldsOtherwiseFails) {
       {"a clear lets a held stop go", [](FwMower& m) { m.clear_releases_held = true; }, "stop_hold"},
       {"lift does not latch", [](FwMower& m) { m.lift_latches = false; }, "lift_free"},
   };
-  // hw/link_stats may tell a clear only after hw/status showed what it did.
-  for (const auto& [variant, late] : {std::pair{variants[0], 0.0}, {variants[0], 0.8}, {variants[1], 0.0},
-                                      {variants[1], 0.8}, {variants[2], 0.0}, {variants[2], 0.8}}) {
-    SCOPED_TRACE(std::string(variant.name) + (late > 0 ? ", hw/link_stats late" : ""));
-    FwMower mower;
-    variant.set(mower);
-    mower.link_late = late;
-    ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
-    ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
-    const json stop = mower.PassInput("fw_stop", {&Mower::press_stop, &Mower::press_stop});
-    ASSERT_EQ(stop["state"], "ok") << stop.dump();
-    const json lift = mower.PassInput("fw_lift", {&Mower::press_lift});
-    ASSERT_EQ(lift["state"], "ok") << lift.dump();
-    const json bumper = mower.PassInput("fw_bumper", {&Mower::press_left, &Mower::press_right});
-    ASSERT_EQ(bumper["state"], "ok") << bumper.dump();
-    const json end = mower.PassLatch();
-    EXPECT_EQ(end.value("state", ""), "failed") << end.dump();
-    EXPECT_EQ(end.value("part", json()), variant.part) << end.dump();
-    const json runs = mower.program.Export()["runs"];
-    ASSERT_FALSE(runs.empty());
-    EXPECT_EQ(runs[0]["result"], "failed");
-    EXPECT_EQ(mower.release_clears, 0);
+  // hw/link_stats may tell a clear only after hw/status showed what it did; with hw/inputs the driver writes 0.3 s
+  // before each clear.
+  for (const auto& variant : variants) {
+    for (const auto& [late, inputs] : {std::pair{0.0, false}, {0.8, false}, {0.1, true}, {0.8, true}}) {
+      SCOPED_TRACE(std::string(variant.name) + (late > 0 ? ", hw/link_stats late" : "") +
+                   (inputs ? ", hw/inputs" : ""));
+      FwMower mower;
+      variant.set(mower);
+      mower.link_late = late;
+      mower.inputs = inputs;
+      mower.clear_delay = inputs ? 0.3 : 0;
+      ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
+      ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
+      const json stop = mower.PassInput("fw_stop", {&Mower::press_stop, &Mower::press_stop});
+      ASSERT_EQ(stop["state"], "ok") << stop.dump();
+      const json lift = mower.PassInput("fw_lift", {&Mower::press_lift});
+      ASSERT_EQ(lift["state"], "ok") << lift.dump();
+      const json bumper = mower.PassInput("fw_bumper", {&Mower::press_left, &Mower::press_right});
+      ASSERT_EQ(bumper["state"], "ok") << bumper.dump();
+      const json end = mower.PassLatch();
+      EXPECT_EQ(end.value("state", ""), "failed") << end.dump();
+      EXPECT_EQ(end.value("part", json()), variant.part) << end.dump();
+      const json runs = mower.program.Export()["runs"];
+      ASSERT_FALSE(runs.empty());
+      EXPECT_EQ(runs[0]["result"], "failed");
+      EXPECT_EQ(mower.release_clears, 0);
+    }
   }
 
   // Swapped bumper sides: the input step sees the other side.
@@ -1933,6 +1990,59 @@ TEST(Firmware, AClearToldAfterItsFallCounts) {
   const json end = mower.PassLatch();
   EXPECT_EQ(end.value("step", ""), "fw_latch") << end.dump();
   EXPECT_EQ(end.value("state", ""), "ok") << end.dump();
+}
+
+// The steps of the measurement before fw_latch.
+void PassToLatch(FwMower& mower) {
+  ASSERT_EQ(mower.Start("fw_link", kLinkConfirm), "");
+  ASSERT_EQ(mower.RunToEnd(20)["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_stop", {&Mower::press_stop, &Mower::press_stop})["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_lift", {&Mower::press_lift})["state"], "ok");
+  ASSERT_EQ(mower.PassInput("fw_bumper", {&Mower::press_left, &Mower::press_right})["state"], "ok");
+}
+
+// The driver writes 0.3 s before it sends a clear, and hw/inputs and hw/status show the fall before hw/link_stats
+// tells the clear: by the stamps of the driver the board took no time.
+TEST(Firmware, TheLatchTimesTheBoardByTheStampsOfTheDriver) {
+  FwMower mower;
+  mower.inputs = true;
+  mower.clear_delay = 0.3;
+  mower.link_late = 0.1;
+  PassToLatch(mower);
+  const json end = mower.PassLatch();
+  EXPECT_EQ(end.value("step", ""), "fw_latch") << end.dump();
+  EXPECT_EQ(end.value("state", ""), "ok") << end.dump();
+  EXPECT_LE(ValueOf(mower.StepState("fw_latch"), "stop_free")["value"].get<double>(), 0.03);
+  EXPECT_LE(ValueOf(mower.StepState("fw_latch"), "lift_free")["value"].get<double>(), 0.03);
+}
+
+// A board that ends a held input 0.3 s after the clear came fails by its own time, the writes before or not.
+TEST(Firmware, ALateFallAfterTheClearIsALimit) {
+  for (const double delay : {0.0, 0.3}) {
+    SCOPED_TRACE("writes " + std::to_string(delay) + " s");
+    FwMower mower;
+    mower.inputs = true;
+    mower.clear_delay = delay;
+    mower.link_late = delay > 0 ? 0.1 : 0;
+    PassToLatch(mower);
+    mower.fall_late = 0.3;
+    const json end = mower.PassLatch();
+    EXPECT_EQ(end.value("state", ""), "failed") << end.dump();
+    EXPECT_EQ(end.value("reason", json()), "LIMIT") << end.dump();
+    EXPECT_EQ(end.value("part", json()), "stop_short") << end.dump();
+    EXPECT_NEAR(end.value("value", 0.0), 0.3, 0.03) << end.dump();
+  }
+}
+
+// hw/status shows the fall, hw/inputs never: the step waits for it and then ends without data.
+TEST(Firmware, AFallOnlyHwStatusShowsHasNoData) {
+  FwMower mower;
+  mower.inputs = true;
+  PassToLatch(mower);
+  mower.inputs_stuck = true;
+  const json end = mower.PassLatch();
+  EXPECT_EQ(end.value("reason", json()), "NO_DATA") << end.dump();
+  EXPECT_EQ(end.value("source", json()), "hw/inputs") << end.dump();
 }
 
 // The other bumper latches the collision as well: the part fails at once, not after its time.

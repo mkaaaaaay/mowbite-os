@@ -26,6 +26,9 @@ constexpr double kOpenLead = 0.5;
 constexpr double kClearEvery = 1.0;
 // A clear asked for goes out within this time (s): the signal comes at 4 Hz and the wheels stand.
 constexpr double kClearWait = 2.0;
+// latch: an input of short or release that has not fallen this long after its clear went out counts as still
+// pressed (NOT_DONE); a later fall within it is measured against clear_max (s).
+constexpr double kFallWait = 1.0;
 // press of a step latch: the first clear comes this long after the input switched (s).
 constexpr double kPressLead = 0.5;
 // Two hw/link_stats of one driver this far apart or more count for errors only, not for rates (s).
@@ -374,6 +377,7 @@ void Program::OnLinkStats(const LinkCounts& counts, double now) {
   if (counts.clear_seq != clear_sent_) {
     clear_sent_ = counts.clear_seq;
     clear_sent_at_ = now;
+    clear_sent_stamp_ = counts.clear_stamp;
   }
   LinkSum delta;
   const LinkCounts* last = link_last_ ? &*link_last_ : nullptr;
@@ -519,11 +523,15 @@ void Program::TickLatch(double now, double wall) {
   };
   // The clear of the part went out: since when, below 0 not yet.
   const double out = clear_sent_ >= run.clear && run.clear != 0 ? std::max(clear_sent_at_, run.drive_began) : -1;
-  // In kClear: the input stood when the clear was asked and fell since. hw/status may show the fall before
-  // hw/link_stats tells the clear went out; then the time counts from the asking, longer than the board took.
+  // In kClear: the input stood when the clear was asked and fell since. The board took from the clear going out
+  // (clear_stamp of hw/link_stats) to the fall in hw/inputs, both by the clock of the driver; the writes before a clear
+  // and the delivery of either do not count. A driver without these stamps: from the arrival of hw/link_stats, or from
+  // the asking when hw/status showed the fall first, longer than the board took.
   const bool fell = !signal || run.released >= run.drive_began;
   const double fall = run.released >= run.drive_began ? run.released : now;
-  const double took = std::max(0.0, fall - (out >= 0 && fall >= out ? out : run.drive_began));
+  const bool stamped = clear_sent_stamp_ > 0 && inputs_stamp_ > 0 && !LinesOf(part.role).empty();
+  const double took = stamped ? std::max(0.0, run.fall_stamp - clear_sent_stamp_)
+                              : std::max(0.0, fall - (out >= 0 && fall >= out ? out : run.drive_began));
   switch (run.latch) {
     case Latch::kRest:
       if (part.mode == "release") {
@@ -572,6 +580,7 @@ void Program::TickLatch(double now, double wall) {
       run.clear = clear_seq_;
       run.drive_began = now;
       run.released = -1;
+      run.fall_stamp = -1;
       run.clears = 1;
       run.latch = Latch::kClear;
       return;
@@ -583,6 +592,7 @@ void Program::TickLatch(double now, double wall) {
         run.clear = clear_seq_;
         run.drive_began = now;
         run.released = -1;
+        run.fall_stamp = -1;
         run.latch = Latch::kClear;
       }
       return;
@@ -608,7 +618,15 @@ void Program::TickLatch(double now, double wall) {
         AskClear(now);
         run.clear = clear_seq_;
         run.drive_began = now;
+        run.fall_stamp = -1;
         ++run.clears;
+        return;
+      }
+      if (fell && stamped && run.fall_stamp < 0) {
+        // hw/status showed the fall, hw/inputs not yet.
+        if (now - out > kClearWait) {
+          Fail("NO_DATA", "hw/inputs did not show the fall", {{"source", "hw/inputs"}}, now, wall);
+        }
         return;
       }
       if (fell) {
@@ -619,7 +637,7 @@ void Program::TickLatch(double now, double wall) {
         }
         if (part.mode == "release") run.measured[run.part] = took;
         LatchPartDone(now, wall);
-      } else if (signal && now - out > step.Number("clear_max")) {
+      } else if (signal && now - out > std::max(step.Number("clear_max"), kFallWait)) {
         // The board kept it: still held or the mower still lifted, the board alone cannot tell.
         Fail("NOT_DONE", "The input " + part.role + " stayed after the clear: still pressed?", json::object(), now,
              wall);
@@ -644,6 +662,7 @@ void Program::LatchPartDone(double now, double wall) {
   run.clear = 0;
   run.clears = 0;
   run.released = -1;
+  run.fall_stamp = -1;
 }
 
 json Program::LatchValues(const Run& run, const Step& step) const {
