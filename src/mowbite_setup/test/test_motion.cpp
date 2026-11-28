@@ -412,6 +412,7 @@ struct Mower {
       ++fw_clears;
       clear_due = signal->clear_seq;
       clear_at = now + clear_delay;
+      if (lets_go_early) Clear();
     }
     if (clear_at >= 0 && now >= clear_at - 1e-9) {
       clear_at = -1;
@@ -573,6 +574,8 @@ struct Mower {
   // input this long after the clear came.
   double clear_delay = 0;
   double fall_late = 0;
+  // The board lets a held input go as the clear is asked, before it comes.
+  bool lets_go_early = false;
   uint32_t clear_due = 0;
   double clear_at = -1;
   double board_clear_at = -1;
@@ -2032,6 +2035,20 @@ TEST(Firmware, ALateFallAfterTheClearIsALimit) {
     EXPECT_EQ(end.value("part", json()), "stop_short") << end.dump();
     EXPECT_NEAR(end.value("value", 0.0), 0.3, 0.03) << end.dump();
   }
+}
+
+// The board lets stop go while the driver writes before the clear: it fell without one.
+TEST(Firmware, AFallBeforeTheClearWentOutIsALimit) {
+  FwMower mower;
+  mower.inputs = true;
+  mower.clear_delay = 0.3;
+  PassToLatch(mower);
+  mower.lets_go_early = true;
+  const json end = mower.PassLatch();
+  EXPECT_EQ(end.value("state", ""), "failed") << end.dump();
+  EXPECT_EQ(end.value("reason", json()), "LIMIT") << end.dump();
+  EXPECT_EQ(end.value("part", json()), "stop_short") << end.dump();
+  EXPECT_EQ(end.value("message", ""), "The input stop fell before the clear went out") << end.dump();
 }
 
 // hw/status shows the fall, hw/inputs never: the step waits for it and then ends without data.

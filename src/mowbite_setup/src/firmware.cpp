@@ -629,6 +629,11 @@ void Program::TickLatch(double now, double wall) {
         }
         return;
       }
+      if (fell && stamped && run.fall_stamp < clear_sent_stamp_) {
+        // The board let it go after the asking, before the clear reached it.
+        limit("The input " + part.role + " fell before the clear went out", clear_sent_stamp_ - run.fall_stamp, 0);
+        return;
+      }
       if (fell) {
         if (took > step.Number("clear_max")) {
           limit("The clear ended " + part.role + " only after " + std::to_string(took) + " s", took,
