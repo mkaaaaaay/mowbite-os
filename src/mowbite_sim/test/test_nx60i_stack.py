@@ -60,12 +60,7 @@ SETUP_METHODS = ["setup.get", "setup.start", "setup.answer", "setup.skip", "setu
 # Given as user and password of an NTRIP access: neither may reach the state or the record of the setup program.
 ACCESS_MARKERS = {"user": "marker-user-5b1f", "password": "marker-password-93ce"}
 
-# ntrip.set, which the stack leaves off, for the test that an access never reaches the setup program.
-CONFIG = os.path.join(WORK, "extra.yaml")
-
 write_json(FLAGS, {"gps_fix": "fix"})
-with open(CONFIG, "w") as f:
-    f.write("mowbite_ntrip:\n  ros__parameters:\n    access_over_rpc: true\n")
 
 
 def generate_test_description():
@@ -76,7 +71,6 @@ def generate_test_description():
                                                    "launch", "mowbite.launch.py")),
         launch_arguments={"platform": "nx60i", "interface": "lo", "bind_ip": BIND_IP,
                           "announcement_port": str(GROUP_PORT), "data_dir": DATA, "journal_dir": JOURNAL,
-                          "extra_config": CONFIG,
                           "datum_lat": str(DATUM[0]),
                           "datum_long": str(DATUM[1]), "datum_height": str(DATUM[2]),
                           "mqtt_port": str(random.randint(18000, 18999))}.items())

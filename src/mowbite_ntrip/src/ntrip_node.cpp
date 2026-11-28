@@ -556,7 +556,7 @@ class NtripNode : public rclcpp::Node {
   std::string source_file_;
   double connect_timeout_s_ = 10.0;
   double config_check_s_ = 5.0;
-  // ntrip.set and ntrip.delete; off until MQTT writes need a login and rpc/request is not readable without one (G13).
+  // ntrip.set and ntrip.delete; off unless the configuration turns it on (stack.yaml).
   bool access_over_rpc_ = false;
   // 1 while the logic is in IDLE, 0 otherwise, -1 until it said.
   std::atomic<int> idle_{-1};
